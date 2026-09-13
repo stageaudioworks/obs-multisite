@@ -42,6 +42,8 @@ private slots:
     // (PROJECT-SCOPE.md §8.6) — an account id for R2, a region for
     // AWS/Backblaze/Wasabi, both endpoint and region for Custom.
     void updateProviderFields();
+    // Shows the port/token fields only while LAN delivery is turned on.
+    void updateLanFields();
     void refresh();
 
 private:
@@ -73,6 +75,12 @@ private:
     QCheckBox* m_tags = nullptr;
     QLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;
+
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — off by default; port
+    // and token only matter, and only show, once enabled.
+    QCheckBox* m_lanEnabled = nullptr;
+    QSpinBox*  m_lanPort = nullptr;
+    QLineEdit* m_lanToken = nullptr;
 
     // media
     QComboBox* m_encoder = nullptr;
@@ -106,6 +114,7 @@ private:
     QLabel* m_data = nullptr;
     QLabel* m_link = nullptr;
     QLabel* m_disk = nullptr;
+    QLabel* m_lan = nullptr;
     QLabel* m_error = nullptr;
     // Persistent — not auto-dismissing — line shown for as long as the live
     // broadcast is actually a resumed one, plus its escape hatch. Both hidden

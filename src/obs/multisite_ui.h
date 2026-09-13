@@ -35,6 +35,12 @@ struct EncoderStats {
     std::string resumed_event_id;
     long long   resumed_event_started_ms = 0;
     unsigned long long resumed_already_confirmed = 0;
+
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7).
+    bool        lan_running = false;
+    int         lan_port = 0;
+    unsigned long long lan_cached_segments = 0;
+    std::string lan_error;
 };
 
 struct EncoderControls {

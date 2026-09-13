@@ -256,6 +256,16 @@ int main() {
                 out.write("second");
             };
         });
+        // A general prefix and a more specific one nested inside it, the
+        // shape LAN delivery needs (PROJECT-SCOPE.md §8.7): one prefix for
+        // "everything under this event", another for "segments specifically".
+        s->route_prefix("GET", "/events/", [](const HttpRequest& req, HttpResponse& res) {
+            res.json("{\"matched\":\"general\",\"path\":\"" + req.path + "\"}");
+        });
+        s->route_prefix("GET", "/events/E1/segments/",
+                        [](const HttpRequest& req, HttpResponse& res) {
+            res.json("{\"matched\":\"segments\",\"path\":\"" + req.path + "\"}");
+        });
 
         std::string err;
         if (s->start(err)) { server = std::move(s); port = candidate; break; }
@@ -303,6 +313,35 @@ int main() {
             "POST /api/ping HTTP/1.1\r\nContent-Length: 0\r\n"
             "Connection: close\r\n\r\n");
         CHECK(status_of(r) == 405, "the wrong verb on a known path is a 405");
+    }
+
+    std::printf("Prefix routes\n");
+    {
+        const std::string r = round_trip(port,
+            "GET /events/E2/manifest.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 200, "a path under the general prefix is matched");
+        CHECK(contains(body_of(r), "\"general\""),
+              "by the general handler — no more specific prefix applies to E2");
+    }
+    {
+        const std::string r = round_trip(port,
+            "GET /events/E1/segments/00000042.m4s HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 200, "a path under the nested prefix is matched");
+        CHECK(contains(body_of(r), "\"segments\""),
+              "by the MORE SPECIFIC handler, not the general one it also starts with");
+    }
+    {
+        const std::string r = round_trip(port,
+            "GET /api/ping HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 200 && contains(body_of(r), "pong"),
+              "an exact route still wins over any prefix that would also match");
+    }
+    {
+        const std::string r = round_trip(port,
+            "GET /eventsomething HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 404,
+              "a path that merely starts the same way, without the prefix's own "
+              "trailing slash, does not match");
     }
 
     std::printf("The web root\n");

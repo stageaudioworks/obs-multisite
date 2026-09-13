@@ -25,6 +25,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
@@ -108,6 +109,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // a nearly-full drive is visible before Go Live rather than discovered
     // mid-event when the cap starts dropping queued segments.
     addStat(4, 0, "Dock.Disk",      m_disk);
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — only meaningful while
+    // live, since the server starts at Go Live; shows "off" otherwise.
+    addStat(4, 1, "Dock.Lan",       m_lan);
 
     m_error = new QLabel(QString(), statusBox);
     m_error->setWordWrap(true);
@@ -238,11 +242,30 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("RoomID"), m_room);
     form->addRow(QString(), m_tags);
     storePageLayout->addWidget(storeBox);
+
+    // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
+    // Off by default: opening a port is exactly the kind of thing an
+    // operator turns on, not discovers. Cloud upload is unaffected either
+    // way, whether this is on, off, or fails to bind its port.
+    auto* lanBox = new QGroupBox(tr_("Dock.LanDelivery"), storePage);
+    auto* lform = new QFormLayout(lanBox);
+    m_lanEnabled = new QCheckBox(tr_("Dock.LanEnabled"), lanBox);
+    m_lanEnabled->setToolTip(tr_("Dock.LanEnabledHint"));
+    m_lanPort = new QSpinBox(lanBox);
+    m_lanPort->setRange(1, 65535);
+    m_lanToken = new QLineEdit(lanBox);
+    m_lanToken->setToolTip(tr_("Dock.LanTokenHint"));
+    lform->addRow(QString(), m_lanEnabled);
+    lform->addRow(tr_("Dock.LanPort"), m_lanPort);
+    lform->addRow(tr_("Dock.LanToken"), m_lanToken);
+    storePageLayout->addWidget(lanBox);
+
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
 
     connect(m_provider, &QComboBox::currentIndexChanged,
             this, &EncoderDock::updateProviderFields);
+    connect(m_lanEnabled, &QCheckBox::toggled, this, &EncoderDock::updateLanFields);
 
     // ── Media ────────────────────────────────────────────────────────────────
     auto* mediaPage = new QWidget(tabs);
@@ -332,10 +355,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // unexpectedly — an operator should never have to retype credentials.
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
                           m_region, m_room, m_trackLabels, m_channelLabels,
-                          m_markerLabels })
+                          m_markerLabels, m_lanToken })
         connect(e, &QLineEdit::editingFinished, this,
                 &EncoderDock::onSaveSettings);
     connect(m_tags, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
+    connect(m_lanEnabled, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
+    connect(m_lanPort, &QSpinBox::editingFinished, this, &EncoderDock::onSaveSettings);
     connect(m_provider, &QComboBox::currentIndexChanged, this,
             [this](int) { onSaveSettings(); });
     connect(m_encoder, &QComboBox::currentIndexChanged, this,
@@ -394,11 +419,21 @@ void EncoderDock::updateProviderFields() {
     }
 }
 
+void EncoderDock::updateLanFields() {
+    if (!m_lanEnabled) return;
+    const bool on = m_lanEnabled->isChecked();
+    if (auto* form = qobject_cast<QFormLayout*>(m_lanPort->parentWidget()->layout())) {
+        form->setRowVisible(m_lanPort,  on);
+        form->setRowVisible(m_lanToken, on);
+    }
+}
+
 void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
     populateEncoders();        // by now every module has registered its own
     updateAudioFields();       // OBS's audio layout may have changed
     updateProviderFields();
+    updateLanFields();
 
     // Fit the screen it is about to open on, not the one it was built on. The
     // scroll area means everything can be reached, but Qt will still size the
@@ -470,6 +505,24 @@ void EncoderDock::populateEncoders() {
 }
 
 void EncoderDock::loadIntoFields() {
+    // setChecked()/setCurrentIndex() below emit toggled()/currentIndexChanged()
+    // whenever the loaded value differs from whatever a freshly constructed
+    // widget defaulted to — and every one of those signals is wired to
+    // onSaveSettings(), which unconditionally reads EVERY field on the page,
+    // including ones this function has not reached yet. Left unblocked, that
+    // fires mid-load and immediately writes a settings object built from a
+    // mix of just-loaded and still-default widgets back to disk — silently
+    // overwriting real settings (a saved AWS/Backblaze/Wasabi/Custom
+    // provider, in particular) with blanks, or a just-added field like
+    // lan_port with its just-constructed default rather than the value two
+    // lines below about to set it correctly. This is what actually happened
+    // building LAN delivery: turning it on tripped exactly this and wrote
+    // port 1 to disk before this function got to the real value.
+    const QSignalBlocker noSaveTags(m_tags);
+    const QSignalBlocker noSaveProvider(m_provider);
+    const QSignalBlocker noSaveEncoder(m_encoder);
+    const QSignalBlocker noSaveLan(m_lanEnabled);
+
     auto cfg = BroadcastController::instance().settings();
     cfg.load();
     BroadcastController::instance().set_settings(cfg);
@@ -516,6 +569,10 @@ void EncoderDock::loadIntoFields() {
             QString::fromStdString(cfg.tile_layout));
         m_tileLayout->setCurrentIndex(i >= 0 ? i : 0);   // unknown reads as 1x1
     }
+    m_lanEnabled->setChecked(cfg.lan_enabled);
+    m_lanPort->setValue(cfg.lan_port);
+    m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
+    updateLanFields();
 }
 
 void EncoderDock::onSaveSettings() {
@@ -556,6 +613,9 @@ void EncoderDock::onSaveSettings() {
     cfg.channel_labels     = m_channelLabels->text().toStdString();
     cfg.marker_labels      = m_markerLabels->text().toStdString();
     cfg.tile_layout        = m_tileLayout->currentData().toString().toStdString();
+    cfg.lan_enabled    = m_lanEnabled->isChecked();
+    cfg.lan_port       = m_lanPort->value();
+    cfg.lan_auth_token = m_lanToken->text().trimmed().toStdString();
     // The event name is per-event, not a saved setting. Send it only when the
     // operator has typed their own; an untouched date/time default is sent
     // empty so the satellite falls back to the time and a resumed event keeps
@@ -692,7 +752,8 @@ void EncoderDock::setLiveState(bool live) {
                         (QWidget*)m_bucket, (QWidget*)m_keyId,
                         (QWidget*)m_secret, (QWidget*)m_region,
                         (QWidget*)m_room, (QWidget*)m_segDur,
-                        (QWidget*)m_tracks })
+                        (QWidget*)m_tracks, (QWidget*)m_lanEnabled,
+                        (QWidget*)m_lanPort, (QWidget*)m_lanToken })
         w->setEnabled(!live);
 }
 
@@ -763,12 +824,38 @@ void EncoderDock::refresh() {
         }
     };
 
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7). Meaningful only while
+    // live — the server starts at Go Live and stops at End — so idle just
+    // says whether it's turned on for next time.
+    auto showLan = [&] {
+        if (!m_lan) return;
+        if (!st.lan_enabled) {
+            m_lan->setText(tr_("Dock.LanOff"));
+            m_lan->setStyleSheet(QString());
+            return;
+        }
+        if (!st.live) {
+            m_lan->setText(tr_("Dock.LanWillStart"));
+            m_lan->setStyleSheet(QString());
+        } else if (st.lan_running) {
+            m_lan->setText(tr_("Dock.LanRunning").arg(st.lan_port)
+                               .arg((qulonglong)st.lan_cached_segments));
+            m_lan->setStyleSheet("color: #35c489;");
+        } else {
+            m_lan->setText(st.lan_error.empty()
+                ? tr_("Dock.LanFailed")
+                : tr_("Dock.LanFailed") + " (" + QString::fromStdString(st.lan_error) + ")");
+            m_lan->setStyleSheet("color: #e5484d;");
+        }
+    };
+
     if (!st.live) {
         m_state->setText(tr_("Dock.Idle"));
         m_state->setStyleSheet("font-weight: bold; color: palette(mid);");
         m_uptime->setText("—");
         showLink(false);
         showDisk();
+        showLan();
         // The idle probe's colo and host, so the operator can see where the
         // bucket answers from before they go live.
         if (m_storage)
@@ -807,6 +894,7 @@ void EncoderDock::refresh() {
 
     showLink(true);
     showDisk();
+    showLan();
 
     if (!st.last_error.empty()) {
         m_error->setText(QString::fromStdString(st.last_error));

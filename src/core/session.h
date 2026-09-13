@@ -164,6 +164,45 @@ public:
     using ProgressCallback = std::function<void(const Status&)>;
     void set_progress_callback(ProgressCallback cb) { m_on_progress = std::move(cb); }
 
+    // ── LAN / direct delivery hooks (PROJECT-SCOPE.md §8.7) ──────────────────
+    // Optional, and cost nothing when unset: a Session behaves exactly as it
+    // always has if a host never calls these setters. They exist so a
+    // LanObjectServer — a completely separate, optional class — can serve
+    // satellites on the same network the identical objects a cloud decoder
+    // eventually reads, without Session knowing anything about HTTP servers,
+    // sockets, or that LAN delivery exists at all.
+    //
+    // Fired once per event, with exactly what begin_common() already has in
+    // hand: the freshly-assigned event id, event.json's own JSON (the same
+    // bytes just PUT to the bucket), and the init segment. A LanObjectServer
+    // uses this to bootstrap a satellite that has never seen this event
+    // before.
+    using EventStartedCallback = std::function<void(
+        const std::string& event_id, const std::string& event_json,
+        const std::vector<uint8_t>& init)>;
+    void set_event_started_callback(EventStartedCallback cb) {
+        m_on_event_started = std::move(cb);
+    }
+    // Fired every time a segment is confirmed durable — the exact moment
+    // on_confirmed() already has the raw bytes in hand, before the spool file
+    // that held them is removed. A LanObjectServer retains a bounded window
+    // of these (see SegmentCache) so a segment already gone from the spool —
+    // which is most of them, by design — is still there to serve directly.
+    using SegmentConfirmedCallback = std::function<void(
+        uint64_t seq, const std::vector<uint8_t>& bytes)>;
+    void set_segment_confirmed_callback(SegmentConfirmedCallback cb) {
+        m_on_segment_confirmed = std::move(cb);
+    }
+    // Fired every time the manifest is (re)published to the bucket, with the
+    // exact JSON just sent — so a LAN-connected decoder's manifest.json is
+    // never more than one confirm behind what a cloud decoder would
+    // eventually see, and is never a separate, independently-derived copy
+    // that could drift from it.
+    using ManifestPublishedCallback = std::function<void(const std::string& json)>;
+    void set_manifest_published_callback(ManifestPublishedCallback cb) {
+        m_on_manifest_published = std::move(cb);
+    }
+
     // Bytes confirmed uploaded so far (feeds OBS's own output stats).
     uint64_t bytes_uploaded() const;
 
@@ -193,6 +232,9 @@ private:
     uint64_t    m_resumed_already_confirmed = 0;
     std::string m_last_error;
     ProgressCallback m_on_progress;
+    EventStartedCallback      m_on_event_started;
+    SegmentConfirmedCallback  m_on_segment_confirmed;
+    ManifestPublishedCallback m_on_manifest_published;
     mutable std::mutex m_mtx;
 
     std::string segment_key(uint64_t seq) const;
@@ -200,7 +242,7 @@ private:
     bool  put_json(const std::string& key, const std::string& body);
     bool  put_bytes(const std::string& key, const std::vector<uint8_t>& b,
                     const std::string& content_type);
-    void  publish_manifest_locked();
+    std::string publish_manifest_locked();
     void  publish_live(const std::string& status);
     bool  begin_common(const std::vector<uint8_t>& init,
                        const VideoInfo& video,

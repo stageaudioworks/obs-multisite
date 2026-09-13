@@ -44,6 +44,7 @@ add_library(multisite_core STATIC
     src/core/event_catalog.cpp
     src/core/storage_manager.cpp
     src/core/storage_providers.cpp
+    src/core/lan_object_server.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
     # remote-control pages. Portable rather than POSIX-only, because a plugin
@@ -237,6 +238,12 @@ add_test(NAME storage_manager COMMAND test_storage_manager)
 add_executable(test_http_server tests/test_http_server.cpp)
 target_link_libraries(test_http_server PRIVATE multisite_core)
 add_test(NAME http_server COMMAND test_http_server)
+
+# The encoder's LAN delivery surface (PROJECT-SCOPE.md §8.7), exercised over
+# a real loopback socket the same way test_http_server is.
+add_executable(test_lan_object_server tests/test_lan_object_server.cpp)
+target_link_libraries(test_lan_object_server PRIVATE multisite_core)
+add_test(NAME lan_object_server COMMAND test_lan_object_server)
 
 # The one list of command names (§8.3). Portable and header-only: the plugin's
 # HTTP routes and its obs-websocket vendor requests are both built from it, so

@@ -15,6 +15,7 @@
 #include "../core/session.h"
 #include "../core/cmaf_muxer.h"
 #include "../core/s3_transport.h"
+#include "../core/lan_object_server.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -63,6 +64,10 @@ static constexpr char S_MARKERS[]   = "marker_labels";
 // persisted setting). True means the operator explicitly chose "start new"
 // over a resumable event — see PROJECT-SCOPE.md §5.1.
 static constexpr char S_FORCE_NEW[] = "force_new_event";
+// LAN / direct delivery (PROJECT-SCOPE.md §8.7).
+static constexpr char S_LAN_ENABLED[]    = "lan_enabled";
+static constexpr char S_LAN_PORT[]       = "lan_port";
+static constexpr char S_LAN_TOKEN[]      = "lan_auth_token";
 
 // A packet held while the encoder has not yet told us its codec config.
 //
@@ -91,6 +96,12 @@ struct OutputCtx : EncoderControls {
     std::unique_ptr<S3Transport> transport;
     std::unique_ptr<Session>     session;
     std::unique_ptr<CmafMuxer>   muxer;
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — null unless the
+    // operator turned it on. Fed by three Session callbacks wired right
+    // after session is constructed; torn down before session in out_stop so
+    // a confirm callback can never fire into a server that is already gone.
+    std::unique_ptr<multisite::LanObjectServer> lan_server;
+    std::string lan_error;   // set if lan_server failed to bind its port
 
     // OBS encoder index → muxer track index
     int  video_track = -1;
@@ -140,6 +151,10 @@ struct OutputCtx : EncoderControls {
     // The operator's explicit choice from the dock, for this Go Live only —
     // never persisted (see S_FORCE_NEW).
     bool          pending_force_new_event = false;
+    // LAN / direct delivery settings, read once at Go Live.
+    bool          pending_lan_enabled = false;
+    int           pending_lan_port = 9080;
+    std::string   pending_lan_token;
 
     std::atomic<bool>       deferred{false};     // waiting on the first keyframe
     std::atomic<bool>       complete_requested{false};
@@ -375,6 +390,12 @@ EncoderStats OutputCtx::stats() const {
     es.resumed_event_id          = st.resumed_event_id;
     es.resumed_event_started_ms  = (long long)st.resumed_event_started_ms;
     es.resumed_already_confirmed = st.resumed_already_confirmed;
+    es.lan_running = lan_server != nullptr;
+    if (lan_server) {
+        es.lan_port            = lan_server->port();
+        es.lan_cached_segments = (unsigned long long)lan_server->cached_count();
+    }
+    es.lan_error = lan_error;
     if (transport) {
         es.colo               = transport->last_colo();
         es.storage_host       = transport->host();
@@ -607,6 +628,57 @@ static bool complete_start(OutputCtx* ctx) {
     mlog_info("storage: %s", ctx->transport->base_url().c_str());
     ctx->session   = std::make_unique<Session>(ctx->pending_sc, *ctx->transport);
 
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — wired before the
+    // resume/start_new call below, because begin_common() fires the
+    // event-started hook synchronously and a satellite must be able to
+    // bootstrap from the very first event this Session ever publishes, not
+    // just ones that start after this point.
+    ctx->lan_error.clear();
+    if (ctx->pending_lan_enabled) {
+        multisite::LanServerConfig lan_cfg;
+        lan_cfg.port = ctx->pending_lan_port;
+        lan_cfg.auth_token = ctx->pending_lan_token;
+        char* lan_dir = obs_module_config_path("lan_cache");
+        std::string lan_cache_dir = lan_dir ? lan_dir : "./multisite_lan_cache";
+        bfree(lan_dir);
+        ctx->lan_server = std::make_unique<multisite::LanObjectServer>(
+            lan_cfg, lan_cache_dir);
+        std::string lan_err;
+        if (ctx->lan_server->start(lan_err)) {
+            mlog_info("LAN delivery: listening on port %d%s",
+                      ctx->lan_server->port(),
+                      ctx->pending_lan_token.empty() ? " (no auth token set)" : "");
+            // Raw pointers, not shared_ptr: ctx outlives Session (it is torn
+            // down first in out_stop, below), and lan_server is torn down
+            // after session in the same place — so by the time either
+            // callback could fire, both are still valid, and once session is
+            // gone, it can never call back at all.
+            OutputCtx* raw = ctx;
+            ctx->session->set_event_started_callback(
+                [raw](const std::string& id, const std::string& json,
+                      const std::vector<uint8_t>& init) {
+                    if (raw->lan_server) raw->lan_server->on_event_started(id, json, init);
+                });
+            ctx->session->set_segment_confirmed_callback(
+                [raw](uint64_t seq, const std::vector<uint8_t>& bytes) {
+                    if (raw->lan_server) raw->lan_server->on_segment_confirmed(seq, bytes);
+                });
+            ctx->session->set_manifest_published_callback(
+                [raw](const std::string& json) {
+                    if (raw->lan_server) raw->lan_server->on_manifest_published(json);
+                });
+        } else {
+            // Cloud upload is completely unaffected by this failing — LAN
+            // delivery is a second path to the same objects, never a
+            // precondition for the first. Reported to the dock, not fatal.
+            mlog_error("LAN delivery failed to start on port %d: %s "
+                       "(cloud upload continues normally)",
+                       ctx->pending_lan_port, lan_err.c_str());
+            ctx->lan_error = lan_err;
+            ctx->lan_server.reset();
+        }
+    }
+
     // Resume an interrupted event unless the dock explicitly asked for a new
     // one. The dock is what decides THAT — checking staleness and asking the
     // operator when it matters (PROJECT-SCOPE.md §5.1) — before Go Live ever
@@ -729,6 +801,9 @@ static bool out_start(void* data) {
     // `s` further down, past the point where our reference had been given up.
     const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
     const bool force_new_event = obs_data_get_bool(s, S_FORCE_NEW);
+    const bool lan_enabled = obs_data_get_bool(s, S_LAN_ENABLED);
+    const int  lan_port    = (int)obs_data_get_int(s, S_LAN_PORT);
+    const std::string lan_token = obs_data_get_string(s, S_LAN_TOKEN);
     obs_data_release(s);
 
     if (s3.bucket.empty() ||
@@ -751,6 +826,9 @@ static bool out_start(void* data) {
     ctx->pending_chan_labels = chan_labels;
     ctx->pending_layout      = layout_str;
     ctx->pending_force_new_event = force_new_event;
+    ctx->pending_lan_enabled = lan_enabled;
+    ctx->pending_lan_port    = lan_port;
+    ctx->pending_lan_token   = lan_token;
 
     // The writer thread first: in the deferred case it is what finishes the
     // start, so it has to be running before any packet can ask it to.
@@ -873,7 +951,12 @@ static void out_stop(void* data, uint64_t) {
     }
 // controls were unregistered at the top, before ctx->mtx was taken
     ctx->started = false;
-    ctx->session.reset(); ctx->muxer.reset(); ctx->transport.reset();
+    // session first: its destructor stops the uploader thread and guarantees
+    // no more confirm/manifest callbacks can fire, so lan_server (which those
+    // callbacks reach through ctx) is safe to tear down right after it.
+    ctx->session.reset();
+    ctx->lan_server.reset();
+    ctx->muxer.reset(); ctx->transport.reset();
 }
 
 // Lets OBS (and scripts via obs_output_get_total_bytes) show upload volume.

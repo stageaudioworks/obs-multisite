@@ -22,7 +22,8 @@ int RetryUploader::backoff_ms(int attempt) const {
     return (int)std::llround(capped * d(rng));
 }
 
-bool RetryUploader::upload_one(const SpooledSegment& seg) {
+bool RetryUploader::upload_one(const SpooledSegment& seg,
+                                std::optional<std::chrono::steady_clock::time_point> deadline) {
     int attempt = 0;
     while (m_running) {
         // A retry can sit here for a long time (that is the whole point of
@@ -31,6 +32,7 @@ bool RetryUploader::upload_one(const SpooledSegment& seg) {
         // than risk a stale attempt succeeding after the fact and publishing
         // into the manifest a segment the spool has already declared gone.
         if (seg.seq < m_spool.floor()) return false;
+        if (deadline && std::chrono::steady_clock::now() >= *deadline) return false;
         ++attempt;
         PutResult r = m_transport.put(seg.key, seg.data, m_cfg.content_type, m_cfg.tags);
         if (r.success && m_cfg.verify_first_n > 0 &&
@@ -82,9 +84,11 @@ bool RetryUploader::upload_one(const SpooledSegment& seg) {
             return false;
 
         int wait = backoff_ms(attempt);
-        // sleep in small slices so stop() is responsive
-        for (int slept = 0; slept < wait && m_running; slept += 25)
+        // sleep in small slices so stop() and a drain deadline are responsive
+        for (int slept = 0; slept < wait && m_running; slept += 25) {
+            if (deadline && std::chrono::steady_clock::now() >= *deadline) return false;
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
     }
     return false;
 }
@@ -127,7 +131,10 @@ bool RetryUploader::drain_blocking(std::chrono::milliseconds deadline) {
     while (std::chrono::steady_clock::now() < end) {
         auto next = m_spool.peek_next();
         if (!next) { if (!was_running) m_running = false; return true; }
-        if (!upload_one(*next)) break; // permanent failure or attempts exhausted
+        // Pass the deadline through: upload_one's own retry backoff must not
+        // be allowed to run past it, or a single stuck segment hangs shutdown
+        // indefinitely (max_attempts is 0 — retry forever — in production).
+        if (!upload_one(*next, end)) break; // permanent failure, deadline, or attempts exhausted
     }
     if (!was_running) m_running = false;
     return m_spool.pending_count() == 0;

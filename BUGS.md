@@ -141,6 +141,78 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **End Broadcast could hang OBS's main thread indefinitely, with no crash
+  report to show for it.** Found while live-testing the LAN wiring below,
+  once Go-Live and End were actually exercised back to back rather than in
+  isolation: `Session::end()` calls `RetryUploader::drain_blocking(deadline)`
+  on OBS's UI thread (via `obs_output_stop`), and its own doc comment
+  promises to stop "until the spool is empty or `deadline` passes" — but
+  `upload_one()`'s internal retry loop never looked at that deadline, only
+  at `m_running`. With `max_attempts = 0` (retry forever, the production
+  default) a single segment stuck retrying could hold the drain, and the
+  main thread with it, open-ended. A `sample` of the hung process during
+  testing caught it red-handed: the UI thread parked inside
+  `RetryUploader::upload_one`'s backoff `sleep_for`. Almost certainly the
+  explanation for an OBS process that vanished mid-test earlier in this
+  same pass with no crash report at all — a hang long enough eventually
+  looks like a dead process from the outside, not a crash.
+
+  Fixed in `src/core/retry_uploader.h/.cpp`: `upload_one()` now takes an
+  optional deadline, checked before each attempt and inside the backoff
+  sleep's slicing loop; `drain_blocking()` passes its own deadline through
+  instead of only checking it between segments. A segment still unsent when
+  the deadline passes is left in the spool exactly as a crash would leave
+  it — picked up and retried on the next resume (§5.1) — logged rather than
+  silently dropped. Re-verified live: two full Go-Live → upload → LAN-curl →
+  End Broadcast cycles, both draining cleanly inside the 30s default
+  deadline with OBS staying alive throughout.
+
+- **LAN / direct delivery, encoder half only — the decoder half is not built
+  yet.** Per `PROJECT-SCOPE.md` §8.7 (Phase 14): a satellite on the same
+  network or an existing VPN will eventually download straight from the
+  encoder instead of the bucket, automatically, falling back to cloud the
+  instant that path isn't healthy. This pass built the encoder's side of
+  that — the half that can be proven without a decoder-side transport to
+  pair it with.
+
+  `HttpServer` (`src/core/http_server.h`) gained `route_prefix()`: a
+  "starts with" route, matched longest-prefix-first, needed because a
+  segment's path names a sequence number — there is no way to pre-register
+  one exact route per possible value. A new `LanObjectServer`
+  (`src/core/lan_object_server.h/.cpp`) uses it to serve
+  `manifest.json`/`event.json`/`init.mp4`/`segments/{seq}.m4s` — the
+  identical object shape a cloud decoder already reads — with an optional
+  bearer-token check.
+
+  **A real design correction, found while building it, not just anticipated
+  in advance:** the plan was to serve straight from the durable spool. That
+  cannot work — the spool's entire job is to delete a segment the moment the
+  bucket confirms it (see `spool_queue.h`), so the segment a LAN decoder is
+  actually most likely to want — recent, ordinary, already-confirmed
+  programme — is by design the one the spool no longer has. `LanObjectServer`
+  keeps its own bounded retention window instead, reusing the exact
+  `SegmentCache` class a decoder already uses for its own cache. `Session`
+  gained three narrow, optional hooks (`set_event_started_callback`,
+  `set_segment_confirmed_callback`, `set_manifest_published_callback`),
+  fired at moments `begin_common()`/`on_confirmed()`/
+  `publish_manifest_locked()` already have the relevant bytes or JSON in
+  hand — cost nothing when unset, and `Session` never learns LAN delivery
+  exists.
+
+  Proven end to end over a real loopback socket
+  (`tests/test_lan_object_server.cpp`): bootstrapping an event, segments
+  becoming servable the instant they confirm (not after a bucket round
+  trip), the retention cap actually evicting the oldest segment, a new event
+  discarding the previous one's window, and the auth token being enforced
+  once configured. Also new: `tests/test_session.cpp` proves the three hooks
+  fire with the right data (38 tests total pass).
+
+  **Explicitly not built, and not claimed to be:** the decoder side (a
+  `LanTransport` implementing the existing `Transport` interface),
+  discovery, automatic LAN/cloud preference and fallback, and the decoder
+  dock's active-path indicator. `PROJECT-SCOPE.md` §8.7 is marked
+  accordingly rather than as done.
+
 - **A storage provider dropdown replaces six blank fields with only the ones
   each provider actually needs.** Built per `PROJECT-SCOPE.md` §8.6 (Phase
   13). Choosing Cloudflare R2, AWS S3, Backblaze B2, Wasabi or Custom shows

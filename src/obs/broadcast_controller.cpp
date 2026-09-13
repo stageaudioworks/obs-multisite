@@ -190,6 +190,12 @@ void BroadcastSettings::load() {
         video_encoder_id = obs_data_get_string(d, "video_encoder_id");
     if (obs_data_has_user_value(d, "tile_layout"))
         tile_layout = obs_data_get_string(d, "tile_layout");
+    if (obs_data_has_user_value(d, "lan_enabled"))
+        lan_enabled = obs_data_get_bool(d, "lan_enabled");
+    if (obs_data_has_user_value(d, "lan_port"))
+        lan_port = (int)obs_data_get_int(d, "lan_port");
+    if (obs_data_has_user_value(d, "lan_auth_token"))
+        lan_auth_token = obs_data_get_string(d, "lan_auth_token");
     obs_data_release(d);
 }
 
@@ -216,6 +222,9 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "marker_labels", marker_labels.c_str());
     obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
     obs_data_set_string(d, "tile_layout", tile_layout.c_str());
+    obs_data_set_bool(d, "lan_enabled", lan_enabled);
+    obs_data_set_int(d, "lan_port", lan_port);
+    obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());
 
     char* path = obs_module_config_path("encoder.json");
     if (path) {
@@ -283,6 +292,10 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     // Transient — never read back from settings, never persisted. The
     // operator's explicit choice for THIS Go Live only (PROJECT-SCOPE.md §5.1).
     obs_data_set_bool(s, "force_new_event", force_new_event);
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7).
+    obs_data_set_bool(s, "lan_enabled", m_cfg.lan_enabled);
+    obs_data_set_int(s, "lan_port", m_cfg.lan_port);
+    obs_data_set_string(s, "lan_auth_token", m_cfg.lan_auth_token.c_str());
 
     m_output = obs_output_create("multisite_output", "multisite_out", s, nullptr);
     obs_data_release(s);
@@ -446,6 +459,8 @@ BroadcastStatus BroadcastController::status() const {
             st.disk_health     = (int)multisite::classify_disk_free(sp.available);
         }
     }
+    st.lan_enabled = m_cfg.lan_enabled;   // true whether idle or live: what
+                                           // Go Live will do next time
     if (st.live) {
         st.bytes = obs_output_get_total_bytes(m_output);
         st.uptime_s = m_started_ns
@@ -468,6 +483,10 @@ BroadcastStatus BroadcastController::status() const {
             st.resumed_event_id           = es.resumed_event_id;
             st.resumed_event_started_ms   = es.resumed_event_started_ms;
             st.resumed_already_confirmed  = es.resumed_already_confirmed;
+            st.lan_running          = es.lan_running;
+            st.lan_port             = es.lan_port;
+            st.lan_cached_segments  = (size_t)es.lan_cached_segments;
+            st.lan_error            = es.lan_error;
         }
         st.link_known = true;   // the uploader always reports once live
         return st;

@@ -31,6 +31,8 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace multisite {
 
@@ -108,6 +110,15 @@ public:
     void route(const std::string& method, const std::string& path,
                HttpHandler handler);
 
+    // A route matched by "starts with `prefix`" rather than exact equality —
+    // for a path that names something dynamic, like a segment number, where
+    // registering one exact route per possible value makes no sense. Checked
+    // after exact routes and before static files; the longest registered
+    // prefix wins, so a more specific prefix can sit inside a more general
+    // one without the general one shadowing it. Registered before start().
+    void route_prefix(const std::string& method, const std::string& prefix,
+                      HttpHandler handler);
+
     // Files served for any GET that matches no route. "/" serves index.html.
     // Served from disk rather than compiled in, so the interface can be edited
     // on a running box without a rebuild.
@@ -134,6 +145,8 @@ private:
     std::string m_static_root;
 
     std::map<std::string, HttpHandler> m_routes;   // "GET /api/status"
+    // method -> (prefix, handler), checked longest-prefix-first.
+    std::vector<std::pair<std::string, HttpHandler>> m_prefix_routes;
     std::thread m_accept_thread;
     std::atomic<bool> m_running{false};
 

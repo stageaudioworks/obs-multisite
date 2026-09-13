@@ -68,6 +68,17 @@ struct BroadcastSettings {
     // plausible pair, and nothing in the video distinguishes them.
     std::string tile_layout = "1x1";
 
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — off by default: this
+    // opens a port, and doing that without being asked is exactly the kind
+    // of thing an operator should turn on, not discover. Cloud upload is
+    // completely unaffected either way.
+    bool        lan_enabled = false;
+    int         lan_port = 9080;
+    // A pre-shared token satellites present as a bearer token. Empty means
+    // no check at all — appropriate on a plain building LAN, where the
+    // remote-control pages already go unauthenticated for the same reason.
+    std::string lan_auth_token;
+
     // Persisted alongside OBS's own plugin config.
     void load();
     void save() const;
@@ -106,6 +117,17 @@ struct BroadcastStatus {
     std::string resumed_event_id;
     long long   resumed_event_started_ms = 0;   // 0 if unknown
     unsigned long long resumed_already_confirmed = 0;
+
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7). lan_running is only
+    // meaningful while live — the server starts at Go Live and stops at End,
+    // there is nothing to serve otherwise. lan_error is set when the
+    // operator asked for it but the port could not be bound (e.g. already in
+    // use); cloud upload is unaffected either way.
+    bool        lan_enabled = false;
+    bool        lan_running = false;
+    int         lan_port = 0;
+    size_t      lan_cached_segments = 0;
+    std::string lan_error;
 };
 
 // A video encoder OBS actually has on this machine.

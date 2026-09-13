@@ -14,6 +14,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 
 namespace multisite {
 
@@ -77,8 +78,12 @@ private:
     std::atomic<LinkHealth> m_health{LinkHealth::Healthy};
 
     void run();
-    // Upload one segment with retry until success/stop. Returns true on confirm.
-    bool upload_one(const SpooledSegment& seg);
+    // Upload one segment with retry until success/stop/deadline. Returns true
+    // on confirm. `deadline` is optional (the background run() thread retries
+    // forever); drain_blocking() passes its own deadline through so a stuck
+    // segment can't hang shutdown past it.
+    bool upload_one(const SpooledSegment& seg,
+                     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     int  backoff_ms(int attempt) const;
 };
 

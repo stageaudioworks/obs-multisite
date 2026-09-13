@@ -532,6 +532,75 @@ int main() {
               "staleness is the caller's policy, not baked into the spool");
     }
 
+    std::printf("== 15. LAN delivery hooks fire with what a LanObjectServer needs (§8.7) ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s15").string();
+        cfg.event_name = "LAN test event";
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        Session ses(cfg, store);
+
+        std::string started_event_id, started_event_json;
+        std::vector<uint8_t> started_init;
+        int event_started_calls = 0;
+        ses.set_event_started_callback(
+            [&](const std::string& id, const std::string& json,
+                const std::vector<uint8_t>& init) {
+                ++event_started_calls;
+                started_event_id = id;
+                started_event_json = json;
+                started_init = init;
+            });
+
+        std::vector<std::pair<uint64_t, std::vector<uint8_t>>> confirmed_segments;
+        ses.set_segment_confirmed_callback(
+            [&](uint64_t seq, const std::vector<uint8_t>& bytes) {
+                confirmed_segments.emplace_back(seq, bytes);
+            });
+
+        std::vector<std::string> manifests_published;
+        ses.set_manifest_published_callback(
+            [&](const std::string& json) { manifests_published.push_back(json); });
+
+        auto init_bytes = blob(0, 1500);
+        CHECK(ses.start_new(init_bytes, video, tracks), "start_new succeeds");
+
+        CHECK(event_started_calls == 1,
+              "the event-started hook fires exactly once, at start_new()");
+        CHECK(started_event_id == ses.event_id(),
+              "naming the event that was actually started");
+        CHECK(started_init == init_bytes,
+              "carrying the exact init bytes a LAN satellite would need");
+        EventInfo started_ev = EventInfo::from_json(started_event_json);
+        CHECK(started_ev.name == "LAN test event",
+              "and the same event.json a cloud decoder would read");
+        CHECK(!manifests_published.empty(),
+              "the manifest-published hook already fired once too, seeding "
+              "an initial (empty) manifest at start_new()");
+
+        const size_t before = manifests_published.size();
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        for (int i = 0; i < 200 && ses.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        CHECK(confirmed_segments.size() == 1,
+              "the segment-confirmed hook fired exactly once");
+        CHECK(confirmed_segments[0].first == 0, "naming the right sequence number");
+        CHECK(confirmed_segments[0].second == blob(1),
+              "carrying the exact bytes that were confirmed — the ONLY copy "
+              "left once the spool file behind them is gone");
+        CHECK(manifests_published.size() > before,
+              "and the manifest-published hook fired again, after the segment "
+              "that just confirmed");
+        Manifest last = Manifest::from_json(manifests_published.back());
+        CHECK(!last.segments.empty() && last.segments.back().seq == 0,
+              "with the confirmed segment already listed in it — "
+              "the exact JSON a cloud decoder would eventually see too");
+
+        ses.end();
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

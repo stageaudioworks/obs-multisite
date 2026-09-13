@@ -334,6 +334,11 @@ void HttpServer::route(const std::string& method, const std::string& path,
     m_routes[method + " " + path] = std::move(handler);
 }
 
+void HttpServer::route_prefix(const std::string& method, const std::string& prefix,
+                              HttpHandler handler) {
+    m_prefix_routes.emplace_back(method + " " + prefix, std::move(handler));
+}
+
 bool HttpServer::start(std::string& error) {
     error.clear();
     if (!sockets_init(error)) return false;
@@ -573,9 +578,33 @@ bool HttpServer::handle_request(long long handle, const HttpRequest& req) {
     HttpResponse res;
 
     auto it = m_routes.find(req.method + " " + req.path);
-    if (it != m_routes.end()) {
+    const HttpHandler* handler = it != m_routes.end() ? &it->second : nullptr;
+
+    // No exact match: the longest registered prefix for this method that the
+    // path actually starts with, if any. Longest rather than first-registered
+    // so a more specific prefix (e.g. "/events/<id>/segments/") can be
+    // registered alongside a more general one ("/events/") without
+    // registration order deciding which one answers.
+    const std::string key = req.method + " ";
+    size_t best_len = 0;
+    const HttpHandler* prefix_handler = nullptr;
+    if (!handler) {
+        for (const auto& pr : m_prefix_routes) {
+            if (pr.first.compare(0, key.size(), key) != 0) continue;
+            const std::string& prefix = pr.first; // "METHOD prefix"
+            const size_t path_len = prefix.size() - key.size();
+            if (path_len <= best_len) continue;
+            if (req.path.compare(0, path_len, prefix, key.size(), path_len) == 0) {
+                best_len = path_len;
+                prefix_handler = &pr.second;
+            }
+        }
+    }
+    if (!handler) handler = prefix_handler;
+
+    if (handler) {
         try {
-            it->second(req, res);
+            (*handler)(req, res);
         } catch (const std::exception& e) {
             // A handler throwing must produce an error page, not kill the
             // control surface on a machine nobody can reach.

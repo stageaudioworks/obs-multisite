@@ -142,7 +142,13 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     // init.mp4 — must exist before any segment is referenced
     if (!put_bytes(event_prefix() + "init.mp4", init, "video/mp4")) return false;
 
+    // A LAN satellite bootstraps from exactly these two things — the same
+    // event.json just published and the same init bytes — fired unlocked, on
+    // principle (see publish_manifest_locked()).
+    if (m_on_event_started) m_on_event_started(m_event_id, ev.to_json(), init);
+
     // seed manifest state
+    std::string manifest_json;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         m_manifest = Manifest{};
@@ -155,8 +161,9 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         m_manifest.first_available_seq = m_next_seq;
         m_manifest.started_at_ms       = ev.started_at_ms;
         m_manifest.updated_at_ms       = now_ms();
-        publish_manifest_locked();
+        manifest_json = publish_manifest_locked();
     }
+    if (m_on_manifest_published) m_on_manifest_published(manifest_json);
 
     publish_live("live");
     m_uploader->start();
@@ -233,6 +240,7 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
 // Called by the uploader once the store has confirmed a segment durable.
 // This is the only place the manifest gains an entry — the write-ordering rule.
 void Session::on_confirmed(const SpooledSegment& seg) {
+  std::string manifest_json;
   {
     std::lock_guard<std::mutex> lk(m_mtx);
     ManifestSegment ms;
@@ -245,7 +253,7 @@ void Session::on_confirmed(const SpooledSegment& seg) {
                     (int64_t)(seg.pts_offset_s * 1000.0);
     m_manifest.push(ms, m_cfg.manifest_window);
     m_manifest.updated_at_ms = now_ms();
-    publish_manifest_locked();
+    manifest_json = publish_manifest_locked();
 
     // Periodic heartbeat so decoders can distinguish "quiet" from "dead".
     int64_t t = now_ms();
@@ -260,6 +268,12 @@ void Session::on_confirmed(const SpooledSegment& seg) {
         put_json(live_pointer_key(m_cfg.room_id), lp.to_json());
     }
   }
+  // This segment's bytes are exactly what a LAN satellite would otherwise
+  // wait for the bucket to hand back — and, once the spool file behind it is
+  // gone (which the uploader does right after this callback returns), the
+  // ONLY place they still exist locally, unless the caller retains them.
+  if (m_on_segment_confirmed) m_on_segment_confirmed(seg.seq, seg.data);
+  if (m_on_manifest_published) m_on_manifest_published(manifest_json);
 }
 
 // A segment was dropped from the local spool for disk space, before it could
@@ -282,8 +296,15 @@ uint64_t Session::bytes_uploaded() const {
     return m_uploader ? m_uploader->stats().bytes.load() : 0;
 }
 
-void Session::publish_manifest_locked() {
-    put_json(event_prefix() + "manifest.json", m_manifest.to_json());
+// Returns the JSON just published, so a caller can hand it to the LAN hook
+// (set_manifest_published_callback) AFTER releasing m_mtx — callbacks are
+// never fired locked in this file, on principle: SpoolQueue's own drop
+// callback earned that rule the hard way (see spool_queue.cpp), and nothing
+// here needs the exception.
+std::string Session::publish_manifest_locked() {
+    std::string json = m_manifest.to_json();
+    put_json(event_prefix() + "manifest.json", json);
+    return json;
 }
 
 void Session::publish_live(const std::string& status) {
@@ -315,12 +336,14 @@ void Session::end(std::chrono::milliseconds drain_deadline) {
     m_uploader->stop();
     m_uploader->drain_blocking(drain_deadline);
 
+    std::string manifest_json;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         m_manifest.status = "ended";
         m_manifest.updated_at_ms = now_ms();
-        publish_manifest_locked();
+        manifest_json = publish_manifest_locked();
     }
+    if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
     m_spool->mark_ended();
 }
