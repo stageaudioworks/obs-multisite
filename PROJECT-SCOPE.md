@@ -1187,12 +1187,16 @@ same list.
 
 ## 8.7 LAN / direct delivery
 
-**Status: the encoder half is built. The decoder half — a `LanTransport`,
-discovery, automatic preference and fallback, the dock's "which path is
-actually serving me" indicator — is not.** What follows is kept in its
-original, before-the-fact form, with corrections noted in place where
-building it changed something — the reasoning here is still the reasoning
-for why it works the way it does.
+**Status: built, both halves.** A satellite on the same network as the
+encoder, or reachable over an existing site-to-site VPN, downloads directly
+from it — manifest, init segment and media fragments — instead of from the
+bucket, automatically preferring that path when it answers and falling back
+to cloud, per request, when it doesn't. Cloud delivery can also be turned
+off entirely for an operator who wants everything to stay on one network and
+never touch a bucket at all. What follows is kept in its original,
+before-the-fact form, with corrections noted in place where building it
+changed something — the reasoning here is still the reasoning for why it
+works the way it does.
 
 Every campus today reaches the main site the same way, and only that way:
 through the bucket, over whatever internet connection each site has. That is
@@ -1202,19 +1206,33 @@ campus on the same building network as the main site, or reachable over a
 VPN the church already runs between sites, has a faster and cheaper path
 sitting unused: the encoder machine itself.
 
-**What this adds, and what it deliberately does not replace.** A satellite
-that can reach the encoder directly — over the LAN, or over an existing
-site-to-site VPN — downloads from it instead of from the bucket, while the
-encoder keeps uploading to the bucket exactly as it does today,
-unconditionally. Nothing about §3's "decentralized, no control plane" holds
-any less true for this: the encoder serves the *identical* object shape
-(`manifest.json`, `init.mp4`, `segments/{seq}.m4s`) a cloud decoder already
-reads — the media path and the signaling path are still the same path,
-there is just a second, local way to walk it. Cloud upload is never
-optional and never paused for this: it is what makes LAN mode safe to
-attempt in the first place, since a cloud-only decoder, a LAN decoder whose
-link just dropped, and the archival recording all still depend on it running
-regardless of who else is connected directly.
+**What this adds, and what it deliberately does not replace — unless told
+to.** A satellite that can reach the encoder directly — over the LAN, or over
+an existing site-to-site VPN — downloads from it instead of from the bucket,
+while the encoder, by default, keeps uploading to the bucket exactly as it
+does today, unconditionally. Nothing about §3's "decentralized, no control
+plane" holds any less true for this: the encoder serves the *identical*
+object shape (`manifest.json`, `event.json`, `init.mp4`,
+`segments/{seq}.m4s`, and — for LAN satellites following the room rather
+than a pinned event — `live.json`) a cloud decoder already reads. The media
+path and the signaling path are still the same path; there is just a second,
+local way to walk it.
+
+Cloud upload staying on by default is what makes LAN mode safe to *attempt*
+in the first place: a cloud-only decoder, a LAN decoder whose link just
+dropped, and the archival recording all still depend on it running
+regardless of who else is connected directly. But an operator who has no use
+for a cloud copy at all — a single building, no remote viewers, no interest
+in an off-site archive — can turn cloud delivery off entirely for an event.
+Doing so hands `Session` a `NullTransport` (`src/core/null_transport.h`) in
+place of the real `S3Transport`: every PUT reports instant success, so the
+spool → retry-uploader → manifest pipeline runs exactly as it always has —
+segments confirm immediately, the LAN hooks fire on schedule — and nothing
+ever actually leaves the machine. `Session` cannot tell the difference,
+which is the point: cloud-off is not a separate code path, it is the same
+one pointed at a transport that keeps nothing. The dock refuses to go live
+with both cloud and LAN off at once (there would be nowhere for anything to
+go), and the checkbox for it only appears once LAN delivery is turned on.
 
 **One correction from the original plan, found while building the encoder
 half:** this was going to serve straight from "the same durable spool" a
@@ -1232,45 +1250,66 @@ bytes or JSON in hand. `Session` itself stays completely unaware that LAN
 delivery exists — the hooks cost nothing when unset, and it never holds a
 reference to the class that uses them.
 
-**Shape, as built for the encoder half.** The encoder's HTTP server
-(`src/core/http_server.h`) gained `route_prefix()` — a "starts with", not
-"equals", route, matched longest-prefix-first, needed because a segment's
-path names a sequence number that cannot be registered as one exact route
-per possible value. A new `LanObjectServer` (`src/core/lan_object_server.h`)
-combines that with a `SegmentCache` and the three `Session` hooks above into
-the actual object server: `GET .../manifest.json`, `.../event.json`,
-`.../init.mp4` and `.../segments/{seq}.m4s`, all proven end to end over a
-real loopback socket in `tests/test_lan_object_server.cpp`, including the
-retention cap and an event switch discarding the previous event's window.
-`Transport` is already the abstraction a decoder downloads through
-(`src/core/transport.h`); a `LanTransport` implementing it is the other half
-of "implement two abstractions that already exist" and is not built yet.
+**Shape, as built.** The encoder's HTTP server (`src/core/http_server.h`)
+gained `route_prefix()` — a "starts with", not "equals", route, matched
+longest-prefix-first, needed because a segment's path names a sequence
+number that cannot be registered as one exact route per possible value. A
+new `LanObjectServer` (`src/core/lan_object_server.h`) combines that with a
+`SegmentCache` and four `Session` hooks (`set_event_started_callback`,
+`set_segment_confirmed_callback`, `set_manifest_published_callback`,
+`set_live_published_callback`) into the actual object server: `GET
+.../manifest.json`, `.../event.json`, `.../init.mp4`,
+`.../segments/{seq}.m4s`, and `.../rooms/{room}/live.json` — all proven end
+to end over a real loopback socket in `tests/test_lan_object_server.cpp`,
+including the retention cap, an event switch discarding the previous event's
+window, and auth enforcement.
 
-- **Discovery — not built.** A host:port typed into the decoder's settings,
-  with a "test connection" button in the same style as the appliance's own
-  "Check now" for storage. mDNS auto-discovery was considered and set aside
-  for a first build: it does nothing for the VPN case, where the two ends
-  are rarely on the same broadcast domain, and it is one more thing to fail
-  silently on a locked-down church network.
-- **Auth — the mechanism is built, the pairing UX is not.**
-  `LanServerConfig::auth_token` and the `Authorization: Bearer <token>` check
-  are real (`lan_object_server.cpp`); what generates that token and gets it
-  onto a decoder is still a plain shared-secret entry today, not yet the
-  device-code pairing flow §8.5 designs for cloud credentials — the eventual
-  goal is still one pairing flow an operator learns once, used for both. A
-  plain LAN inside one building is already treated as the trust boundary
-  elsewhere in this project (the remote-control pages have no password and
-  no TLS, deliberately); a token matters more once the path crosses a VPN.
-- **Preference and fallback — not built.** LAN preferred automatically
-  whenever it's healthy, falling back to cloud the instant it isn't — the
-  same `LinkHealth` hysteresis the S3 transport already uses, tracked
-  per-transport instead of once. Never a manual switch: an operator who
-  isn't standing at the satellite when a VPN drops should not have to be.
-- **Visibility — not built.** The decoder dock shows which path is actually
-  serving it right now — *"Receiving directly from main site"* vs.
-  *"Receiving via cloud storage (fallback)"* — not just a link-health
-  colour, because "why does this satellite feel laggy" wants a different
-  answer depending on which one is true.
+On the decoder side, `LanTransport` (`src/core/lan_transport.h`) implements
+the same `Transport` interface a decoder already downloads through, as a
+plain HTTP client against exactly those routes — proven against a real
+`LanObjectServer` in `tests/test_lan_transport.cpp`, including what a
+genuine miss (404, LAN path alive) looks like next to a connection failure
+(LAN path itself down), which is what tells `FallbackTransport`
+(`src/core/fallback_transport.h`) which one happened. That class is the
+whole of "preference and fallback": it holds a LAN `Transport&` and a cloud
+`Transport&` and, per `get()` call, tries LAN first and only reaches for
+cloud if LAN didn't answer — so a segment that aged out of the LAN's bounded
+retention window falls back to cloud for *that segment alone*, without
+flipping the whole session to cloud over one old fragment. `DecoderSession`
+is handed whichever of the two — or, for a LAN-only satellite with no cloud
+credentials at all, `LanTransport` alone — it never learns which, the same
+boundary `Session`'s hooks keep on the encoder side.
+
+- **Discovery — built, and deliberately manual.** A host (and port, and an
+  optional shared token) typed into the decoder dock's settings, the same
+  place cloud credentials go — not auto-discovered. mDNS was considered and
+  set aside: it does nothing for the VPN case, where the two ends are rarely
+  on the same broadcast domain, and it is one more thing to fail silently on
+  a locked-down church network. A satellite with a LAN host configured but no
+  cloud credentials at all now works LAN-only — `DecoderSettings::configured()`
+  accepts either, not just cloud — and one following the room (not a pinned
+  past event) discovers the live event id from the LAN server's own
+  `live.json`, needing no bucket at all when the encoder also has cloud
+  delivery turned off.
+- **Auth — built, still a shared secret, not yet paired.**
+  `LanServerConfig::auth_token` / `LanTransportConfig::auth_token` and the
+  `Authorization: Bearer <token>` check are real and enforced end to end;
+  what generates that token and gets it onto a decoder is still typing the
+  same string into both docks, not yet the device-code pairing flow §8.5
+  designs for cloud credentials — the eventual goal is still one pairing flow
+  an operator learns once, used for both. A plain LAN inside one building is
+  already treated as the trust boundary elsewhere in this project (the
+  remote-control pages have no password and no TLS, deliberately); a token
+  matters more once the path crosses a VPN.
+- **Preference and fallback — built, per request rather than per session.**
+  See `FallbackTransport` above. Deliberately simpler than tracking
+  `LinkHealth` hysteresis per transport and switching on a threshold: a
+  per-request decision cannot get "stuck" preferring the wrong path, and it
+  needs no timer, no state machine, and no operator-visible mode to explain.
+- **Visibility — built.** The decoder dock's storage-link line names which
+  path the most recent fetch actually took — *"via LAN"* or *"via cloud"* —
+  next to the existing colo/throughput readout, and only appears at all once
+  a LAN host is actually configured.
 
 **Deferred rather than decided against.** Whether LAN mode serves a segment
 the moment it's spooled (lower latency than cloud, since it skips waiting for
@@ -1323,7 +1362,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
-| Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | encoder side built, decoder side not yet (§8.7, §10 Phase 14) |
+| Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -1342,7 +1381,7 @@ paths — is a separate Stage Audio Works product line now, not built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phase 13 is built. Phase 14 is half built (the encoder side).
+event. Phase 13 is built. Phase 14 is built.
 Phases 9, 10 and 12 have not been started.
 
 **Phases 11, 12 and 13 carry weight together.** Between them they are most
@@ -1546,23 +1585,30 @@ than deleted.
 
   Depended on nothing else here, and nothing here depends on it.
 
-- **Phase 14 — LAN / direct delivery.** 🟨 A satellite on the same network as
+- **Phase 14 — LAN / direct delivery.** ✅ A satellite on the same network as
   the main site, or reachable over a VPN the church already runs, downloads
   directly from the encoder instead of from the bucket — automatically
-  preferred when healthy, falling back to cloud the instant it isn't.
-  Designed and half built in §8.7. Cloud upload keeps running
-  unconditionally throughout; this adds a second path to reach the same
-  objects, it does not remove the first or introduce a control plane §3
-  doesn't already have.
+  preferred when it answers, falling back to cloud per request the instant it
+  doesn't. Designed and built in §8.7. Cloud upload keeps running by default
+  throughout — this adds a second path to reach the same objects, it does
+  not remove the first or introduce a control plane §3 doesn't already have
+  — but can now be turned off entirely for an operator with no use for a
+  cloud copy at all.
 
-  **Built:** the encoder side. `HttpServer::route_prefix()`, a new
-  `LanObjectServer` serving `manifest.json`/`event.json`/`init.mp4`/segments
-  from a bounded retention window fed by three new `Session` hooks, an
-  auth-token check — all proven over a real loopback socket
-  (`tests/test_lan_object_server.cpp`). **Not built:** the decoder side (a
-  `LanTransport` implementing the existing `Transport` interface), discovery,
-  automatic preference/fallback between LAN and cloud, and the dock's
-  active-path indicator.
+  **Built, both sides:** the encoder's `HttpServer::route_prefix()`, a
+  `LanObjectServer` serving `manifest.json`/`event.json`/`init.mp4`/segments/
+  `live.json` from a bounded retention window fed by four `Session` hooks, an
+  auth-token check; the decoder's `LanTransport` (the same `Transport`
+  interface a decoder already downloads through, against those exact routes)
+  and `FallbackTransport` (LAN preferred, cloud per request otherwise) — all
+  proven over real loopback sockets
+  (`tests/test_lan_object_server.cpp`, `tests/test_lan_transport.cpp`,
+  `tests/test_fallback_transport.cpp`). A `NullTransport`
+  (`tests/test_null_transport.cpp`) lets cloud delivery be switched off
+  without Session knowing anything changed. **Still not built:** anything
+  beyond manual host:port discovery (no mDNS — see §8.7 for why), and the
+  device-code pairing flow §8.5 designs for cloud credentials, which LAN's
+  shared-token auth is meant to eventually share rather than duplicate.
 
   Depends on nothing else here. The pairing step designed for LAN auth is
   meant to eventually match §8.5's device-code flow, but does not require

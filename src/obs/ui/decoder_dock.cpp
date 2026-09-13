@@ -542,6 +542,26 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_bufferMins->setToolTip(tr_("BufferMinutesHint"));
     form->addRow(tr_("BufferMinutes"), m_bufferMins);
     storePageLayout->addWidget(storeBox);
+
+    // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
+    // A host typed in, by hand — no on/off checkbox: an empty host IS "not
+    // configured", the same way an empty bucket already means that above.
+    // Cloud storage above may be left blank entirely for a LAN-only machine
+    // (DecoderSettings::configured() accepts either), or filled in alongside
+    // this for automatic LAN-preferred, cloud-fallback delivery.
+    auto* lanBox = new QGroupBox(tr_("Dock.LanDelivery"), storePage);
+    auto* lform = new QFormLayout(lanBox);
+    m_lanHost = new QLineEdit(lanBox);
+    m_lanHost->setToolTip(tr_("Dock.LanHostHint"));
+    m_lanPortField = new QSpinBox(lanBox);
+    m_lanPortField->setRange(1, 65535);
+    m_lanToken = new QLineEdit(lanBox);
+    m_lanToken->setToolTip(tr_("Dock.LanTokenHint"));
+    lform->addRow(tr_("Dock.LanHost"), m_lanHost);
+    lform->addRow(tr_("Dock.LanPort"), m_lanPortField);
+    lform->addRow(tr_("Dock.LanToken"), m_lanToken);
+    storePageLayout->addWidget(lanBox);
+
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
 
@@ -583,6 +603,9 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         m_prebuffer->setValue(cfg.prebuffer_segments);
         m_startBufferS->setValue(cfg.start_buffer_seconds);
         m_bufferMins->setValue(cfg.buffer_minutes);
+        m_lanHost->setText(QString::fromStdString(cfg.lan_host));
+        m_lanPortField->setValue(cfg.lan_port);
+        m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
         updateProviderFields();
     }
     connect(m_provider, &QComboBox::currentIndexChanged,
@@ -590,10 +613,10 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_provider, &QComboBox::currentIndexChanged,
             this, &DecoderDock::onSaveSettings);
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId,
-                          m_secret, m_region, m_roomId })
+                          m_secret, m_region, m_roomId, m_lanHost, m_lanToken })
         connect(e, &QLineEdit::editingFinished, this,
                 &DecoderDock::onSaveSettings);
-    for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins })
+    for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins, m_lanPortField })
         connect(sb, &QSpinBox::editingFinished, this,
                 &DecoderDock::onSaveSettings);
 
@@ -688,6 +711,9 @@ void DecoderDock::onSaveSettings() {
     cfg.prebuffer_segments = m_prebuffer->value();
     cfg.start_buffer_seconds = m_startBufferS->value();
     cfg.buffer_minutes     = m_bufferMins->value();
+    cfg.lan_host           = m_lanHost->text().trimmed().toStdString();
+    cfg.lan_port           = m_lanPortField->value();
+    cfg.lan_auth_token     = m_lanToken->text().trimmed().toStdString();
     set_decoder_settings(cfg);
 }
 
@@ -1141,11 +1167,20 @@ void DecoderDock::refresh() {
             break;
     }
 
-    if (m_storage)
-        m_storage->setText(link_summary(
+    if (m_storage) {
+        QString text = link_summary(
             QString::fromStdString(s.colo),
             QString::fromStdString(s.storage_host),
-            s.download_bytes_per_s, s.download_samples));
+            s.download_bytes_per_s, s.download_samples);
+        // Visibility (§8.7): which path the most recent fetch actually took.
+        // Only worth saying when LAN is even configured — otherwise this is
+        // just the cloud path it has always been, and saying so would be
+        // noise on every single machine that hasn't touched this feature.
+        if (s.lan_configured)
+            text += s.lan_active ? "  ·  " + tr_("Dock.ViaLan")
+                                  : "  ·  " + tr_("Dock.ViaCloud");
+        m_storage->setText(text);
+    }
     m_buffered->setToolTip(tr_("Dock.BufferedHint"));
     // How far back the recording still exists in storage (not on this PC).
     {

@@ -208,6 +208,12 @@ private:
     QSpinBox*  m_prebuffer = nullptr;
     QSpinBox*  m_startBufferS = nullptr;
     QSpinBox*  m_bufferMins = nullptr;
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — an empty host means
+    // not configured, the same convention an empty bucket already uses
+    // above; no separate on/off checkbox.
+    QLineEdit* m_lanHost = nullptr;
+    QSpinBox*  m_lanPortField = nullptr;
+    QLineEdit* m_lanToken = nullptr;
     // In a dialog rather than the dock, for the same reason as the encoder:
     // settings are set once, the dock is watched mid-event.
     QDialog* m_settings = nullptr;

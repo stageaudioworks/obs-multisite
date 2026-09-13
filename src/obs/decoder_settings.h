@@ -43,13 +43,28 @@ struct DecoderSettings {
     // connection dropped, so it is worth setting as high as the link allows.
     int    buffer_minutes = 10;
 
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — a host:port typed in
+    // here, by hand, rather than discovered automatically (out of scope for
+    // now). Empty host means LAN is not configured at all: the source falls
+    // back to cloud-only, exactly as it always has. Both may be configured
+    // together (LAN preferred, cloud as fallback per request — see
+    // fallback_transport.h) or LAN alone (cloud_configured() false).
+    std::string lan_host;
+    int         lan_port = 9080;
+    std::string lan_auth_token;
+
     void load();
     void save() const;
 
-    bool configured() const {
+    bool cloud_configured() const {
         return !bucket.empty() &&
                (!endpoint_host.empty() || !r2_account_id.empty());
     }
+    bool lan_configured() const { return !lan_host.empty(); }
+    // Whether there is ANY way to reach a room at all — the gate a source
+    // checks before starting. cloud_configured() alone used to BE this gate;
+    // LAN-only satellites are exactly why it no longer is.
+    bool configured() const { return cloud_configured() || lan_configured(); }
 };
 
 // The machine-wide settings, shared by every multisite source and the dock.

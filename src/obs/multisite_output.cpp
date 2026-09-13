@@ -15,6 +15,7 @@
 #include "../core/session.h"
 #include "../core/cmaf_muxer.h"
 #include "../core/s3_transport.h"
+#include "../core/null_transport.h"
 #include "../core/lan_object_server.h"
 
 extern "C" {
@@ -68,6 +69,11 @@ static constexpr char S_FORCE_NEW[] = "force_new_event";
 static constexpr char S_LAN_ENABLED[]    = "lan_enabled";
 static constexpr char S_LAN_PORT[]       = "lan_port";
 static constexpr char S_LAN_TOKEN[]      = "lan_auth_token";
+// Off means: use a NullTransport instead of S3Transport (see
+// null_transport.h) — LAN delivery keeps working unmodified either way.
+// Defaults to true (see out_defaults) so a settings blob saved before this
+// existed still uploads to cloud, unlike lan_enabled which defaults off.
+static constexpr char S_CLOUD_ENABLED[]  = "cloud_enabled";
 
 // A packet held while the encoder has not yet told us its codec config.
 //
@@ -93,7 +99,12 @@ struct PendingFragment {
 struct OutputCtx : EncoderControls {
     obs_output_t* output = nullptr;
     std::string marker_label_csv;
-    std::unique_ptr<S3Transport> transport;
+    // S3Transport when cloud delivery is on, NullTransport when it's off (see
+    // null_transport.h) — held through the abstract interface because Session
+    // only ever needs a Transport&, and only self_test()/base_url() (below)
+    // need the concrete type, guarded by cloud_enabled at their one call site
+    // each.
+    std::unique_ptr<Transport> transport;
     std::unique_ptr<Session>     session;
     std::unique_ptr<CmafMuxer>   muxer;
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — null unless the
@@ -155,6 +166,10 @@ struct OutputCtx : EncoderControls {
     bool          pending_lan_enabled = false;
     int           pending_lan_port = 9080;
     std::string   pending_lan_token;
+    // Off means: skip S3Transport entirely and use a NullTransport instead
+    // (see null_transport.h) — every segment still flows through the same
+    // spool/retry/manifest pipeline, it just never leaves this machine.
+    bool          pending_cloud_enabled = true;
 
     std::atomic<bool>       deferred{false};     // waiting on the first keyframe
     std::atomic<bool>       complete_requested{false};
@@ -396,11 +411,14 @@ EncoderStats OutputCtx::stats() const {
         es.lan_cached_segments = (unsigned long long)lan_server->cached_count();
     }
     es.lan_error = lan_error;
-    if (transport) {
-        es.colo               = transport->last_colo();
-        es.storage_host       = transport->host();
-        es.upload_bytes_per_s = transport->observed_upload_bytes_per_s();
-        es.upload_samples     = transport->upload_samples();
+    // Colo/host/rate are S3Transport-specific (not part of the abstract
+    // Transport interface) and meaningless against a NullTransport — there is
+    // no remote host, so nothing to report rather than a misleading blank.
+    if (auto* s3 = dynamic_cast<S3Transport*>(transport.get())) {
+        es.colo               = s3->last_colo();
+        es.storage_host       = s3->host();
+        es.upload_bytes_per_s = s3->observed_upload_bytes_per_s();
+        es.upload_samples     = s3->upload_samples();
     }
     return es;
 }
@@ -426,6 +444,7 @@ static void out_defaults(obs_data_t* s) {
     // written before tiling existed carries implicitly.
     obs_data_set_default_string(s, S_LAYOUT, "1x1");
     obs_data_set_default_bool(s, S_TAGS, false);
+    obs_data_set_default_bool(s, S_CLOUD_ENABLED, true);
     obs_data_set_default_string(s, S_MARKERS,
         "Sermon Start,Offering,Go to local,Dismissal");
 }
@@ -622,10 +641,17 @@ static bool complete_start(OutputCtx* ctx) {
         mlog_error("init segment looks too small — codec config is probably "
                    "missing, so decoders will reject the stream");
 
-    ctx->transport = std::make_unique<S3Transport>(ctx->pending_s3);
-    // Report the URL actually in use: a mistyped endpoint is otherwise only
-    // visible as curl's opaque "bad/illegal format" error.
-    mlog_info("storage: %s", ctx->transport->base_url().c_str());
+    if (ctx->pending_cloud_enabled) {
+        auto s3 = std::make_unique<S3Transport>(ctx->pending_s3);
+        // Report the URL actually in use: a mistyped endpoint is otherwise
+        // only visible as curl's opaque "bad/illegal format" error.
+        mlog_info("storage: %s", s3->base_url().c_str());
+        ctx->transport = std::move(s3);
+    } else {
+        mlog_info("cloud delivery is disabled for this event — publishing "
+                  "to the LAN cache only, nothing leaves this machine");
+        ctx->transport = std::make_unique<multisite::NullTransport>();
+    }
     ctx->session   = std::make_unique<Session>(ctx->pending_sc, *ctx->transport);
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — wired before the
@@ -638,6 +664,7 @@ static bool complete_start(OutputCtx* ctx) {
         multisite::LanServerConfig lan_cfg;
         lan_cfg.port = ctx->pending_lan_port;
         lan_cfg.auth_token = ctx->pending_lan_token;
+        lan_cfg.room_id = ctx->pending_sc.room_id;
         char* lan_dir = obs_module_config_path("lan_cache");
         std::string lan_cache_dir = lan_dir ? lan_dir : "./multisite_lan_cache";
         bfree(lan_dir);
@@ -666,6 +693,13 @@ static bool complete_start(OutputCtx* ctx) {
             ctx->session->set_manifest_published_callback(
                 [raw](const std::string& json) {
                     if (raw->lan_server) raw->lan_server->on_manifest_published(json);
+                });
+            // Without this, a LAN-only satellite (cloud_enabled off) has no
+            // way to discover which event is live at all: live.json is the
+            // one object none of the other three hooks cover.
+            ctx->session->set_live_published_callback(
+                [raw](const std::string& json) {
+                    if (raw->lan_server) raw->lan_server->on_live_published(json);
                 });
         } else {
             // Cloud upload is completely unaffected by this failing — LAN
@@ -703,13 +737,19 @@ static bool complete_start(OutputCtx* ctx) {
                        ? "no error recorded"
                        : ctx->session->last_error().c_str());
         // Probe the bucket so the operator learns whether it's credentials,
-        // permissions, endpoint, or something request-specific.
-        std::string probe = ctx->transport->self_test();
-        if (probe.empty())
-            mlog_error("connectivity probe SUCCEEDED — credentials and bucket are "
-                       "fine, so the failure is request-specific (see above)");
-        else
-            mlog_error("connectivity probe also failed: %s", probe.c_str());
+        // permissions, endpoint, or something request-specific. Only
+        // meaningful against a real S3Transport — a NullTransport's put()
+        // cannot fail, so start_new()/resume() failing here is never about
+        // storage in the first place (cloud is disabled), and there is
+        // nothing to probe.
+        if (auto* s3 = dynamic_cast<S3Transport*>(ctx->transport.get())) {
+            std::string probe = s3->self_test();
+            if (probe.empty())
+                mlog_error("connectivity probe SUCCEEDED — credentials and bucket are "
+                           "fine, so the failure is request-specific (see above)");
+            else
+                mlog_error("connectivity probe also failed: %s", probe.c_str());
+        }
         return false;
     }
 
@@ -804,11 +844,18 @@ static bool out_start(void* data) {
     const bool lan_enabled = obs_data_get_bool(s, S_LAN_ENABLED);
     const int  lan_port    = (int)obs_data_get_int(s, S_LAN_PORT);
     const std::string lan_token = obs_data_get_string(s, S_LAN_TOKEN);
+    const bool cloud_enabled = obs_data_get_bool(s, S_CLOUD_ENABLED);
     obs_data_release(s);
 
-    if (s3.bucket.empty() ||
-        (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
-        mlog_error("storage not configured (need bucket + endpoint or account id)");
+    if (cloud_enabled) {
+        if (s3.bucket.empty() ||
+            (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
+            mlog_error("storage not configured (need bucket + endpoint or account id)");
+            return false;
+        }
+    } else if (!lan_enabled) {
+        mlog_error("cloud delivery is disabled and LAN delivery is off — "
+                  "nothing would be delivered anywhere");
         return false;
     }
 
@@ -829,6 +876,7 @@ static bool out_start(void* data) {
     ctx->pending_lan_enabled = lan_enabled;
     ctx->pending_lan_port    = lan_port;
     ctx->pending_lan_token   = lan_token;
+    ctx->pending_cloud_enabled = cloud_enabled;
 
     // The writer thread first: in the deferred case it is what finishes the
     // start, so it has to be running before any packet can ask it to.

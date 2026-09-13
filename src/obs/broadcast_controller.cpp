@@ -196,6 +196,8 @@ void BroadcastSettings::load() {
         lan_port = (int)obs_data_get_int(d, "lan_port");
     if (obs_data_has_user_value(d, "lan_auth_token"))
         lan_auth_token = obs_data_get_string(d, "lan_auth_token");
+    if (obs_data_has_user_value(d, "cloud_enabled"))
+        cloud_enabled = obs_data_get_bool(d, "cloud_enabled");
     obs_data_release(d);
 }
 
@@ -225,6 +227,7 @@ void BroadcastSettings::save() const {
     obs_data_set_bool(d, "lan_enabled", lan_enabled);
     obs_data_set_int(d, "lan_port", lan_port);
     obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());
+    obs_data_set_bool(d, "cloud_enabled", cloud_enabled);
 
     char* path = obs_module_config_path("encoder.json");
     if (path) {
@@ -257,16 +260,30 @@ bool BroadcastController::is_live() const { return m_output != nullptr; }
 bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     if (m_output) { error = "already broadcasting"; return false; }
 
-    if (m_cfg.bucket.empty()) {
-        error = "Bucket is required";
-        return false;
-    }
-    if (m_cfg.endpoint_host.empty() && m_cfg.r2_account_id.empty()) {
-        error = "Set either an R2 Account ID or an endpoint host";
-        return false;
-    }
-    if (m_cfg.access_key_id.empty() || m_cfg.secret_access_key.empty()) {
-        error = "Access Key ID and Secret Access Key are required";
+    // Storage credentials only matter if cloud delivery is actually going to
+    // use them — a LAN-only operator (cloud_enabled off, LAN on) should never
+    // be forced to fill in a bucket they've deliberately chosen not to use.
+    if (m_cfg.cloud_enabled) {
+        if (m_cfg.bucket.empty()) {
+            error = "Bucket is required";
+            return false;
+        }
+        if (m_cfg.endpoint_host.empty() && m_cfg.r2_account_id.empty()) {
+            error = "Set either an R2 Account ID or an endpoint host";
+            return false;
+        }
+        if (m_cfg.access_key_id.empty() || m_cfg.secret_access_key.empty()) {
+            error = "Access Key ID and Secret Access Key are required";
+            return false;
+        }
+    } else if (!m_cfg.lan_enabled) {
+        // Disabling both would mean nothing is delivered anywhere at all —
+        // not a broadcast, just burning CPU. The dock only exposes the
+        // cloud-disable checkbox while LAN is on, so this really only
+        // guards against a hand-edited settings file.
+        error = "Cloud delivery is disabled and LAN delivery is off — "
+                "nothing would be delivered anywhere. Enable LAN delivery "
+                "first, or turn cloud delivery back on.";
         return false;
     }
 
@@ -296,6 +313,7 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     obs_data_set_bool(s, "lan_enabled", m_cfg.lan_enabled);
     obs_data_set_int(s, "lan_port", m_cfg.lan_port);
     obs_data_set_string(s, "lan_auth_token", m_cfg.lan_auth_token.c_str());
+    obs_data_set_bool(s, "cloud_enabled", m_cfg.cloud_enabled);
 
     m_output = obs_output_create("multisite_output", "multisite_out", s, nullptr);
     obs_data_release(s);
@@ -461,6 +479,7 @@ BroadcastStatus BroadcastController::status() const {
     }
     st.lan_enabled = m_cfg.lan_enabled;   // true whether idle or live: what
                                            // Go Live will do next time
+    st.cloud_enabled = m_cfg.cloud_enabled;
     if (st.live) {
         st.bytes = obs_output_get_total_bytes(m_output);
         st.uptime_s = m_started_ns

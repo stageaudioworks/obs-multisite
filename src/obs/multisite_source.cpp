@@ -32,6 +32,8 @@
 #include <obs-frontend-api.h>
 #endif
 #include "../core/s3_transport.h"
+#include "../core/lan_transport.h"
+#include "../core/fallback_transport.h"
 
 #include <algorithm>
 #include <atomic>
@@ -152,6 +154,17 @@ struct SourceCtx : DecoderControls {
     // reference under `obj_mtx` and release it before doing any work — the
     // session and decoder are internally thread-safe.
     std::shared_ptr<S3Transport>    transport;
+    // Null unless a LAN host is configured (PROJECT-SCOPE.md §8.7). Kept
+    // alongside `transport` (never in place of it) so stop_playback()'s
+    // "cancel whatever is in flight" and play()'s re-arm reach BOTH legs —
+    // see the calls next to tx->cancel_pending()/resume_pending() below.
+    std::shared_ptr<LanTransport>       lan_transport;
+    // Only constructed when BOTH transport and lan_transport exist; owns
+    // nothing new, just decides per-request which of the two above answers.
+    // DecoderSession is built against this when it exists, `lan_transport`
+    // alone when there is no cloud leg, or `transport` alone when there is
+    // no LAN leg — see build_transports() below.
+    std::shared_ptr<FallbackTransport> fallback;
     std::shared_ptr<DecoderSession> session;
     std::shared_ptr<CmafDecoder>    decoder;
     mutable std::mutex              obj_mtx;
@@ -1401,8 +1414,11 @@ static void stop_workers(SourceCtx* ctx) {
     // timeout.
     {
         std::shared_ptr<S3Transport> tx;
-        { std::lock_guard<std::mutex> lk(ctx->obj_mtx); tx = ctx->transport; }
+        std::shared_ptr<LanTransport> lan_tx;
+        { std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+          tx = ctx->transport; lan_tx = ctx->lan_transport; }
         if (tx) tx->cancel_pending();
+        if (lan_tx) lan_tx->cancel_pending();
     }
 
     if (ctx->poll_thread.joinable())    ctx->poll_thread.join();
@@ -1455,7 +1471,12 @@ static void src_update(void* data, obs_data_t* s) {
                                 !legacy_endpoint.empty() || !legacy_account.empty();
 
         if (has_legacy) {
-            if (!shared.configured()) {
+            // Specifically cloud, not configured() in general: a LAN-only
+            // machine (cloud_configured() false, lan_configured() true)
+            // should still absorb legacy per-scene cloud credentials into
+            // the shared settings, exactly as one with nothing configured
+            // at all would.
+            if (!shared.cloud_configured()) {
                 DecoderSettings upd  = shared;
                 upd.endpoint_host     = legacy_endpoint;
                 upd.r2_account_id     = legacy_account;
@@ -1505,10 +1526,9 @@ static void src_update(void* data, obs_data_t* s) {
     ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
     ctx->audio_track        = (int)obs_data_get_int(s, S_ATRACK);
 
-    if (s3.bucket.empty() ||
-        (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
-        mlog_warn("source: not configured yet — enter storage details in the "
-                  "Multisite Decoder dock (Settings)");
+    if (!shared.configured()) {
+        mlog_warn("source: not configured yet — enter storage details or a "
+                  "LAN host in the Multisite Decoder dock (Settings)");
         return;
     }
 
@@ -1528,19 +1548,55 @@ static void src_update(void* data, obs_data_t* s) {
     bfree(cachedir);
 
     {
-        auto tx  = std::make_shared<S3Transport>(s3);
-        auto ses = std::make_shared<DecoderSession>(dc, *tx);
-        // The catalog shares the transport and, deliberately, the same
-        // staleness rule as the decoder: the list and the player must never
-        // disagree about whether an event is still running.
-        CatalogConfig cc;
-        cc.room_id        = dc.room_id;
-        cc.stale_after_ms = dc.stale_after_ms;
-        auto cat = std::make_shared<EventCatalog>(cc, *tx);
+        // Cloud, LAN, both, or — since shared.configured() already checked
+        // at least one is set — exactly one of the two below is always real.
+        std::shared_ptr<S3Transport> tx;
+        std::shared_ptr<LanTransport> lan_tx;
+        std::shared_ptr<FallbackTransport> fb;
+        if (shared.cloud_configured())
+            tx = std::make_shared<S3Transport>(s3);
+        if (shared.lan_configured()) {
+            LanTransportConfig lcfg;
+            lcfg.host       = shared.lan_host;
+            lcfg.port       = shared.lan_port;
+            lcfg.auth_token = shared.lan_auth_token;
+            lan_tx = std::make_shared<LanTransport>(lcfg);
+        }
+
+        Transport* active = nullptr;
+        if (lan_tx && tx) {
+            // Preference and fallback (§8.7): LAN answers when it can, cloud
+            // otherwise, decided per request — see fallback_transport.h.
+            fb = std::make_shared<FallbackTransport>(*lan_tx, *tx);
+            active = fb.get();
+        } else if (lan_tx) {
+            active = lan_tx.get();
+        } else {
+            active = tx.get();
+        }
+        auto ses = std::make_shared<DecoderSession>(dc, *active);
+
+        // Event browsing (§7.5) is inherently cloud-only — there is no such
+        // thing as "list every event a LAN endpoint has ever served"; it
+        // only ever knows about whichever one is live right now. No catalog
+        // at all when cloud isn't configured, rather than one that can only
+        // ever come back empty and reads as a room with no history.
+        std::shared_ptr<EventCatalog> cat;
+        if (tx) {
+            // The catalog shares the cloud transport and, deliberately, the
+            // same staleness rule as the decoder: the list and the player
+            // must never disagree about whether an event is still running.
+            CatalogConfig cc;
+            cc.room_id        = dc.room_id;
+            cc.stale_after_ms = dc.stale_after_ms;
+            cat = std::make_shared<EventCatalog>(cc, *tx);
+        }
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
-        ctx->transport = tx;
-        ctx->session   = ses;
-        ctx->catalog   = cat;
+        ctx->transport     = tx;
+        ctx->lan_transport = lan_tx;
+        ctx->fallback      = fb;
+        ctx->session       = ses;
+        ctx->catalog       = cat;
     }
     {
         // Start with a clean list: this may be a different room entirely.
@@ -1584,7 +1640,12 @@ static void src_destroy(void* data) {
     }
     {
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+        // session first: it holds a Transport& into whichever of these it
+        // was actually built against (see the construction site above), so
+        // nothing may be freed before it is.
         ctx->session.reset();
+        ctx->fallback.reset();
+        ctx->lan_transport.reset();
         ctx->transport.reset();
     }
     delete ctx;
@@ -1753,13 +1814,21 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         // release it before doing anything with it, so the UI thread never
         // holds that lock while the download thread wants it.
         std::shared_ptr<S3Transport> tx;
-        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+        std::shared_ptr<LanTransport> lan_tx;
+        std::shared_ptr<FallbackTransport> fb;
+        { std::lock_guard<std::mutex> lk(obj_mtx);
+          tx = transport; lan_tx = lan_transport; fb = fallback; }
         if (tx) {
             out.colo                 = tx->last_colo();
             out.storage_host         = tx->host();
             out.download_bytes_per_s = tx->observed_download_bytes_per_s();
             out.download_samples     = tx->download_samples();
         }
+        out.lan_configured = (lan_tx != nullptr);
+        // With both configured, FallbackTransport tracks which path the most
+        // recent request actually took. LAN alone (no fallback object at
+        // all — see the construction site) is trivially always "via LAN".
+        out.lan_active = fb ? fb->last_get_was_primary() : (lan_tx != nullptr);
     }
     out.loading        = loading_event.load();
     out.seek_target_ms = seek_target_ms.load();
@@ -1885,8 +1954,10 @@ void SourceCtx::jump_to_marker(const std::string& id) {
 void SourceCtx::resume_downloads() {
     if (!stopped.exchange(false)) return;   // idempotent: nothing to undo
     std::shared_ptr<S3Transport> tx;
-    { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+    std::shared_ptr<LanTransport> lan_tx;
+    { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; lan_tx = lan_transport; }
     if (tx) tx->resume_pending();
+    if (lan_tx) lan_tx->resume_pending();
     poll_now = true;        // refill now rather than waiting out the interval
 }
 
@@ -1949,8 +2020,10 @@ void SourceCtx::stop_playback() {
     // operator took it off air. Re-armed in play().
     {
         std::shared_ptr<S3Transport> tx;
-        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+        std::shared_ptr<LanTransport> lan_tx;
+        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; lan_tx = lan_transport; }
         if (tx) tx->cancel_pending();
+        if (lan_tx) lan_tx->cancel_pending();
     }
 
     // Drop the decoder. It is the expensive thing to leave running — threads,

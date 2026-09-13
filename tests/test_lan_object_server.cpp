@@ -3,13 +3,13 @@
 // (PROJECT-SCOPE.md §8.7), exercised over a real loopback socket the same
 // way test_http_server.cpp proves the shared server itself.
 //
-// This is the encoder side only: a satellite fetching manifest.json,
-// event.json, init.mp4 and a segment directly from the encoder instead of
-// through the bucket, with a bounded retention window standing in for the
-// spool (which deletes a segment the moment it confirms — see
-// lan_object_server.h for why LAN serving needs its own copy). The decoder
-// side (a LanTransport, discovery, automatic fallback) is not built yet;
-// this proves the half that is.
+// A satellite fetching manifest.json, event.json, init.mp4, live.json and a
+// segment directly from the encoder instead of through the bucket, with a
+// bounded retention window standing in for the spool (which deletes a
+// segment the moment it confirms — see lan_object_server.h for why LAN
+// serving needs its own copy). The decoder-side client (LanTransport) and
+// the fallback composite (FallbackTransport) have their own test files;
+// this one proves the server in isolation, over a real loopback socket.
 #include "../src/core/lan_object_server.h"
 
 #include <chrono>
@@ -173,6 +173,27 @@ int main() {
             "GET /events/WRONG_EVENT/manifest.json HTTP/1.1\r\nConnection: close\r\n\r\n");
         CHECK(status_of(r) == 404,
               "a request for any OTHER event id is refused, not served by accident");
+    }
+
+    std::printf("live.json: how a satellite following the room (not a "
+                "pinned event) discovers what's live\n");
+    {
+        const std::string r = round_trip(port,
+            "GET /rooms/main-auditorium/live.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 404, "nothing published yet — not a crash");
+    }
+    server->on_live_published("{\"room_id\":\"main-auditorium\",\"event_id\":\"E1\",\"status\":\"live\"}");
+    {
+        const std::string r = round_trip(port,
+            "GET /rooms/main-auditorium/live.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 200, "served once published");
+        CHECK(contains(body_of(r), "E1"), "with the exact JSON just published");
+    }
+    {
+        const std::string r = round_trip(port,
+            "GET /rooms/some-other-room/live.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 404,
+              "a different room's live.json path is a 404, not this room's answer");
     }
 
     std::printf("Segments become servable the moment they confirm\n");

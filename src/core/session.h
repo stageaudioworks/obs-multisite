@@ -123,8 +123,14 @@ public:
     // Refresh live.json's heartbeat (drives decoder stale-detection).
     void heartbeat();
 
-    // Flush remaining spool, mark the event ended, publish final state.
-    void end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(30000));
+    // Flush remaining spool, mark the event ended, publish final state. Runs
+    // on whatever thread calls it — OBS's own UI thread, in practice — so the
+    // deadline is a direct trade: an operator watching Stop feels every
+    // second of it. 8s gives a healthy link (segments upload in low single
+    // digits of seconds per the encoder's own logs) a real chance to clear
+    // the queue, without turning a routine Stop into a UI freeze indistinct
+    // from a hang — see BUGS.md for the bug that made this bound matter.
+    void end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(8000));
 
     // Status for the encoder UI.
     struct Status {
@@ -202,6 +208,16 @@ public:
     void set_manifest_published_callback(ManifestPublishedCallback cb) {
         m_on_manifest_published = std::move(cb);
     }
+    // Fired every time live.json is (re)published — at start, on every
+    // heartbeat, and at end() — with the exact JSON just sent. Without this,
+    // a LAN-only satellite (cloud delivery disabled — see NullTransport) has
+    // no way to discover WHICH event is live at all: live.json is the only
+    // thing that names it, and it is the one object the other two hooks
+    // don't already cover.
+    using LivePublishedCallback = std::function<void(const std::string& json)>;
+    void set_live_published_callback(LivePublishedCallback cb) {
+        m_on_live_published = std::move(cb);
+    }
 
     // Bytes confirmed uploaded so far (feeds OBS's own output stats).
     uint64_t bytes_uploaded() const;
@@ -235,6 +251,7 @@ private:
     EventStartedCallback      m_on_event_started;
     SegmentConfirmedCallback  m_on_segment_confirmed;
     ManifestPublishedCallback m_on_manifest_published;
+    LivePublishedCallback     m_on_live_published;
     mutable std::mutex m_mtx;
 
     std::string segment_key(uint64_t seq) const;

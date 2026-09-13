@@ -81,6 +81,9 @@ private:
     QCheckBox* m_lanEnabled = nullptr;
     QSpinBox*  m_lanPort = nullptr;
     QLineEdit* m_lanToken = nullptr;
+    // Only shown while m_lanEnabled is checked — disabling cloud with LAN
+    // off would leave nothing delivered anywhere at all.
+    QCheckBox* m_cloudEnabled = nullptr;
 
     // media
     QComboBox* m_encoder = nullptr;

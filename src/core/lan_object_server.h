@@ -34,6 +34,10 @@ namespace multisite {
 struct LanServerConfig {
     std::string bind_address = "0.0.0.0";
     int         port = 9080;
+    // Must match SessionConfig::room_id: this is what a satellite's
+    // live.json GET actually asks for (see live_pointer_key()), and there is
+    // no other way this class could learn it — it never sees SessionConfig.
+    std::string room_id = "main-auditorium";
     // A pre-shared token satellites present as `Authorization: Bearer
     // <token>`. Empty disables the check — appropriate on a plain building
     // LAN, where the remote-control pages already go unauthenticated for the
@@ -78,6 +82,11 @@ public:
     // LAN-connected decoder never sees a manifest a cloud decoder couldn't
     // also have seen.
     void on_manifest_published(std::string json);
+    // live.json was (re)published — the ONLY way a LAN satellite following
+    // the room (rather than a pinned event id) can discover which event is
+    // live at all, needed in full for a cloud-disabled encoder (see
+    // null_transport.h) where there is no bucket live.json to fall back to.
+    void on_live_published(std::string json);
 
     // How many segments are currently retained, and how many have had to be
     // evicted for the cap — surfaced for the encoder dock, the same shape as
@@ -93,9 +102,11 @@ private:
     std::string m_event_id;         // guarded by m_mtx
     std::string m_event_json;
     std::string m_manifest_json;
+    std::string m_live_json;        // guarded by m_mtx
 
     bool check_auth(const HttpRequest& req) const;
     void handle_events(const HttpRequest& req, HttpResponse& res);
+    void handle_live(const HttpRequest& req, HttpResponse& res);
 };
 
 } // namespace multisite

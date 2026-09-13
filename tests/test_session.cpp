@@ -6,6 +6,7 @@
 // fetch the object. This is checked continuously, including across a simulated
 // network outage.
 #include "../src/core/session.h"
+#include "../src/core/null_transport.h"
 
 #include <cassert>
 #include <cstdio>
@@ -597,6 +598,72 @@ int main() {
         CHECK(!last.segments.empty() && last.segments.back().seq == 0,
               "with the confirmed segment already listed in it — "
               "the exact JSON a cloud decoder would eventually see too");
+
+        ses.end();
+    }
+
+    std::printf("== 16. The live-published hook fires alongside the other "
+                "three — a LAN-only satellite's only way to learn which "
+                "event is live (§8.7) ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s16").string();
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        Session ses(cfg, store);
+
+        std::vector<std::string> live_published;
+        ses.set_live_published_callback(
+            [&](const std::string& json) { live_published.push_back(json); });
+
+        CHECK(ses.start_new(blob(0, 500), video, tracks), "start_new succeeds");
+        CHECK(!live_published.empty(),
+              "fires at start — the same moment live.json first names this event");
+        LivePointer lp0 = LivePointer::from_json(live_published.back());
+        CHECK(lp0.event_id == ses.event_id() && lp0.status == "live",
+              "naming the right event, correctly live");
+
+        const size_t before = live_published.size();
+        ses.heartbeat();
+        CHECK(live_published.size() > before,
+              "fires again on every heartbeat, the same path a confirm's "
+              "periodic re-publish takes");
+
+        ses.end();
+        LivePointer lp1 = LivePointer::from_json(live_published.back());
+        CHECK(lp1.status == "ended", "and once more at end(), marked ended");
+    }
+
+    std::printf("== 17. Cloud delivery disabled: NullTransport lets LAN-only "
+                "delivery reuse the entire pipeline unmodified (§8.7) ==\n");
+    {
+        NullTransport null_store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s17").string();
+        Session ses(cfg, null_store);
+
+        int event_started = 0, segments_confirmed = 0;
+        ses.set_event_started_callback([&](const std::string&, const std::string&,
+                                           const std::vector<uint8_t>&) { ++event_started; });
+        ses.set_segment_confirmed_callback(
+            [&](uint64_t, const std::vector<uint8_t>&) { ++segments_confirmed; });
+
+        CHECK(ses.start_new(blob(0, 500), video, tracks),
+              "start_new succeeds with no real store behind it at all");
+        CHECK(event_started == 1, "the LAN event-started hook still fires");
+
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        for (int i = 0; i < 200 && ses.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        CHECK(ses.status().pending == 0,
+              "confirms immediately — a NullTransport put() never fails or waits");
+        CHECK(ses.status().confirmed_total == 1, "and the count reflects it");
+        CHECK(segments_confirmed == 1,
+              "the LAN segment-confirmed hook fires exactly as it would against "
+              "a real bucket — Session cannot tell the difference");
+        CHECK(ses.status().verify_failures == 0,
+              "no false verify failures: object_size() echoes the size just put");
 
         ses.end();
     }

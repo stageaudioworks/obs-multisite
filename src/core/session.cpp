@@ -314,7 +314,11 @@ void Session::publish_live(const std::string& status) {
     lp.status        = status;
     lp.updated_at_ms = now_ms();
     m_last_heartbeat_ms = lp.updated_at_ms;
-    put_json(live_pointer_key(m_cfg.room_id), lp.to_json());
+    std::string json = lp.to_json();
+    put_json(live_pointer_key(m_cfg.room_id), json);
+    // Not called under m_mtx (publish_live never is — see its three callers),
+    // so no unlock dance is needed here unlike publish_manifest_locked().
+    if (m_on_live_published) m_on_live_published(json);
 }
 
 void Session::heartbeat() { publish_live("live"); }

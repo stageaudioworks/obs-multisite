@@ -456,16 +456,16 @@ that are no longer part of this project, and why.</summary>
   "Multisite Cloud" is already a greyed-out entry in the same list, not a
   second settings screen waiting to be built. Built per
   [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection).
-- **Phase 14 — LAN / direct delivery.** 🟨 A satellite on the same network as
+- **Phase 14 — LAN / direct delivery.** ✅ A satellite on the same network as
   the main site, or reachable over a VPN the church already runs, downloads
-  straight from the encoder instead of the bucket — automatically, falling
-  back to cloud the instant that path isn't healthy. Cloud upload never
-  stops for this: it's what every other satellite and the recording itself
-  still depend on. The encoder side is built — it can already serve a
-  satellite directly over plain HTTP, tested over a real loopback socket;
-  what isn't built yet is the decoder side that would actually use it
-  (a matching transport, discovery, automatic fallback, and showing which
-  path is active). Designed and half built in
+  straight from the encoder instead of the bucket — automatically preferred
+  when it answers, falling back to cloud per request the instant it doesn't.
+  Cloud upload stays on by default (every other satellite and the archival
+  recording still depend on it), but can now be turned off entirely for an
+  operator who wants everything to stay on one network. Both sides are
+  built and tested over real loopback sockets — the encoder's object
+  server, the decoder's matching transport and its LAN-preferred/cloud-
+  fallback logic. Designed and built in
   [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery).
 
 Phases 11, 12 and 13 are, between them, most of the distance between

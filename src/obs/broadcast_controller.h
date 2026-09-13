@@ -78,6 +78,14 @@ struct BroadcastSettings {
     // no check at all — appropriate on a plain building LAN, where the
     // remote-control pages already go unauthenticated for the same reason.
     std::string lan_auth_token;
+    // Only meaningful, and only ever shown, while lan_enabled is true —
+    // disabling cloud with LAN off would mean nothing is delivered anywhere
+    // at all. Uses NullTransport in place of S3Transport (see
+    // null_transport.h): every segment still flows through the exact same
+    // spool → retry-uploader → manifest pipeline, and the LAN hooks fire
+    // exactly as they would with cloud on, since NullTransport confirms a
+    // segment the instant it's asked to store one.
+    bool        cloud_enabled = true;
 
     // Persisted alongside OBS's own plugin config.
     void load();
@@ -128,6 +136,9 @@ struct BroadcastStatus {
     int         lan_port = 0;
     size_t      lan_cached_segments = 0;
     std::string lan_error;
+    // What Go Live will do next time — true whether idle or live, same as
+    // lan_enabled above.
+    bool        cloud_enabled = true;
 };
 
 // A video encoder OBS actually has on this machine.

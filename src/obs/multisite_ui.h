@@ -206,6 +206,13 @@ struct DecoderSnapshot {
     std::string storage_host;
     double      download_bytes_per_s = 0.0;
     unsigned long long download_samples = 0;   // 0 = show no figure at all
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7, "Visibility"). lan_active
+    // means the MOST RECENT fetch actually came from LAN, not cloud — with
+    // both configured this can flip request to request (a segment aged out
+    // of the LAN retention window falls back to cloud for that one alone),
+    // so it describes what just happened, not a sticky mode.
+    bool        lan_configured = false;
+    bool        lan_active = false;
 };
 bool decoder_snapshot(DecoderSnapshot& out);
 void decoder_pause_all();

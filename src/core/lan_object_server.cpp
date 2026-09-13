@@ -23,6 +23,13 @@ LanObjectServer::LanObjectServer(LanServerConfig cfg, std::string cache_dir)
                          [this](const HttpRequest& req, HttpResponse& res) {
                              handle_events(req, res);
                          });
+    // Exact match, not a prefix: the room id is fixed for the life of this
+    // server (see LanServerConfig::room_id), so there is exactly one such
+    // path, the identical shape live_pointer_key() builds for the bucket.
+    m_http->route("GET", "/rooms/" + m_cfg.room_id + "/live.json",
+                 [this](const HttpRequest& req, HttpResponse& res) {
+                     handle_live(req, res);
+                 });
 }
 
 LanObjectServer::~LanObjectServer() { stop(); }
@@ -98,6 +105,24 @@ void LanObjectServer::handle_events(const HttpRequest& req, HttpResponse& res) {
         }
     }
     res.text(404, "not found");
+}
+
+void LanObjectServer::handle_live(const HttpRequest& req, HttpResponse& res) {
+    if (!check_auth(req)) { res.text(401, "unauthorized"); return; }
+    std::string json;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        json = m_live_json;
+    }
+    // Nothing published yet (server just started, no event has ever begun
+    // under it) — a genuine "no live pointer", not a malformed request.
+    if (json.empty()) { res.text(404, "not found"); return; }
+    res.json(json);
+}
+
+void LanObjectServer::on_live_published(std::string json) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_live_json = std::move(json);
 }
 
 void LanObjectServer::on_event_started(const std::string& event_id,

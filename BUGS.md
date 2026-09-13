@@ -141,6 +141,53 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **LAN / direct delivery is now built end to end, and cloud upload can be
+  turned off entirely (PROJECT-SCOPE.md §8.7, Phase 14).** The encoder half
+  landed in an earlier pass; this pass built the decoder's matching client
+  (`LanTransport`), the LAN-preferred/cloud-fallback logic
+  (`FallbackTransport`), and — since an operator asked for it directly — a
+  way to disable cloud delivery altogether for a LAN-only setup
+  (`NullTransport`).
+
+  `LanTransport` (`src/core/lan_transport.h/.cpp`) is a plain HTTP client
+  against `LanObjectServer`'s own routes, with a short connect timeout (LAN
+  should fail fast, not hold a decoder's poll loop hostage waiting out a
+  cloud-sized timeout) and the same cancel-on-teardown discipline
+  `S3Transport` already has, for the same reason: a decoder source torn down
+  mid-request must not freeze OBS's UI thread waiting one out.
+  `FallbackTransport` (`src/core/fallback_transport.h`) wraps a LAN and a
+  cloud `Transport&` and tries LAN first on every `get()`, falling through to
+  cloud only for requests LAN didn't answer — deliberately per-request
+  rather than a session-wide health-tracked mode, so a segment that aged out
+  of the LAN retention window falls back for that segment alone, and the
+  very next request tries LAN again rather than staying "stuck" on cloud.
+  `DecoderSettings` gained `lan_host`/`lan_port`/`lan_auth_token`, and its
+  `configured()` gate now accepts LAN alone — a satellite with no cloud
+  credentials at all now works, which needed `Session` to gain a fourth hook
+  (`set_live_published_callback`) so a LAN-only encoder's `live.json` reaches
+  `LanObjectServer` too: without it, a LAN-only satellite following the room
+  (rather than a pinned past event) had no way to discover which event is
+  live, since none of the other three hooks cover that object.
+
+  `NullTransport` (`src/core/null_transport.h`) is what "cloud delivery
+  disabled" actually is: handed to `Session` in place of `S3Transport`, every
+  PUT reports instant success, so the entire spool → retry-uploader →
+  manifest pipeline runs completely unmodified — segments confirm
+  immediately, the LAN hooks fire on schedule — and `Session` never learns
+  cloud is off. The encoder dock's checkbox for it only appears once LAN
+  delivery is turned on, and both `BroadcastController::go_live()` and
+  `multisite_output.cpp`'s own `out_start()` independently refuse to go live
+  with both cloud and LAN off (nothing would be delivered anywhere).
+
+  The decoder dock's storage-link line now says which path the most recent
+  fetch actually took ("via LAN" / "via cloud") once a LAN host is
+  configured — the "Visibility" item §8.7 listed as not built.
+
+  All four new classes are proven over real loopback sockets or in-memory
+  mocks (`tests/test_lan_transport.cpp`, `tests/test_fallback_transport.cpp`,
+  `tests/test_null_transport.cpp`, plus new cases in `test_session.cpp` and
+  `test_lan_object_server.cpp`) — 41 test binaries, all green.
+
 - **End Broadcast could hang OBS's main thread indefinitely, with no crash
   report to show for it.** Found while live-testing the LAN wiring below,
   once Go-Live and End were actually exercised back to back rather than in
@@ -164,8 +211,12 @@ which is point 2 above.
   the deadline passes is left in the spool exactly as a crash would leave
   it — picked up and retried on the next resume (§5.1) — logged rather than
   silently dropped. Re-verified live: two full Go-Live → upload → LAN-curl →
-  End Broadcast cycles, both draining cleanly inside the 30s default
-  deadline with OBS staying alive throughout.
+  End Broadcast cycles, both draining cleanly inside the deadline with OBS
+  staying alive throughout. The default was also lowered from 30s to 8s
+  while in this code: a healthy link uploads a segment in low single digits
+  of seconds (per the encoder's own logs), so 30s of a frozen UI thread
+  waiting on a stuck one bought little beyond making a bounded wait feel
+  like a hang.
 
 - **LAN / direct delivery, encoder half only — the decoder half is not built
   yet.** Per `PROJECT-SCOPE.md` §8.7 (Phase 14): a satellite on the same

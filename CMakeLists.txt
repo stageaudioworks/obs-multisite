@@ -245,6 +245,18 @@ add_executable(test_lan_object_server tests/test_lan_object_server.cpp)
 target_link_libraries(test_lan_object_server PRIVATE multisite_core)
 add_test(NAME lan_object_server COMMAND test_lan_object_server)
 
+# The decoder-side "prefer LAN, fall back to cloud" composite (§8.7) and the
+# encoder-side "cloud delivery disabled" transport — both plain Transport
+# implementations with no network dependency, so they're tested with simple
+# in-memory mocks rather than a real socket.
+add_executable(test_fallback_transport tests/test_fallback_transport.cpp)
+target_link_libraries(test_fallback_transport PRIVATE multisite_core)
+add_test(NAME fallback_transport COMMAND test_fallback_transport)
+
+add_executable(test_null_transport tests/test_null_transport.cpp)
+target_link_libraries(test_null_transport PRIVATE multisite_core)
+add_test(NAME null_transport COMMAND test_null_transport)
+
 # The one list of command names (§8.3). Portable and header-only: the plugin's
 # HTTP routes and its obs-websocket vendor requests are both built from it, so
 # this is what a rename has to get past before it can orphan somebody's button.
@@ -254,11 +266,20 @@ add_test(NAME control_api COMMAND test_control_api)
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)
 if(CURL_FOUND)
-    add_library(multisite_s3 STATIC src/core/s3_transport.cpp)
+    add_library(multisite_s3 STATIC
+        src/core/s3_transport.cpp
+        # The decoder's LAN client (§8.7) — grouped with S3Transport rather
+        # than multisite_core because it needs libcurl too, and multisite_core
+        # has to build with no network dependency at all.
+        src/core/lan_transport.cpp)
     target_include_directories(multisite_s3 PUBLIC src src/core)
     target_link_libraries(multisite_s3 PUBLIC multisite_core CURL::libcurl)
     set_target_properties(multisite_s3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
     message(STATUS "libcurl found — building S3 transport")
+
+    add_executable(test_lan_transport tests/test_lan_transport.cpp)
+    target_link_libraries(test_lan_transport PRIVATE multisite_s3)
+    add_test(NAME lan_transport COMMAND test_lan_transport)
 
     # Endpoint/bucket values are pasted by operators, so the URL builder has to
     # tolerate schemes, trailing slashes and whitespace.
