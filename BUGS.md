@@ -141,6 +141,33 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **Resuming an interrupted event now asks, instead of always deciding
+  silently.** Go Live used to call `Session::check_resumable()` and, if it
+  found an unfinished event on disk, resume it unconditionally — no prompt,
+  every time, whether the crash was thirty seconds old or three weeks old.
+  Right default for the first case, wrong for the second: nothing on screen
+  would have said today's broadcast had silently continued last month's
+  leftover event, and choosing "start new" (had it existed) would have
+  deleted whatever the old event hadn't finished uploading, with no warning.
+
+  Built per the design in `PROJECT-SCOPE.md` §5.1: `SpoolState` now tracks
+  `last_activity_ms`, and `SessionConfig::resume_stale_after_ms` (default 30
+  minutes) draws the line — the same shape as the decoder's own
+  `stale_after_ms`. Below it, nothing changes: silent auto-resume, no click,
+  same as always, except the dock now shows a persistent *"Resumed event
+  from HH:MM, N segments already confirmed"* line with an *"End this and
+  start fresh"* escape hatch, rather than nothing at all. Above it, Go Live
+  shows a dialog instead of guessing, naming by number what "start new" would
+  abandon. A new free function, `peek_resumable()`, answers the staleness
+  question from the spool directory alone — no `Session`, no `Transport` —
+  because the dock has to decide before Go Live creates anything, and a
+  deferred-start encoder (VideoToolbox and friends) may not construct its
+  `Session` until well after the click. Core logic covered by
+  `test_reliability.cpp`, `test_session.cpp` (staleness, the resumed-status
+  fields, `peek_resumable()` — 36 tests total pass); the dock's dialog and
+  status line are Qt/OBS-layer and unverified locally for the usual reason —
+  no libobs/Qt6 SDK on this machine.
+
 - **Three tracked bugs closed in one pass: the encoder's shutdown hang, the
   Windows install path, and the orphaned decoder cache directory.**
 

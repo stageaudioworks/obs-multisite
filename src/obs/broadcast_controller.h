@@ -12,6 +12,8 @@
 //
 #include <obs.h>
 
+#include "../core/spool_queue.h"   // ResumeInfo
+
 #include <memory>
 #include <mutex>
 #include <string>
@@ -90,6 +92,13 @@ struct BroadcastStatus {
     int         disk_health = 0;
     bool        disk_known = false;
     unsigned long long disk_free_bytes = 0;
+    // Set for the life of the broadcast when it began by resuming an
+    // interrupted event rather than starting fresh — empty means this run
+    // started with start_new(). The dock shows this persistently, not just
+    // once, so "what actually happened" stays visible (PROJECT-SCOPE.md §5.1).
+    std::string resumed_event_id;
+    long long   resumed_event_started_ms = 0;   // 0 if unknown
+    unsigned long long resumed_already_confirmed = 0;
 };
 
 // A video encoder OBS actually has on this machine.
@@ -119,8 +128,20 @@ public:
     // Creates the output plus a video encoder and one audio encoder per
     // requested track, then starts it. Returns false and fills `error` on
     // failure — the dock shows that rather than the operator hunting the log.
-    bool go_live(std::string& error);
+    // `force_new_event` mirrors S_FORCE_NEW in multisite_output.cpp: set it
+    // when the operator has explicitly chosen to abandon a resumable event
+    // rather than continue it (see check_resumable_before_go_live() and
+    // PROJECT-SCOPE.md §5.1). Left false, an interrupted event resumes as it
+    // always has.
+    bool go_live(std::string& error, bool force_new_event = false);
     void end_broadcast();
+
+    // Whether there is an interrupted event to resume, checked from disk
+    // alone — no output, no Session, no network — so the dock can decide
+    // whether to ask the operator BEFORE Go Live creates anything. A
+    // deferred-start encoder may not construct its Session until well after
+    // the operator has already clicked the button, which is too late to ask.
+    multisite::ResumeInfo check_resumable_before_go_live() const;
 
     bool is_live() const;
     BroadcastStatus status() const;

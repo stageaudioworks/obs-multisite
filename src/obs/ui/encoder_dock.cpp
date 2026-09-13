@@ -112,6 +112,21 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_error->setStyleSheet("color: #e5484d;");
     m_error->hide();
     grid->addWidget(m_error, 5, 0, 1, 4);
+
+    // Shown for as long as the live broadcast is actually a resumed one —
+    // not just logged once and forgotten — so an operator can always see
+    // what happened and undo it. See PROJECT-SCOPE.md §5.1.
+    m_resumedNote = new QLabel(QString(), statusBox);
+    m_resumedNote->setWordWrap(true);
+    m_resumedNote->setStyleSheet("color: palette(text); opacity: 0.85;");
+    m_resumedNote->hide();
+    grid->addWidget(m_resumedNote, 6, 0, 1, 3);
+    m_endAndFresh = new QPushButton(tr_("Dock.EndAndStartFresh"), statusBox);
+    m_endAndFresh->hide();
+    grid->addWidget(m_endAndFresh, 6, 3);
+    connect(m_endAndFresh, &QPushButton::clicked,
+            this, &EncoderDock::onEndAndStartFresh);
+
     root->addWidget(statusBox);
 
     // ── Event name / Go live ─────────────────────────────────────────────────
@@ -504,8 +519,44 @@ void EncoderDock::ensureEventName() {
 
 void EncoderDock::onGoLive() {
     onSaveSettings();
+
+    // Checked from disk alone, before anything else exists — a deferred-start
+    // encoder may not construct its Session until well after this click, which
+    // would be too late to ask. See PROJECT-SCOPE.md §5.1: a crash minutes ago
+    // just resumes, as it always has; anything older is asked about, because
+    // silently continuing a leftover from last week is worse than a click.
+    bool forceNew = false;
+    auto resume = BroadcastController::instance().check_resumable_before_go_live();
+    if (resume.resumable && resume.stale) {
+        QString when = resume.last_activity_ms > 0
+            ? QDateTime::fromMSecsSinceEpoch(resume.last_activity_ms)
+                  .toString("ddd d MMM yyyy, HH:mm")
+            : tr_("Dock.ResumeUnknownTime");
+        QString text = tr_("Dock.ResumeStaleBody").arg(when);
+        if (resume.pending_count > 0)
+            text += QString(" ") + tr_("Dock.ResumeAbandonsPending")
+                        .arg((qulonglong)resume.pending_count);
+
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle(tr_("Dock.ResumeStaleTitle"));
+        box.setText(text);
+        QPushButton* resumeBtn = box.addButton(tr_("Dock.ResumeEvent"),
+                                               QMessageBox::AcceptRole);
+        QPushButton* newBtn = box.addButton(tr_("Dock.StartNewEvent"),
+                                            QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(resumeBtn);
+        box.exec();
+        if (box.clickedButton() == newBtn) {
+            forceNew = true;
+        } else if (box.clickedButton() != resumeBtn) {
+            return;   // Cancel — do not go live at all
+        }
+    }
+
     std::string err;
-    if (!BroadcastController::instance().go_live(err)) {
+    if (!BroadcastController::instance().go_live(err, forceNew)) {
         // Show the reason here rather than making the operator find the log.
         QMessageBox::warning(this, tr_("Dock.GoLiveFailed"),
                              QString::fromStdString(err));
@@ -517,6 +568,23 @@ void EncoderDock::onGoLive() {
 void EncoderDock::onEnd() {
     BroadcastController::instance().end_broadcast();
     setLiveState(false);
+}
+
+void EncoderDock::onEndAndStartFresh() {
+    if (QMessageBox::question(this, tr_("Dock.EndAndStartFresh"),
+                              tr_("Dock.EndAndStartFreshConfirm"),
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes)
+        return;
+    BroadcastController::instance().end_broadcast();
+    setLiveState(false);
+    std::string err;
+    if (!BroadcastController::instance().go_live(err, /*force_new_event=*/true)) {
+        QMessageBox::warning(this, tr_("Dock.GoLiveFailed"),
+                             QString::fromStdString(err));
+        return;
+    }
+    setLiveState(true);
 }
 
 void EncoderDock::onManageStorage() {
@@ -645,6 +713,8 @@ void EncoderDock::refresh() {
                 QString::fromStdString(st.storage_host),
                 st.upload_bytes_per_s, st.upload_samples));
         m_error->hide();
+        m_resumedNote->hide();
+        m_endAndFresh->hide();
         return;
     }
 
@@ -679,6 +749,24 @@ void EncoderDock::refresh() {
         m_error->show();
     } else {
         m_error->hide();
+    }
+
+    // Persistent for as long as it's true, not just logged once — an
+    // operator should always be able to see that this broadcast continues an
+    // earlier one, and undo that in one click. See PROJECT-SCOPE.md §5.1.
+    if (!st.resumed_event_id.empty()) {
+        QString when = st.resumed_event_started_ms > 0
+            ? QDateTime::fromMSecsSinceEpoch(st.resumed_event_started_ms)
+                  .toString("ddd d MMM yyyy, HH:mm")
+            : tr_("Dock.ResumeUnknownTime");
+        m_resumedNote->setText(
+            tr_("Dock.ResumedFrom").arg(when)
+                .arg((qulonglong)st.resumed_already_confirmed));
+        m_resumedNote->show();
+        m_endAndFresh->show();
+    } else {
+        m_resumedNote->hide();
+        m_endAndFresh->hide();
     }
 }
 

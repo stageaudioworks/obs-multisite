@@ -44,6 +44,15 @@ struct SessionConfig {
     // operation (the spool should sit near-empty) while still bounding a
     // multi-hour outage on a small drive.
     uint64_t    max_spool_bytes = 4ull * 1024 * 1024 * 1024;
+    // How long a resumable event may sit with no activity before it is too
+    // old to resume silently. Below this, a crash-and-restart just continues
+    // the same recording, as it always has. At or above it, resuming would
+    // risk silently swallowing a genuinely new broadcast into a leftover from
+    // last week — so the caller (the OBS layer) is expected to ask the
+    // operator instead of calling resume() itself. Same shape as the
+    // decoder's own stale_after_ms, which makes the same kind of judgment
+    // about a quiet room. See PROJECT-SCOPE.md §5.1.
+    int64_t     resume_stale_after_ms = 30 * 60 * 1000; // 30 minutes
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
@@ -70,6 +79,18 @@ struct SessionConfig {
 std::string make_event_id(int64_t now_ms = 0);
 
 int64_t now_ms();
+
+// Whether the spool at `spool_dir` has an interrupted event, and whether it's
+// stale — without constructing a Session or a Transport. For a caller that
+// has to decide, before doing anything else, whether to ask the operator
+// (see PROJECT-SCOPE.md §5.1): the OBS dock calls this synchronously, on the
+// UI thread, before Go Live even creates the output — Session itself may not
+// be constructed until well after that, once a deferred-start encoder has
+// said what it encoded. Applies the same staleness policy
+// Session::check_resumable() does; the two share one implementation so they
+// can't drift apart.
+ResumeInfo peek_resumable(const std::string& spool_dir,
+                          int64_t resume_stale_after_ms);
 
 class Session {
 public:
@@ -121,6 +142,20 @@ public:
         // for disk space (see SessionConfig::max_spool_bytes). Zero in normal
         // operation; the encoder dock surfaces this as an operator warning.
         uint64_t    dropped_for_disk = 0;
+
+        // Set once, the moment this event was resumed rather than started
+        // fresh — empty event_id means this run started with start_new().
+        // Kept for the life of the Session (not just logged once) so the dock
+        // can show a persistent line for as long as it's actually true. See
+        // PROJECT-SCOPE.md §5.1.
+        std::string resumed_event_id;
+        // Wall-clock start of the ORIGINAL event, read back from event.json —
+        // 0 if that read failed, in which case the dock says "an interrupted
+        // event" rather than naming a time it does not actually know.
+        int64_t     resumed_event_started_ms = 0;
+        // Segments already confirmed durable before this run resumed —
+        // i.e. work that would be abandoned by choosing "start new" instead.
+        uint64_t    resumed_already_confirmed = 0;
     };
     Status status() const;
 
@@ -150,6 +185,12 @@ private:
     Manifest    m_manifest;
     MarkerList  m_markers;
     uint64_t    m_dropped_total = 0;   // guarded by m_mtx
+    // Set once in resume(), read by status(). Empty resumed_event_id means
+    // this run started fresh. Guarded by m_mtx like the rest of Status's
+    // sources.
+    std::string m_resumed_event_id;
+    int64_t     m_resumed_event_started_ms = 0;
+    uint64_t    m_resumed_already_confirmed = 0;
     std::string m_last_error;
     ProgressCallback m_on_progress;
     mutable std::mutex m_mtx;

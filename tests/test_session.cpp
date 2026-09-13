@@ -80,6 +80,19 @@ public:
         return {true, 200, true, ""};
     }
 
+    GetResult get(const std::string& key) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        GetResult r;
+        if (fail_all) { r.http_status = 403; r.error = "AccessDenied (simulated)"; return r; }
+        auto it = objects.find(key);
+        if (it == objects.end()) {
+            r.http_status = 404; r.error = "NoSuchKey"; r.retryable = false;
+            return r;
+        }
+        r.success = true; r.http_status = 200; r.body = it->second;
+        return r;
+    }
+
     int64_t object_size(const std::string& k) override {
         std::lock_guard<std::mutex> lk(mtx);
         auto it = objects.find(k);
@@ -408,6 +421,115 @@ int main() {
               "the manifest floor advanced past what was dropped once a publish "
               "happened, so a decoder does not wait forever on it");
         ses.end();
+    }
+
+    std::printf("== 11. A recent crash resumes silently under a generous threshold ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s11").string();
+        cfg.resume_stale_after_ms = 100000000; // effectively "never" for this test
+        {
+            Session ses(cfg, store);
+            ses.start_new(blob(0), video, tracks);
+            ses.publish_segment(blob(1), 6.0, 0.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        } // crash — no end()
+
+        Session ses2(cfg, store);
+        auto info = ses2.check_resumable();
+        CHECK(info.resumable, "the interrupted event is detected");
+        CHECK(!info.stale,
+              "a crash seconds ago is not stale under a generous threshold — "
+              "the ordinary case stays silent and automatic");
+    }
+
+    std::printf("== 12. An old leftover is reported stale, not silently swallowed ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s12").string();
+        cfg.resume_stale_after_ms = 20; // tiny: anything but instantaneous trips it
+        {
+            Session ses(cfg, store);
+            ses.start_new(blob(0), video, tracks);
+            ses.publish_segment(blob(1), 6.0, 0.0);
+        } // crash — no end()
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+
+        Session ses2(cfg, store);
+        auto info = ses2.check_resumable();
+        CHECK(info.resumable, "still resumable — staleness doesn't erase the event");
+        CHECK(info.stale,
+              "but flagged stale, so the caller (the OBS layer) knows to ask "
+              "the operator rather than resume it on its own");
+    }
+
+    std::printf("== 13. Resuming records what was resumed, for the dock's status line ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s13").string();
+        cfg.event_name = "Morning event";
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        std::string first_event;
+        {
+            Session ses(cfg, store);
+            ses.start_new(blob(0), video, tracks);
+            first_event = ses.event_id();
+            for (uint64_t i = 0; i < 4; ++i)
+                ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+            for (int i = 0; i < 200 && ses.status().pending > 0; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            CHECK(ses.status().pending == 0, "all 4 confirmed before the crash");
+
+            // A 5th segment, left behind unconfirmed by the crash — exactly
+            // what "start new" would abandon.
+            store.fail_budget = 100000;
+            ses.publish_segment(blob(5), 6.0, 24.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        } // crash: 4 confirmed, 1 still pending
+
+        store.fail_budget = 0;
+        Session ses2(cfg, store);
+        CHECK(ses2.resume(blob(0), video, tracks), "resume succeeds");
+        auto st = ses2.status();
+        CHECK(st.resumed_event_id == first_event,
+              "status names the exact event that was resumed");
+        CHECK(st.resumed_event_started_ms > 0,
+              "the original start time was read back from event.json");
+        CHECK(st.resumed_already_confirmed == 4,
+              "already-confirmed count is what 'start new' would abandon");
+        ses2.end();
+    }
+
+    std::printf("== 14. peek_resumable() answers without a Session or Transport ==\n");
+    {
+        // The dock needs to know this BEFORE Go Live creates an output at
+        // all — a deferred-start encoder may not construct its Session until
+        // well after the operator has already clicked the button. This is
+        // the standalone check it uses instead.
+        std::string dir = (base / "s14").string();
+        auto empty = peek_resumable(dir, 30 * 60 * 1000);
+        CHECK(!empty.resumable, "an empty spool directory has nothing to resume");
+
+        {
+            MemStore store;
+            SessionConfig cfg; cfg.spool_dir = dir;
+            Session ses(cfg, store);
+            ses.start_new(blob(0), video, tracks);
+            ses.publish_segment(blob(1), 6.0, 0.0);
+        } // crash — no end()
+
+        auto recent = peek_resumable(dir, 30 * 60 * 1000);
+        CHECK(recent.resumable, "the interrupted event is found from disk alone");
+        CHECK(!recent.stale, "and correctly not stale under a generous threshold");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        auto as_stale = peek_resumable(dir, 1);
+        CHECK(as_stale.resumable && as_stale.stale,
+              "the SAME event reads as stale under a tight threshold — "
+              "staleness is the caller's policy, not baked into the spool");
     }
 
     fs::remove_all(base);

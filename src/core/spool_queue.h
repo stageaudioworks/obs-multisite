@@ -55,6 +55,12 @@ struct SpoolState {
     uint64_t    last_confirmed = 0;   // highest seq confirmed durable in bucket
     bool        ended          = false;
     bool        valid          = false; // false if no prior state on disk
+    // Wall-clock time of the last enqueue() or confirm() — i.e. the last sign
+    // of life this event showed. Set on every write, not just the first, so
+    // it answers "how long has this been quiet", not "how old is it". See
+    // PROJECT-SCOPE.md §5.1: this is what tells a genuine crash-and-restart,
+    // minutes old, apart from a stale leftover event nobody cleaned up.
+    int64_t     last_activity_ms = 0;
 };
 
 // Result of opening a spool dir: tells the caller whether a prior, unfinished
@@ -65,6 +71,13 @@ struct ResumeInfo {
     uint64_t    last_confirmed = 0;
     uint64_t    last_enqueued  = 0;
     size_t      pending_count  = 0;   // segments on disk not yet confirmed
+    // Raw timestamp only — SpoolQueue has no opinion on what counts as
+    // stale, since that threshold is a Session-level policy
+    // (SessionConfig::resume_stale_after_ms). See Session::check_resumable().
+    int64_t     last_activity_ms = 0;
+    // Always false from SpoolQueue::inspect() itself. Session::check_resumable()
+    // sets this before returning, once it has a threshold to compare against.
+    bool        stale = false;
 };
 
 // A segment evicted from the spool before it was ever uploaded, because the

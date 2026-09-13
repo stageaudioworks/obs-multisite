@@ -87,7 +87,26 @@ bool Session::put_json(const std::string& key, const std::string& body) {
     return put_bytes(key, b, "application/json");
 }
 
-ResumeInfo Session::check_resumable() const { return m_spool->inspect(); }
+// Shared by Session::check_resumable() and the standalone peek_resumable()
+// below, so the two can never compute staleness differently.
+static void apply_staleness(ResumeInfo& info, int64_t resume_stale_after_ms) {
+    if (info.resumable)
+        info.stale = (now_ms() - info.last_activity_ms) > resume_stale_after_ms;
+}
+
+ResumeInfo Session::check_resumable() const {
+    ResumeInfo info = m_spool->inspect();
+    apply_staleness(info, m_cfg.resume_stale_after_ms);
+    return info;
+}
+
+ResumeInfo peek_resumable(const std::string& spool_dir,
+                          int64_t resume_stale_after_ms) {
+    SpoolQueue q(spool_dir);
+    ResumeInfo info = q.inspect();
+    apply_staleness(info, resume_stale_after_ms);
+    return info;
+}
 
 bool Session::begin_common(const std::vector<uint8_t>& init,
                            const VideoInfo& video,
@@ -161,18 +180,39 @@ bool Session::resume(const std::vector<uint8_t>& init,
     if (!info.resumable) return false;
     m_event_id = info.event_id;
     m_next_seq = info.last_enqueued + 1;   // continue the sequence
-    // Keep the event's original name unless the operator supplied a new one.
-    // Reading it back costs one GET, and only happens on the rare resume path.
-    if (m_cfg.event_name.empty()) {
+
+    // Read the original event.json back for two things the spool alone
+    // doesn't record: the operator's original name (kept unless they typed a
+    // new one) and the wall-clock time the event actually started, which is
+    // what the dock's "Resumed event from ..." line names (see
+    // PROJECT-SCOPE.md §5.1). event_prefix() already uses m_event_id, set
+    // above, so this reads the very event being resumed. Best-effort: a
+    // failed read still resumes the event, it just can't name a time for it.
+    int64_t started_at_ms = 0;
+    {
         auto r = m_tx.get(event_prefix() + "event.json");
         if (r.success) {
             try {
                 EventInfo old = EventInfo::from_json(
                     std::string(r.body.begin(), r.body.end()));
-                if (!old.name.empty()) m_cfg.event_name = old.name;
+                if (m_cfg.event_name.empty() && !old.name.empty())
+                    m_cfg.event_name = old.name;
+                started_at_ms = old.started_at_ms;
             } catch (...) {}
         }
     }
+
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_resumed_event_id          = m_event_id;
+        m_resumed_event_started_ms  = started_at_ms;
+        // Segments already confirmed before this run — what "start new"
+        // instead would abandon. Sequences are zero-based, so this is exact
+        // in the common case (no evictions yet); it is a display figure, not
+        // a protocol guarantee.
+        m_resumed_already_confirmed = info.last_confirmed + 1;
+    }
+
     m_spool->resume_event();
     return begin_common(init, video, tracks);
 }
@@ -300,6 +340,9 @@ Session::Status Session::status() const {
     s.verify_note     = m_uploader->last_verify_note();
     s.health          = m_uploader->health();
     s.dropped_for_disk = m_dropped_total;
+    s.resumed_event_id           = m_resumed_event_id;
+    s.resumed_event_started_ms   = m_resumed_event_started_ms;
+    s.resumed_already_confirmed  = m_resumed_already_confirmed;
     return s;
 }
 

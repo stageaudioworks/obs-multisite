@@ -58,6 +58,11 @@ static constexpr char S_CHANLBL[]   = "channel_labels";
 // distinguishes them.
 static constexpr char S_LAYOUT[]    = "tile_layout";
 static constexpr char S_MARKERS[]   = "marker_labels";
+// Set only by the dock, for one Go Live, never by the settings dialog (there
+// is deliberately no obs_properties_add_* for it, so it never appears as a
+// persisted setting). True means the operator explicitly chose "start new"
+// over a resumable event — see PROJECT-SCOPE.md §5.1.
+static constexpr char S_FORCE_NEW[] = "force_new_event";
 
 // A packet held while the encoder has not yet told us its codec config.
 //
@@ -132,6 +137,9 @@ struct OutputCtx : EncoderControls {
     S3Config      pending_s3;
     SessionConfig pending_sc;
     std::string   pending_labels, pending_chan_labels, pending_layout;
+    // The operator's explicit choice from the dock, for this Go Live only —
+    // never persisted (see S_FORCE_NEW).
+    bool          pending_force_new_event = false;
 
     std::atomic<bool>       deferred{false};     // waiting on the first keyframe
     std::atomic<bool>       complete_requested{false};
@@ -364,6 +372,9 @@ EncoderStats OutputCtx::stats() const {
     es.link_health = st.health == LinkHealth::Healthy  ? 0
                    : st.health == LinkHealth::Degraded ? 1 : 2;
     es.last_error = session->last_error();
+    es.resumed_event_id          = st.resumed_event_id;
+    es.resumed_event_started_ms  = (long long)st.resumed_event_started_ms;
+    es.resumed_already_confirmed = st.resumed_already_confirmed;
     if (transport) {
         es.colo               = transport->last_colo();
         es.storage_host       = transport->host();
@@ -596,14 +607,21 @@ static bool complete_start(OutputCtx* ctx) {
     mlog_info("storage: %s", ctx->transport->base_url().c_str());
     ctx->session   = std::make_unique<Session>(ctx->pending_sc, *ctx->transport);
 
-    // Offer resume if a previous event was interrupted.
+    // Resume an interrupted event unless the dock explicitly asked for a new
+    // one. The dock is what decides THAT — checking staleness and asking the
+    // operator when it matters (PROJECT-SCOPE.md §5.1) — before Go Live ever
+    // gets this far; this only has to obey the one flag it was given.
     auto resume = ctx->session->check_resumable();
     bool ok;
-    if (resume.resumable) {
+    if (resume.resumable && !ctx->pending_force_new_event) {
         mlog_info("resuming interrupted event %s (%zu segments pending)",
                   resume.event_id.c_str(), resume.pending_count);
         ok = ctx->session->resume(ctx->muxer->init_segment(), vinfo, ainfo);
     } else {
+        if (resume.resumable)
+            mlog_info("operator chose to start a new event over the "
+                       "interrupted one (%s, %zu segments were pending)",
+                       resume.event_id.c_str(), resume.pending_count);
         ok = ctx->session->start_new(ctx->muxer->init_segment(), vinfo, ainfo);
     }
     if (!ok) {
@@ -710,6 +728,7 @@ static bool out_start(void* data) {
     // Read before the release below, not after it. This was being read from
     // `s` further down, past the point where our reference had been given up.
     const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
+    const bool force_new_event = obs_data_get_bool(s, S_FORCE_NEW);
     obs_data_release(s);
 
     if (s3.bucket.empty() ||
@@ -731,6 +750,7 @@ static bool out_start(void* data) {
     ctx->pending_labels      = labels;
     ctx->pending_chan_labels = chan_labels;
     ctx->pending_layout      = layout_str;
+    ctx->pending_force_new_event = force_new_event;
 
     // The writer thread first: in the deferred case it is what finishes the
     // start, so it has to be running before any packet can ask it to.

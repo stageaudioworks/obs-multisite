@@ -7,6 +7,7 @@
 #include "../core/disk_health.h"
 #include "../core/model.h"
 #include "../core/s3_transport.h"
+#include "../core/session.h"   // peek_resumable(), SessionConfig defaults
 
 #include <util/platform.h>
 
@@ -242,7 +243,7 @@ void BroadcastController::set_settings(const BroadcastSettings& s) {
 bool BroadcastController::is_live() const { return m_output != nullptr; }
 
 // ── Going live ───────────────────────────────────────────────────────────────
-bool BroadcastController::go_live(std::string& error) {
+bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     if (m_output) { error = "already broadcasting"; return false; }
 
     if (m_cfg.bucket.empty()) {
@@ -277,6 +278,9 @@ bool BroadcastController::go_live(std::string& error) {
     // Read once, at Go Live, and written into event.json — which is why
     // changing it mid-broadcast does nothing until the next event.
     obs_data_set_string(s, "tile_layout", m_cfg.tile_layout.c_str());
+    // Transient — never read back from settings, never persisted. The
+    // operator's explicit choice for THIS Go Live only (PROJECT-SCOPE.md §5.1).
+    obs_data_set_bool(s, "force_new_event", force_new_event);
 
     m_output = obs_output_create("multisite_output", "multisite_out", s, nullptr);
     obs_data_release(s);
@@ -409,6 +413,14 @@ static std::string spool_dir_path() {
     return dir;
 }
 
+multisite::ResumeInfo BroadcastController::check_resumable_before_go_live() const {
+    // The default straight from SessionConfig, rather than a second literal
+    // that could drift from it — there is no operator-facing setting for
+    // this yet (see PROJECT-SCOPE.md §5.1's open question).
+    return multisite::peek_resumable(spool_dir_path(),
+                                      multisite::SessionConfig{}.resume_stale_after_ms);
+}
+
 BroadcastStatus BroadcastController::status() const {
     BroadcastStatus st;
     st.live = m_output != nullptr;
@@ -451,6 +463,9 @@ BroadcastStatus BroadcastController::status() const {
             st.storage_host       = es.storage_host;
             st.upload_bytes_per_s = es.upload_bytes_per_s;
             st.upload_samples     = es.upload_samples;
+            st.resumed_event_id           = es.resumed_event_id;
+            st.resumed_event_started_ms   = es.resumed_event_started_ms;
+            st.resumed_already_confirmed  = es.resumed_already_confirmed;
         }
         st.link_known = true;   // the uploader always reports once live
         return st;

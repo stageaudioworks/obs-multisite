@@ -30,6 +30,10 @@ private slots:
     void onOpenSettings();
     void onGoLive();
     void onEnd();
+    // The escape hatch on a resumed event's persistent status line: ends the
+    // current (resumed) broadcast and immediately goes live into a brand new
+    // event. See PROJECT-SCOPE.md §5.1.
+    void onEndAndStartFresh();
     void onSaveSettings();
     void onMarker(int index);
     void onManageStorage();
@@ -94,6 +98,11 @@ private:
     QLabel* m_link = nullptr;
     QLabel* m_disk = nullptr;
     QLabel* m_error = nullptr;
+    // Persistent — not auto-dismissing — line shown for as long as the live
+    // broadcast is actually a resumed one, plus its escape hatch. Both hidden
+    // otherwise. See PROJECT-SCOPE.md §5.1.
+    QLabel*      m_resumedNote = nullptr;
+    QPushButton* m_endAndFresh = nullptr;
     QTimer* m_timer = nullptr;
 
     // Settings live in a modal dialog rather than in the dock: they are

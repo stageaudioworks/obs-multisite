@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "spool_queue.h"
 #include "checksum.h"
+#include "session.h"   // for now_ms() — see decoder_session.cpp for the same use
 #include "../vendor/nlohmann/json.hpp"
 
 #include <filesystem>
@@ -66,6 +67,7 @@ void SpoolQueue::load_state() {
         m_state.last_enqueued  = j.value("last_enqueued", (uint64_t)0);
         m_state.last_confirmed = j.value("last_confirmed", (uint64_t)0);
         m_state.ended          = j.value("ended", false);
+        m_state.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
         m_state.valid          = true;
     } catch (...) {
         m_state = SpoolState{}; // corrupt state → treat as none
@@ -79,6 +81,7 @@ void SpoolQueue::save_state() {
     j["last_enqueued"]  = m_state.last_enqueued;
     j["last_confirmed"] = m_state.last_confirmed;
     j["ended"]          = m_state.ended;
+    j["last_activity_ms"] = m_state.last_activity_ms;
     std::string s = j.dump();
     atomic_write(state_path(), s.data(), s.size());
 }
@@ -109,6 +112,7 @@ ResumeInfo SpoolQueue::inspect() const {
     r.last_confirmed = m_state.last_confirmed;
     r.last_enqueued  = m_state.last_enqueued;
     r.pending_count  = pend.size();
+    r.last_activity_ms = m_state.last_activity_ms;
     return r;
 }
 
@@ -126,6 +130,7 @@ void SpoolQueue::begin_event(const std::string& event_id, uint64_t first_seq) {
     m_state.last_confirmed= first_seq > 0 ? first_seq - 1 : 0;
     m_state.ended         = false;
     m_state.valid         = true;
+    m_state.last_activity_ms = now_ms();
     m_bytes_pending       = 0;
     save_state();
 }
@@ -134,6 +139,7 @@ void SpoolQueue::resume_event() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_state.valid) throw std::runtime_error("spool: nothing to resume");
     m_state.ended = false;
+    m_state.last_activity_ms = now_ms();
     save_state();
 }
 
@@ -160,6 +166,7 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
         atomic_write(meta_path(seg.seq), ms.data(), ms.size());
 
         if (seg.seq > m_state.last_enqueued) m_state.last_enqueued = seg.seq;
+        m_state.last_activity_ms = now_ms();
         m_bytes_pending += seg.data.size();
 
         // Over the disk cap: drop the OLDEST unconfirmed segments (never the
@@ -240,6 +247,7 @@ void SpoolQueue::confirm(uint64_t seq) {
     fs::remove(seg_path(seq), ec);
     fs::remove(meta_path(seq), ec);
     if (seq > m_state.last_confirmed) m_state.last_confirmed = seq;
+    m_state.last_activity_ms = now_ms();
     save_state();
 }
 

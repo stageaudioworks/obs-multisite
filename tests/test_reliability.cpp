@@ -12,6 +12,7 @@
 #include "../src/core/retry_uploader.h"
 #include "../src/core/model.h"
 #include "../src/core/checksum.h"
+#include "../src/core/session.h"   // for now_ms()
 
 #include <atomic>
 #include <cassert>
@@ -230,6 +231,36 @@ int main() {
         CHECK(q.bytes_pending() == 4096, "bytes_pending reflects the write");
         q.confirm(1);
         CHECK(q.bytes_pending() == 0, "confirming frees the byte count, not just the file");
+    }
+
+    std::printf("== 9. last_activity_ms tracks real activity, and survives a crash ==\n");
+    {
+        std::string dir = (base / "spool9").string();
+        int64_t before = now_ms();
+        {
+            SpoolQueue q(dir);
+            q.begin_event("01EVENT", 1);
+
+            SpooledSegment seg; seg.seq = 1; seg.data = fake_segment(1); seg.key = "seg/1";
+            q.enqueue(std::move(seg));
+            int64_t after_enqueue = q.state().last_activity_ms;
+            CHECK(after_enqueue >= before, "enqueue() stamps last_activity_ms");
+
+            q.confirm(1);
+            int64_t after_confirm = q.state().last_activity_ms;
+            CHECK(after_confirm >= after_enqueue, "confirm() stamps it again");
+        } // <- crash: never marked ended
+
+        // "Restart": a brand-new instance must read the same timestamp back,
+        // not reset it to 0 — that timestamp is the ONLY signal that tells a
+        // genuine crash-and-restart apart from a stale leftover event (see
+        // PROJECT-SCOPE.md §5.1). Losing it on every restart would make
+        // every resumable event look infinitely stale.
+        SpoolQueue q2(dir);
+        auto info = q2.inspect();
+        CHECK(info.resumable, "unfinished event still offered for resume");
+        CHECK(info.last_activity_ms >= before,
+              "last_activity_ms survived the crash instead of resetting to 0");
     }
 
     fs::remove_all(base);

@@ -30,6 +30,11 @@ struct EncoderStats {
     std::string storage_host;
     double      upload_bytes_per_s = 0.0;
     unsigned long long upload_samples = 0;   // 0 = show no figure at all
+    // Set for the life of the broadcast when it began by resuming an
+    // interrupted event rather than starting fresh (PROJECT-SCOPE.md §5.1).
+    std::string resumed_event_id;
+    long long   resumed_event_started_ms = 0;
+    unsigned long long resumed_already_confirmed = 0;
 };
 
 struct EncoderControls {

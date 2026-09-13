@@ -375,8 +375,9 @@ is more use to an operator than an event that silently is not there.
 - **Checksums.** Each segment's hash is recorded in the manifest; decoders verify
   after download and re-fetch on mismatch.
 - **Resume-after-crash.** Event state (event_id, last sequence, queue) is
-  persisted. On restart the operator is prompted: *Resume previous event, or
-  start new?*
+  persisted, so a crashed or power-cycled encoder can continue the same event
+  rather than starting a new one with a gap in the middle. Who actually
+  decides that, and when it is safe to decide it silently, is §5.1.
 - **Decoder-side durability.** Downloads are cached locally and verified;
   missing or corrupt segments are re-requested. A gap causes a wait-and-retry,
   never a crash.
@@ -385,6 +386,95 @@ is more use to an operator than an event that silently is not there.
   polling a dead event forever.
 - **Sequence-driven sync.** All ordering and synchronization is by integer `seq`;
   campus wall clocks are never assumed to agree.
+
+---
+
+## 5.1 Resume-after-crash: who decides, and when?
+
+**Status: built.** What follows describes the mechanism actually implemented
+(`SpoolState::last_activity_ms`, `SessionConfig::resume_stale_after_ms`,
+`peek_resumable()`, `EncoderDock::onGoLive()`), kept in its original,
+before-the-fact form rather than rewritten as a changelog entry — the
+reasoning here is still the reasoning for why it works the way it does.
+
+Before this, Go Live called `Session::check_resumable()`, and if it found an
+unfinished event on disk it resumed it — **silently, unconditionally, every
+time** (`multisite_output.cpp`, `out_start`). There was no prompt. The
+comment above the call even said `// Offer resume`; it did not offer
+anything.
+
+Unconditional auto-resume is the right default for the case it was built for
+— a genuine crash, restarted within the same service, continuing the same
+recording without a gap. It was the wrong default for a case the old code
+could not tell apart from that one: an encoder left with an unfinished event
+from **last week**, because nobody happened to press End, silently
+swallowing today's broadcast into it. Nothing on screen would have said this
+happened; the operator would only have noticed from sequence numbers that
+made no sense, if they noticed at all.
+
+There was a second problem underneath it. If an operator could ever choose
+"start new" over a resumable event, `SpoolQueue::begin_event()` deletes every
+`.seg`/`.meta` file in the spool unconditionally — including segments that
+were captured but never confirmed uploaded. "Start new" is not a neutral
+choice between two equally-valid options; it is destructive to whatever the
+old event hadn't finished sending. Any design here has to say that plainly
+before it happens, not leave it implicit in a wipe on disk.
+
+**The mechanism: a staleness cutoff, not a permanent choice.**
+
+- `SpoolState` gains `last_activity_ms` — the wall-clock time of the last
+  `enqueue()` or `confirm()` — persisted in `state.json` alongside the fields
+  already there.
+- `SessionConfig` gains `resume_stale_after_ms` (default 30 minutes), the same
+  shape as the decoder's own `stale_after_ms` (10 minutes), which already
+  exists for exactly this kind of judgment: telling a genuinely quiet room
+  from a dead one.
+- `Session::check_resumable()`'s `ResumeInfo` reports whether the resumable
+  event is stale: `now_ms() - last_activity_ms > resume_stale_after_ms`. A
+  free function, `peek_resumable(spool_dir, threshold)`, answers the same
+  question from the spool directory alone — no `Session`, no `Transport` —
+  because the dock has to decide whether to ask *before* Go Live creates
+  anything, and a deferred-start encoder (VideoToolbox and the like) may not
+  construct its `Session` until well after that click.
+- **Not stale (the common case — a real crash, minutes old):** behaviour is
+  unchanged. Auto-resume, no click, nothing in the way of getting back on air.
+  What changes is that it stops being invisible: `Session::Status` carries
+  what happened (event id, when it started, how many segments are already
+  confirmed), and the dock shows a persistent — not auto-dismissing — line:
+  *"Resumed event from 10:42, 340 segment(s) already confirmed"*, with an
+  *"End this and start fresh"* button beside it. Seen, not assumed.
+- **Stale (hours or days old — the ambiguous case):** auto-resume is refused.
+  Go Live instead shows a dialog: *"An interrupted event from [date/time] was
+  found. Resume it, or start a new event?"* — and if pending segments would
+  be lost by choosing new, the dialog says so by name: *"Starting a new event
+  abandons N segment(s) that were never confirmed uploaded."*
+- The same "abandons N segments" warning covers both entry points into
+  "start new" — the stale Go-Live dialog and the "End this and start fresh"
+  button on an already-resumed event — rather than being written twice and
+  drifting apart. Mechanically, the operator's choice becomes one boolean
+  (`force_new_event`, threaded through `obs_output_create`'s settings blob
+  like every other Go-Live setting, but never persisted — it means nothing
+  outside the one Go Live it was set for); the encoder's own start-up logic
+  just obeys it, deciding nothing itself.
+
+**What this must never do:**
+
+- Never block Go Live with a dialog for the ordinary crash-and-restart case.
+  That is the case this feature exists to protect, and costing it a click
+  would be solving the rare problem by taxing the common one.
+- Never delete anything the operator wasn't told about first. A wipe that
+  happens because thirty minutes silently defaulted a choice is exactly the
+  kind of failure this write-up exists to rule out.
+- Never require the operator to remember what happened. The resumed state is
+  shown for as long as it's true, not just logged once and forgotten.
+
+**Open question, not yet decided:** whether 30 minutes is the right cutoff, or
+whether it should scale with the event's own `segment_duration_s` /
+`manifest_window` the way the decoder's staleness threshold does. Thirty
+minutes covers a reboot and a coffee break; it does not obviously cover a
+long intermission with the encoder deliberately left running idle. Pick a
+number, ship it, and let a real false-positive (or the lack of one) settle it
+rather than guessing further here.
 
 ---
 
@@ -1098,7 +1188,8 @@ than deleted.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
-  is format-agnostic and lands before the media format work.
+  is format-agnostic and lands before the media format work. Resume-after-crash
+  now also asks rather than deciding silently, when it matters — see §5.1.
 - **Phase 2 — Format, namespace & audio.** ✅ FFmpeg CMAF muxing (`init.mp4` +
   `.m4s`), codec-agnostic wrapper (H.264 and HEVC both tested end to end; AV1
   carried but less exercised), packed multi-channel production audio, the
