@@ -111,6 +111,12 @@ void RetryUploader::start() {
 
 void RetryUploader::stop() {
     if (!m_running.exchange(false)) return;
+    // Without this, joining a thread blocked inside a transport's put() (an
+    // up-to-30-second timeout, nothing else watching it) could hang shutdown
+    // for however long that one request had left — the same hazard the
+    // decoder had on teardown (see BUGS.md). The default no-op is fine for a
+    // transport that never blocks, such as the mocks the test suite uses.
+    m_transport.cancel_pending();
     if (m_thread.joinable()) m_thread.join();
 }
 

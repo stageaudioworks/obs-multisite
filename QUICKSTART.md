@@ -28,8 +28,8 @@ inbound ports at any site.
 Download from [Releases](https://github.com/stageaudioworks/obs-multisite/releases)
 and install on the main site and every campus.
 
-- **Windows** — copy `obs-plugins` and `data` into your OBS install directory
-  (usually `C:\Program Files\obs-studio\`), merging with what is there.
+- **Windows** — copy the `obs-multisite` folder from the zip into
+  `C:\ProgramData\obs-studio\plugins\`.
 - **macOS** (Apple Silicon) — move `obs-multisite.plugin` into
   `~/Library/Application Support/obs-studio/plugins/`, then **clear the
   quarantine flag or macOS will silently refuse to load it** — these builds are

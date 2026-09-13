@@ -92,7 +92,7 @@ public:
     // downloads to return the source to a neutral state and then expects Play
     // to work on the same transport — so resume_pending() exists to re-arm it.
     // Without that, a stopped source could never download again.
-    void cancel_pending();
+    void cancel_pending() override;
 
     // Clears the cancel flag so this transport can be used again. Call it
     // before issuing new requests, never while one is in flight: a request

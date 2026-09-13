@@ -373,10 +373,11 @@ out of scope, and the relay cannot re-encode.</summary>
   restart OBS, and on macOS clear the quarantine flag (see
   [OPERATOR.md](docs/OPERATOR.md)). Nothing tells an operator that a newer build
   exists, and there is no OBS-level mechanism to add one — no update or upgrade
-  entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
-  also still use the install-directory layout OBS has said it will stop reading.
-  Both are Phase 11 in the [Roadmap](#roadmap), and the second is written up as
-  [BUGS.md entry 2](BUGS.md).
+  entry point exists in `libobs` or `obs-frontend-api`. This is Phase 11 in the
+  [Roadmap](#roadmap). Its prerequisite is done: the Windows build and the
+  install instructions now use the layout OBS recommends
+  (`C:\ProgramData\obs-studio\plugins\obs-multisite\`) rather than the one it
+  has said will stop working.
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a

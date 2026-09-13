@@ -1228,14 +1228,15 @@ than deleted.
   write its own directory should not pretend otherwise. OBS does not do this
   in-process for itself either: on macOS it hands updates to Sparkle.
 
-  **The prerequisite, worth doing on its own merits.** Our Windows artifacts and
-  the operator guide both use the legacy layout — files merged into the OBS
-  install directory under `C:\Program Files\obs-studio\`. OBS now recommends
-  `C:\ProgramData\obs-studio\plugins`, one directory per plugin holding `bin/`
-  and `data/`, and states that the legacy location will stop working in a future
-  version. Repackaging into the recommended layout is what makes a Windows update
-  tractable at all, because the files being replaced become data an updater can
-  own rather than files inside Program Files.
+  **The prerequisite is done.** Our Windows artifacts and the operator guide
+  used to use the legacy layout — files merged into the OBS install directory
+  under `C:\Program Files\obs-studio\` — which OBS's own plugins guide warns
+  will stop working in a future version. Both now use the recommended
+  `C:\ProgramData\obs-studio\plugins\obs-multisite\`, one self-contained
+  directory holding `bin\64bit\` and `data\` (see `.github/workflows/obs-plugin.yml`
+  and `docs/OPERATOR.md`). That was the actual blocker for a Windows update
+  mechanism: the files an updater would replace are now data it can own,
+  rather than files inside `Program Files`.
 
   Nothing here depends on phases 9–12, and it is small enough to pull forward if
   reinstalling by hand on each release is costing more than those phases are

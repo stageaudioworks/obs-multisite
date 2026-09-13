@@ -109,6 +109,20 @@ public:
         r.retryable = false;
         return r;
     }
+
+    // Abandon whatever request is currently in flight (and refuse to start a
+    // new one) as soon as the transport next checks in, rather than letting it
+    // run to its full timeout. Call this before joining a thread that might be
+    // blocked inside put()/get()/list()/object_size() — S3Transport's own
+    // comment tells the story: tearing a decoder source down while a request
+    // was in flight once froze OBS's UI thread for as long as that request had
+    // left, long enough that an operator force-quit it, which OBS then reports
+    // as a crash. The encoder's RetryUploader has the exact same hazard on
+    // its own upload thread (see BUGS.md).
+    //
+    // No-op by default: a mock transport used in tests never blocks, so it
+    // has nothing to cancel.
+    virtual void cancel_pending() {}
 };
 
 } // namespace multisite

@@ -366,13 +366,22 @@ jobs:
 
       # Ship the FFmpeg/curl DLLs the plugin needs alongside it, so it loads even
       # if OBS's own copies differ in version.
+      #
+      # Laid out as one self-contained directory per plugin — bin\64bit\ and
+      # data\ underneath it — which is what OBS's own plugins guide now
+      # recommends and says of the old obs-plugins\/data\obs-plugins\ split:
+      # "Plugins in this location will stop working in a future version of
+      # OBS." (see BUGS.md entry 2, fixed here). The install root moves with
+      # it: this whole directory is copied into
+      # C:\ProgramData\obs-studio\plugins\, not merged into OBS's own
+      # Program Files tree.
       - name: Stage plugin with its dependencies
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/obs-plugins/64bit | Out-Null
-          New-Item -ItemType Directory -Force -Path dist/data/obs-plugins/obs-multisite | Out-Null
-          Copy-Item $env:PLUGIN_DLL dist/obs-plugins/64bit/
-          Copy-Item -Recurse data/* dist/data/obs-plugins/obs-multisite/ -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path dist/obs-multisite/bin/64bit | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/obs-multisite/data | Out-Null
+          Copy-Item $env:PLUGIN_DLL dist/obs-multisite/bin/64bit/
+          Copy-Item -Recurse data/* dist/obs-multisite/data/ -ErrorAction SilentlyContinue
 
           # obs-deps runtime DLLs matching what we linked against.
           $names = @("avcodec-*.dll","avformat-*.dll","avutil-*.dll",
@@ -381,7 +390,7 @@ jobs:
             Get-ChildItem -Recurse "$env:OBS_DEPS" -Filter $n -ErrorAction SilentlyContinue |
               ForEach-Object {
                 Write-Host "bundling $($_.Name)"
-                Copy-Item $_.FullName dist/obs-plugins/64bit/ -Force
+                Copy-Item $_.FullName dist/obs-multisite/bin/64bit/ -Force
               }
           }
           # Record which build this is, so a dockless fallback is obvious from
@@ -654,7 +663,8 @@ jobs:
           VER="${GITHUB_REF_NAME}"
           mkdir -p dist
           # Windows: the staged tree (plugin + its runtime DLLs + locale data),
-          # laid out to be copied straight into the OBS install directory.
+          # laid out as one self-contained obs-multisite\ directory to be
+          # copied straight into C:\ProgramData\obs-studio\plugins\.
           (cd artifacts/obs-multisite-windows && zip -r "../../dist/obs-multisite-${VER}-windows-x64.zip" .)
           # Linux: the module alone. Distros vary too much for a staged tree to
           # be useful, and the plugin links the system FFmpeg/curl.

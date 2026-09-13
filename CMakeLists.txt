@@ -84,6 +84,12 @@ enable_testing()
 add_executable(test_reliability tests/test_reliability.cpp)
 target_link_libraries(test_reliability PRIVATE multisite_core)
 
+# RetryUploader::stop() must not hang joining a thread stuck inside a
+# transport call — the same shutdown hazard the decoder had (BUGS.md entry 1).
+add_executable(test_retry_cancel tests/test_retry_cancel.cpp)
+target_link_libraries(test_retry_cancel PRIVATE multisite_core)
+add_test(NAME retry_cancel COMMAND test_retry_cancel)
+
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
 add_test(NAME timebase COMMAND test_timebase)
@@ -176,6 +182,12 @@ add_test(NAME session COMMAND test_session)
 add_executable(test_decoder tests/test_decoder.cpp)
 target_link_libraries(test_decoder PRIVATE multisite_core)
 add_test(NAME decoder COMMAND test_decoder)
+
+# The local DVR store's orphan sweep — a crash mid-event used to leak its
+# whole cache directory forever (BUGS.md entry 4).
+add_executable(test_segment_cache tests/test_segment_cache.cpp)
+target_link_libraries(test_segment_cache PRIVATE multisite_core)
+add_test(NAME segment_cache COMMAND test_segment_cache)
 
 # The dock reads a snapshot struct rather than the session directly, so the
 # values it is built from must agree with their source. A stray line once reset

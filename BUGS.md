@@ -77,78 +77,18 @@ Save the output into this entry before doing anything else.
 `src/appliance/player.cpp` (`feed_loop`, `deliver_loop`, `enqueue`),
 `src/core/cmaf_decoder.cpp` (`push_fragment`), `src/appliance/alsa_output.cpp`.
 
----
-
-### 1. Encoder can hang the same way the decoder used to on shutdown
-
-**Status: known, not fixed. Fix shape is understood; not built.**
-
-`658cd5f` fixed a real bug: the OBS decoder's `stop_workers()` joined
-`poll_thread` synchronously (usually on OBS's own UI thread, during source
-teardown or Quit) while `poll()` could be mid-network-call with a
-30-second timeout and nothing to cancel it — so tearing a source down
-while a request was in flight froze OBS for as long as that request had
-left. Long enough that an operator watching Quit do nothing force-quit it,
-which OBS then reported as a crash. Fixed via `S3Transport::cancel_pending()`
-— an atomic flag read by a libcurl progress callback, wired into all four
-request paths (put/get/list/object_size), called before any of the three
-thread joins in `stop_workers()`. Proven with `tests/test_s3_cancel.cpp`
-(a stalling TCP listener) and against the real crash logs.
-
-**The same hazard exists on the encoder.** `RetryUploader::stop()`
-(`src/core/retry_uploader.cpp`) joins its own upload thread the same way,
-through a blocking `Transport::put()`/`object_size()` call with the same
-30-second timeout and nothing to cancel it.
-
-**Why it wasn't folded into the same fix:** `RetryUploader` holds
-`Transport& m_transport` — the *abstract* base class
-(`src/core/transport.h`), not the concrete `S3Transport`.
-`cancel_pending()` only exists on `S3Transport`. The abstract `Transport`
-interface is also implemented by the mock transport the whole core test
-suite runs against (`tests/test_reliability.cpp`, `tests/test_session.cpp`,
-others), so adding `cancel_pending()` there means:
-
-1. Add `virtual void cancel_pending() {}` to `Transport` (no-op default —
-   the mock needs no real behaviour, it never blocks).
-2. Override it in `S3Transport` to do what it already does (just move the
-   existing method up to satisfy the virtual).
-3. Call it from `RetryUploader::stop()` before `m_thread.join()`.
-4. Rebuild and rerun the full suite — the mock's default no-op must not
-   change any existing test's behaviour.
-
-Small, well-understood change. Flagged rather than built same-session as
-the decoder fix, to avoid quietly widening what was meant to be one fix.
+**Since this was written, again:** the status line now watches itself for
+this exact shape — `state == "playing"` with `fps` near zero for two
+consecutive updates while `downloaded` keeps climbing — and logs a `WARN`
+naming the box's own pid and the `gdb` command above, rather than requiring
+someone to notice the pattern across several quiet status lines. This does
+NOT fix the stall or find its root cause; it only makes the next occurrence
+impossible to miss and easy to act on immediately. `src/appliance/player.cpp`,
+around the 60-second status log.
 
 ---
 
-### 2. The Windows install instructions point at the location OBS has deprecated
-
-`docs/OPERATOR.md` tells Windows operators to copy the `obs-plugins` and `data`
-folders into the OBS install directory, "typically `C:\Program Files\obs-studio\`",
-merging with what is there. That is the legacy layout. OBS's own plugins guide
-now recommends `C:\ProgramData\obs-studio\plugins` — one directory per plugin
-containing `bin\64bit\<name>.dll` and `data\locale\` — and says of the old
-location: *"Plugins in this location will stop working in a future version of
-OBS."* So this is a documented install path with an expiry date on it, and an
-operator following our guide today installs somewhere OBS intends to stop
-looking.
-
-**It is not only a documentation edit**, which is why it is here rather than
-fixed on sight. The artifact layout is what has to change with it: the Windows
-zip is staged as `obs-plugins/64bit/<name>.dll` plus
-`data/obs-plugins/obs-multisite/…` (`obs-plugin.yml`, "Stage plugin with its
-dependencies"), which matches the legacy layout and not the recommended one. So
-the staging step and the guide move together, and the release notes should say
-so for anyone currently installed the old way.
-
-**Worth doing before the update work in Phase 11** (README roadmap), because the
-recommended layout is what makes updating a Windows install tractable at all: it
-puts the files an updater must replace into application data it can own, rather
-than inside `Program Files`, where writing needs elevation.
-
----
-
-### 3. AES67 audio: works on the bench, unproven over an event
+### 1. AES67 audio: works on the bench, unproven over an event
 
 **Status: working on a bench Pi — eight channels of clean AES67 audio, on a card
 with a normal buffer. What still needs a real event is lip sync over a full
@@ -199,40 +139,52 @@ is for the rest of what the daemon can do.
 **Next step:** a full-length service on the picture and the sound together,
 which is point 2 above.
 
----
-
-### 4. Decoder cache: a crash mid-event leaves an orphaned event directory
-
-**Status: known gap, not fixed. Low priority — costs disk slowly, not
-correctness.**
-
-Found while auditing what manages local cache storage on the decoder side
-(`src/core/segment_cache.cpp`) and on the Pi appliance, which shares the same
-core. `SegmentCache::set_event()` deletes the *previous* event's whole
-directory whenever the followed/pinned event changes cleanly
-(`segment_cache.cpp:56-66`), and `prune_below()`/the segment-count ceiling keep
-the *current* event's directory bounded. Neither ever revisits the top-level
-`cache/` directory to look for a subdirectory left behind by an event that was
-never cleanly switched away from — a crash, a force-kill, or power loss
-mid-event. `build_index_locked()` only ever scans the *current* event's own
-folder (`segment_cache.cpp:29-40`), so an orphaned sibling directory is simply
-invisible to everything that would otherwise prune it.
-
-Consequence: on a machine that crashes mid-event occasionally (which is
-exactly the Pi appliance, unattended in the field), disk usage creeps up by
-one orphaned event's worth of segments per crash, forever. Not a correctness
-bug — nothing serves stale data, nothing stalls — just a slow, silent leak.
-
-**Fix shape:** on `DecoderSession`/appliance startup, list the subdirectories
-of the cache root and remove any that are not the currently-pinned/followed
-event's directory. Small, self-contained, no protocol change.
-
-**Files:** `src/core/segment_cache.h/.cpp`, `src/core/decoder_session.cpp`
-(construction / `set_event`), `src/appliance/player.cpp` (startup).
-
----
-
 ## Recently landed (context, not action items)
+
+- **Three tracked bugs closed in one pass: the encoder's shutdown hang, the
+  Windows install path, and the orphaned decoder cache directory.**
+
+  **The encoder had the same shutdown hazard the decoder used to.**
+  `RetryUploader::stop()` joined its upload thread the same way
+  `stop_workers()` used to on the decoder — through a blocking
+  `Transport::put()` call with a ~30-second timeout and nothing to cancel it,
+  so tearing down while an upload was in flight could hang for as long as
+  that request had left. Fixed the same way: `Transport::cancel_pending()` is
+  now a virtual on the abstract interface (a no-op default, so the mock
+  transports every test runs against need no real behaviour), overridden by
+  `S3Transport`, and called from `RetryUploader::stop()` before
+  `m_thread.join()`. `tests/test_retry_cancel.cpp` proves it with a mock that
+  blocks forever until cancelled: `stop()` now returns in single-digit
+  milliseconds instead of running out the clock.
+
+  **The Windows build and the operator guide both used to point at a
+  location OBS has said it will stop reading** — files merged into
+  `C:\Program Files\obs-studio\`. Both now use the layout OBS's plugins guide
+  recommends: one self-contained `obs-multisite\` directory, holding
+  `bin\64bit\` and `data\`, copied into `C:\ProgramData\obs-studio\plugins\`
+  (`.github/workflows/obs-plugin.yml`, `docs/OPERATOR.md`, `QUICKSTART.md`).
+  `OPERATOR.md` carries a migration note for anyone installed the old way.
+  This was also the actual prerequisite blocking Phase 11 (keeping
+  installations current) — noted in `PROJECT-SCOPE.md` and `README.md`.
+
+  **A crash mid-event used to leave the decoder cache's whole directory
+  behind, forever.** A clean event switch has always deleted the directory
+  being switched *away from*; nothing ever revisited the cache root looking
+  for one abandoned by a process that never got the chance to switch away —
+  a crash, a force-kill, power loss. `SegmentCache::set_event()` now sweeps
+  every OTHER subdirectory of the cache root, not just the specific one being
+  left, so however many of these have piled up get cleaned on the next event
+  switch — including the very first switch away from the `"pending"`
+  placeholder every fresh `DecoderSession` starts with. `tests/test_segment_cache.cpp`
+  proves the sweep, and separately proves it does NOT touch the directory
+  actually being switched into — resuming into the same still-live event
+  after a restart keeps whatever was already banked, which is the entire
+  point of having a durable cache.
+
+  Left open, deliberately: the Pi playback stall (still needs a live thread
+  dump to diagnose — the status line now at least says so unmistakably when
+  it happens, see entry 0 above) and AES67 lip-sync/PTP accuracy (needs an
+  actual multi-hour event, not something fixable in code).
 
 - **The silence that the idle keep-alive writes was not silence, and Stop stopped
   nothing.** Both found on `rpi5-nathan` within a minute of playing an event, and

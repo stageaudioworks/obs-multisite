@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+
+#include <unistd.h>   // getpid() — printed in the stall warning below
 
 namespace multisite_player {
 
@@ -1369,6 +1372,32 @@ void Player::poll_loop() {
                           (unsigned long long)m_frames_dropped.load(),
                           (unsigned long long)m_dropped_video.load(),
                           (unsigned long long)m_dropped_audio.load());
+
+                // A stall that looks nothing like a download problem: the
+                // exact shape BUGS.md entry 0 describes — head and frames_out
+                // frozen while downloaded keeps climbing, for several minutes,
+                // with playback nominally still "playing". If feed_loop is
+                // parked inside push_fragment() (the leading hypothesis; not
+                // yet confirmed), nothing else here would ever say so — this
+                // makes it a single unmistakable log line instead of a
+                // pattern someone has to notice across several status lines.
+                const bool downloading_ok = s.downloaded > m_last_downloaded_stat;
+                m_last_downloaded_stat = s.downloaded;
+                if (std::strcmp(state, "playing") == 0 && fps < 0.05 && downloading_ok) {
+                    if (++m_stall_intervals >= 2) {
+                        plog_warn("STALL SUSPECTED: playing but frames_out has not "
+                                  "advanced for %d update(s) while downloads keep "
+                                  "succeeding (head=%llu unchanged, downloaded still "
+                                  "climbing). If this is still true, capture a thread "
+                                  "dump now: gdb -p %d -batch -ex \"thread apply all bt\" "
+                                  "— see BUGS.md entry 0.",
+                                  m_stall_intervals,
+                                  (unsigned long long)sess->playback_head(),
+                                  (int)getpid());
+                    }
+                } else {
+                    m_stall_intervals = 0;
+                }
 
                 // Where the delivery thread's time actually goes. A mean that
                 // approaches the frame interval means the display path, not

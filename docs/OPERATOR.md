@@ -29,9 +29,20 @@ see if you skip it is nothing at all: OBS starts normally with no Multisite
 source, output or docks, and its log does not say why. Signing is deferred
 until there is a stable version to sign.
 
-**Windows** — copy the `obs-plugins` and `data` folders into your OBS Studio
-install directory (typically `C:\Program Files\obs-studio\`), merging with
-what is there.
+**Windows** — unzip, then copy the `obs-multisite` folder it contains into
+`C:\ProgramData\obs-studio\plugins\`, so you end up with
+`C:\ProgramData\obs-studio\plugins\obs-multisite\bin\64bit\obs-multisite.dll`
+alongside its own `data\`. This is the layout OBS's own plugins guide
+recommends; it needs no elevation, because `ProgramData` is writable without
+admin rights, unlike `Program Files`.
+
+> **Upgrading from a release older than v0.1.18-alpha?** Earlier builds were
+> staged for the legacy layout — merged into
+> `C:\Program Files\obs-studio\obs-plugins\` and `...\data\obs-plugins\`
+> alongside OBS's own files. Delete `obs-plugins\64bit\obs-multisite.dll` and
+> `data\obs-plugins\obs-multisite\` from inside your OBS install directory
+> before installing the new build in its new location, so a stale copy of the
+> plugin cannot load instead.
 
 **Linux** — place `obs-multisite.so` in
 `~/.config/obs-studio/plugins/obs-multisite/bin/64bit/` with the contents of

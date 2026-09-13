@@ -67,6 +67,9 @@ private:
     mutable std::mutex m_mtx;
 
     void build_index_locked();
+    // Removes every subdirectory of the cache root except the current
+    // event's own — see set_event()'s comment for why this exists.
+    void sweep_orphans_locked();
 
     std::string event_dir() const;
     std::string seg_path(uint64_t seq) const;

@@ -58,11 +58,37 @@ void SegmentCache::set_event(const std::string& event_id) {
     if (event_id == m_event_id) return;
     // A new event means a new init segment and a fresh sequence space; keeping
     // the old files would risk mixing incompatible codec configs.
-    std::error_code ec;
-    fs::remove_all(event_dir(), ec);
     m_event_id = event_id;
+    sweep_orphans_locked();
     ensure_dir();
     build_index_locked();
+}
+
+// A clean event switch has always removed the directory being switched AWAY
+// from (immediately below). That leaves exactly one case uncovered: a crash,
+// force-kill or power loss mid-event never gets to switch away from anything,
+// so that event's whole directory is simply abandoned — invisible to
+// prune_below()/the segment-count ceiling, which only ever look inside the
+// CURRENT event's own folder. On a box that crashes occasionally (which is
+// exactly the Pi appliance, unattended in the field), that is a slow, silent
+// disk leak: one orphaned event's worth of segments per crash, forever.
+//
+// Sweeping every OTHER subdirectory of the cache root, rather than just the
+// specific one being left, cleans up however many of those have piled up —
+// not only the most recent — the next time this process changes events at
+// all, including the very first switch away from the "pending" placeholder a
+// fresh DecoderSession always starts with. See BUGS.md.
+void SegmentCache::sweep_orphans_locked() {
+    std::error_code ec;
+    if (!fs::exists(m_dir, ec)) return;
+    for (auto& e : fs::directory_iterator(m_dir, ec)) {
+        if (ec) break;
+        std::error_code dec;
+        if (!e.is_directory(dec) || dec) continue;
+        if (e.path().filename().string() == m_event_id) continue;
+        std::error_code rec;
+        fs::remove_all(e.path(), rec);
+    }
 }
 
 static bool write_atomic(const std::string& path,
