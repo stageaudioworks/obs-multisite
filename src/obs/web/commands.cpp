@@ -263,6 +263,12 @@ std::string decoder_status_json() {
     j["storage_host"] = s.storage_host;
     j["download_bytes_per_s"] = s.download_bytes_per_s;
     j["download_samples"]     = (unsigned long long)s.download_samples;
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7, "Visibility") — absent
+    // the concept entirely on a machine that has never touched a LAN host,
+    // rather than a lan_active that would always read false and look like a
+    // real, checked answer.
+    j["lan_configured"] = s.lan_configured;
+    if (s.lan_configured) j["lan_active"] = s.lan_active;
 
     j["audio_channels"]   = s.audio_channels;
     j["audio_track_label"] = s.audio_track_label;

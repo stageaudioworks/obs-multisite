@@ -87,6 +87,11 @@ public:
     // live at all, needed in full for a cloud-disabled encoder (see
     // null_transport.h) where there is no bucket live.json to fall back to.
     void on_live_published(std::string json);
+    // markers.json was (re)published. Without this a LAN-only satellite
+    // (cloud disabled) can never receive a marker at all, since there is no
+    // cloud copy to fall back to for it — unlike segments and the manifest,
+    // which a cloud-enabled event still publishes even with LAN also on.
+    void on_markers_published(std::string json);
 
     // How many segments are currently retained, and how many have had to be
     // evicted for the cap — surfaced for the encoder dock, the same shape as
@@ -103,6 +108,7 @@ private:
     std::string m_event_json;
     std::string m_manifest_json;
     std::string m_live_json;        // guarded by m_mtx
+    std::string m_markers_json;     // guarded by m_mtx
 
     bool check_auth(const HttpRequest& req) const;
     void handle_events(const HttpRequest& req, HttpResponse& res);

@@ -218,6 +218,15 @@ public:
     void set_live_published_callback(LivePublishedCallback cb) {
         m_on_live_published = std::move(cb);
     }
+    // Fired every time add_marker() publishes markers.json. Without this, a
+    // LAN-only satellite (cloud delivery disabled) can never receive a
+    // marker at all — there is no cloud copy to fall back on for it, unlike
+    // every other object, which is why this is its own hook rather than
+    // being folded into manifest-published.
+    using MarkersPublishedCallback = std::function<void(const std::string& json)>;
+    void set_markers_published_callback(MarkersPublishedCallback cb) {
+        m_on_markers_published = std::move(cb);
+    }
 
     // Bytes confirmed uploaded so far (feeds OBS's own output stats).
     uint64_t bytes_uploaded() const;
@@ -252,6 +261,7 @@ private:
     SegmentConfirmedCallback  m_on_segment_confirmed;
     ManifestPublishedCallback m_on_manifest_published;
     LivePublishedCallback     m_on_live_published;
+    MarkersPublishedCallback  m_on_markers_published;
     mutable std::mutex m_mtx;
 
     std::string segment_key(uint64_t seq) const;

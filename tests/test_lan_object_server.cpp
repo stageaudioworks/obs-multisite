@@ -196,6 +196,21 @@ int main() {
               "a different room's live.json path is a 404, not this room's answer");
     }
 
+    std::printf("markers.json: without this a LAN-only satellite (cloud "
+                "disabled) could never receive a marker at all\n");
+    {
+        const std::string r = round_trip(port,
+            "GET /events/E1/markers.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 404, "no marker dropped yet — a genuine, honest 404");
+    }
+    server->on_markers_published("{\"markers\":[{\"id\":\"m1\",\"label\":\"Sermon Start\"}]}");
+    {
+        const std::string r = round_trip(port,
+            "GET /events/E1/markers.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r) == 200, "served once a marker is dropped");
+        CHECK(contains(body_of(r), "Sermon Start"), "with the exact JSON just published");
+    }
+
     std::printf("Segments become servable the moment they confirm\n");
     {
         const std::string r = round_trip(port,
@@ -242,6 +257,10 @@ int main() {
         const std::string r2 = round_trip(port,
             "GET /events/E2/event.json HTTP/1.1\r\nConnection: close\r\n\r\n");
         CHECK(status_of(r2) == 200, "and E2 is what's actually being served");
+        const std::string r3 = round_trip(port,
+            "GET /events/E1/markers.json HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(r3) == 404,
+              "E1's markers are gone too, not still hanging around under E2");
     }
 
     std::printf("An auth token, once configured, is enforced\n");

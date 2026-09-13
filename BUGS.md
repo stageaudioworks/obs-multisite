@@ -169,6 +169,23 @@ which is point 2 above.
   (rather than a pinned past event) had no way to discover which event is
   live, since none of the other three hooks cover that object.
 
+  **A real gap found live, not just a cosmetic one:** validating this
+  end-to-end (cloud disabled, decoder pointed at the encoder's LAN port on
+  the same machine) turned up that `markers.json` was never wired into LAN
+  delivery at all — `add_marker()` published it straight to the bucket and
+  nowhere else. With cloud able to be off entirely now, that meant a marker
+  dropped mid-event genuinely never reached a LAN-only satellite; it wasn't
+  only that the decoder dock's "via LAN"/"via cloud" indicator flickered to
+  "cloud" every time the 5-second markers poll ran (which is how it was
+  actually noticed — the indicator kept reporting cloud even though every
+  segment was demonstrably arriving over LAN). Fixed with a fifth hook,
+  `set_markers_published_callback`, and a matching `LanObjectServer` route —
+  the exact same shape as `live.json` got. Re-verified live: dropped a real
+  marker mid-broadcast with cloud disabled, confirmed it reached the decoder
+  (`curl` against the LAN port directly, and the decoder's own vendor-API
+  status showing the marker), and confirmed the active-path indicator then
+  read "via LAN" consistently rather than flickering.
+
   `NullTransport` (`src/core/null_transport.h`) is what "cloud delivery
   disabled" actually is: handed to `Session` in place of `S3Transport`, every
   PUT reports instant success, so the entire spool → retry-uploader →
@@ -183,10 +200,11 @@ which is point 2 above.
   fetch actually took ("via LAN" / "via cloud") once a LAN host is
   configured — the "Visibility" item §8.7 listed as not built.
 
-  All four new classes are proven over real loopback sockets or in-memory
-  mocks (`tests/test_lan_transport.cpp`, `tests/test_fallback_transport.cpp`,
-  `tests/test_null_transport.cpp`, plus new cases in `test_session.cpp` and
-  `test_lan_object_server.cpp`) — 41 test binaries, all green.
+  `LanTransport`, `FallbackTransport` and `NullTransport` are all proven over
+  real loopback sockets or in-memory mocks (`tests/test_lan_transport.cpp`,
+  `tests/test_fallback_transport.cpp`, `tests/test_null_transport.cpp`, plus
+  new cases in `test_session.cpp` and `test_lan_object_server.cpp` covering
+  the markers fix above) — 41 test binaries, all green.
 
 - **End Broadcast could hang OBS's main thread indefinitely, with no crash
   report to show for it.** Found while live-testing the LAN wiring below,

@@ -39,10 +39,10 @@ public:
     //   events/{id}/event.json        -> GET /events/{id}/event.json
     //   events/{id}/init.mp4          -> GET /events/{id}/init.mp4
     //   events/{id}/segments/{n}.m4s  -> GET /events/{id}/segments/{n}.m4s
-    // Anything else (markers.json, an event-listing prefix) is not served by
-    // a LanObjectServer and reports a plain 404, exactly as a real miss would
-    // — markers are cosmetic and event browsing is inherently a cloud-only
-    // operation (§7.5), so falling back to cloud for those is correct anyway.
+    //   events/{id}/markers.json      -> GET /events/{id}/markers.json
+    // An event-listing prefix is the one thing genuinely not served: event
+    // browsing (§7.5) is inherently a cloud-only operation, and falling back
+    // to cloud for it is correct rather than a gap.
     GetResult get(const std::string& key) override;
 
     // Not implemented: a decoder never writes, lists, or deletes, and a

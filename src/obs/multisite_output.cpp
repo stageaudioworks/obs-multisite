@@ -701,6 +701,13 @@ static bool complete_start(OutputCtx* ctx) {
                 [raw](const std::string& json) {
                     if (raw->lan_server) raw->lan_server->on_live_published(json);
                 });
+            // Without this, a marker dropped mid-event never reaches a
+            // LAN-only satellite at all — there is no cloud copy of
+            // markers.json to fall back to for one.
+            ctx->session->set_markers_published_callback(
+                [raw](const std::string& json) {
+                    if (raw->lan_server) raw->lan_server->on_markers_published(json);
+                });
         } else {
             // Cloud upload is completely unaffected by this failing — LAN
             // delivery is a second path to the same objects, never a

@@ -324,15 +324,24 @@ void Session::publish_live(const std::string& status) {
 void Session::heartbeat() { publish_live("live"); }
 
 void Session::add_marker(const std::string& label, const std::string& type) {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    Marker mk;
-    mk.seq   = m_next_seq;          // marker applies at the current live edge
-    mk.at_ms = now_ms();
-    mk.type  = type;
-    mk.label = label;
-    mk.id    = make_event_id(mk.at_ms);
-    m_markers.markers.push_back(mk);
-    put_json(event_prefix() + "markers.json", m_markers.to_json());
+    std::string json;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        Marker mk;
+        mk.seq   = m_next_seq;          // marker applies at the current live edge
+        mk.at_ms = now_ms();
+        mk.type  = type;
+        mk.label = label;
+        mk.id    = make_event_id(mk.at_ms);
+        m_markers.markers.push_back(mk);
+        json = m_markers.to_json();
+        put_json(event_prefix() + "markers.json", json);
+    }
+    // Unlocked, on the same principle as every other hook in this file: a
+    // LAN-only satellite (cloud delivery disabled — see null_transport.h)
+    // has no cloud copy of markers.json to fall back on, so without this a
+    // marker jump simply never works for one at all, not just serves late.
+    if (m_on_markers_published) m_on_markers_published(json);
 }
 
 void Session::end(std::chrono::milliseconds drain_deadline) {

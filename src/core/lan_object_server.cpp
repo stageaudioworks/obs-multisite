@@ -58,16 +58,25 @@ void LanObjectServer::handle_events(const HttpRequest& req, HttpResponse& res) {
     // Copy what's needed and release the lock before any disk read — the
     // same discipline SegmentCache itself uses, for the same reason: a
     // multi-megabyte read must not stall every other satellite's request.
-    std::string manifest_json, event_json;
+    std::string manifest_json, event_json, markers_json;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         if (id.empty() || id != m_event_id) { res.text(404, "not found"); return; }
         manifest_json = m_manifest_json;
         event_json    = m_event_json;
+        markers_json  = m_markers_json;
     }
 
     if (tail == "manifest.json") { res.json(manifest_json); return; }
     if (tail == "event.json")    { res.json(event_json);    return; }
+    if (tail == "markers.json") {
+        // Unlike manifest.json, nothing seeds this at event start — Session
+        // only ever publishes it from add_marker(), so "no marker dropped
+        // yet" is a real, honest 404, the same as a cloud decoder would see.
+        if (markers_json.empty()) { res.text(404, "not found"); return; }
+        res.json(markers_json);
+        return;
+    }
 
     if (tail == "init.mp4") {
         auto init = m_cache->load_init();
@@ -125,6 +134,11 @@ void LanObjectServer::on_live_published(std::string json) {
     m_live_json = std::move(json);
 }
 
+void LanObjectServer::on_markers_published(std::string json) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_markers_json = std::move(json);
+}
+
 void LanObjectServer::on_event_started(const std::string& event_id,
                                        const std::string& event_json,
                                        const std::vector<uint8_t>& init_bytes) {
@@ -133,6 +147,10 @@ void LanObjectServer::on_event_started(const std::string& event_id,
         m_event_id = event_id;
         m_event_json = event_json;
         m_manifest_json.clear();
+        // A new event's markers start from nothing — the previous event's
+        // are not meaningful under a different event id, the same reasoning
+        // the manifest reset above and SegmentCache::set_event() both apply.
+        m_markers_json.clear();
     }
     // Discards whatever the previous event retained — exactly
     // SegmentCache::set_event()'s own reasoning: a new event means a new

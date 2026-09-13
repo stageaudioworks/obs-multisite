@@ -49,6 +49,7 @@ int main() {
                              { 'i','n','i','t' });
     server->on_manifest_published("{\"event_id\":\"E1\",\"segments\":[]}");
     server->on_segment_confirmed(0, { 'a','b','c','d' });
+    server->on_markers_published("{\"markers\":[{\"id\":\"m1\",\"label\":\"Sermon Start\"}]}");
 
     LanTransportConfig tcfg;
     tcfg.host = "127.0.0.1";
@@ -82,6 +83,13 @@ int main() {
         CHECK(std::string(r.body.begin(), r.body.end()) == "abcd",
               "byte for byte");
     }
+    {
+        auto r = tx.get("events/E1/markers.json");
+        CHECK(r.success, "markers.json — without this a LAN-only satellite "
+                        "(cloud disabled) could never receive a marker at all");
+        CHECK(std::string(r.body.begin(), r.body.end()).find("Sermon Start")
+                  != std::string::npos, "the exact marker just published");
+    }
 
     std::printf("A genuine miss is a plain 404, and the LAN path is still "
                 "reported reachable\n");
@@ -93,13 +101,13 @@ int main() {
               "the server answered — this is a miss, not the LAN path being down");
     }
 
-    std::printf("markers.json and event listing are not LAN concepts — a "
-                "plain 404, which is exactly what makes FallbackTransport "
-                "fall through to cloud for them\n");
+    std::printf("Event listing is the one thing genuinely not a LAN "
+                "concept — a plain 404, which is exactly what makes "
+                "FallbackTransport fall through to cloud for it\n");
     {
-        auto r = tx.get("events/E1/markers.json");
+        auto r = tx.get("rooms/main-auditorium/events/some-listing-key");
         CHECK(!r.success && r.http_status == 404,
-              "not served by a LanObjectServer, by design");
+              "event browsing (§7.5) is inherently cloud-only, by design");
     }
 
     std::printf("An unreachable host reports a connection failure, not a "

@@ -1255,14 +1255,19 @@ gained `route_prefix()` — a "starts with", not "equals", route, matched
 longest-prefix-first, needed because a segment's path names a sequence
 number that cannot be registered as one exact route per possible value. A
 new `LanObjectServer` (`src/core/lan_object_server.h`) combines that with a
-`SegmentCache` and four `Session` hooks (`set_event_started_callback`,
+`SegmentCache` and five `Session` hooks (`set_event_started_callback`,
 `set_segment_confirmed_callback`, `set_manifest_published_callback`,
-`set_live_published_callback`) into the actual object server: `GET
-.../manifest.json`, `.../event.json`, `.../init.mp4`,
-`.../segments/{seq}.m4s`, and `.../rooms/{room}/live.json` — all proven end
-to end over a real loopback socket in `tests/test_lan_object_server.cpp`,
-including the retention cap, an event switch discarding the previous event's
-window, and auth enforcement.
+`set_live_published_callback`, `set_markers_published_callback`) into the
+actual object server: `GET .../manifest.json`, `.../event.json`,
+`.../init.mp4`, `.../segments/{seq}.m4s`, `.../markers.json`, and
+`.../rooms/{room}/live.json` — all proven end to end over a real loopback
+socket in `tests/test_lan_object_server.cpp`, including the retention cap,
+an event switch discarding the previous event's window and markers, and
+auth enforcement. `markers.json` earned its own hook rather than riding
+along with the manifest: found live, once cloud delivery could actually be
+turned off — without it, a marker dropped mid-event never reached a
+LAN-only satellite at all, since there is no cloud copy to fall back to for
+just that one object.
 
 On the decoder side, `LanTransport` (`src/core/lan_transport.h`) implements
 the same `Transport` interface a decoder already downloads through, as a
@@ -1597,9 +1602,10 @@ than deleted.
 
   **Built, both sides:** the encoder's `HttpServer::route_prefix()`, a
   `LanObjectServer` serving `manifest.json`/`event.json`/`init.mp4`/segments/
-  `live.json` from a bounded retention window fed by four `Session` hooks, an
-  auth-token check; the decoder's `LanTransport` (the same `Transport`
-  interface a decoder already downloads through, against those exact routes)
+  `markers.json`/`live.json` from a bounded retention window fed by five
+  `Session` hooks, an auth-token check; the decoder's `LanTransport` (the
+  same `Transport` interface a decoder already downloads through, against
+  those exact routes)
   and `FallbackTransport` (LAN preferred, cloud per request otherwise) — all
   proven over real loopback sockets
   (`tests/test_lan_object_server.cpp`, `tests/test_lan_transport.cpp`,
