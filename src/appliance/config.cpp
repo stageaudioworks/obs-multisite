@@ -79,6 +79,10 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "secret_access_key",    secret_access_key);
     take(j, "region",               region);
 
+    take(j, "lan_host",             lan_host);
+    take(j, "lan_port",             lan_port);
+    take(j, "lan_auth_token",       lan_auth_token);
+
     take(j, "room_id",              room_id);
     take(j, "pinned_event_id",      pinned_event_id);
 
@@ -135,6 +139,10 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["access_key_id"]        = access_key_id;
     j["secret_access_key"]    = secret_access_key;
     j["region"]               = region;
+
+    j["lan_host"]             = lan_host;
+    j["lan_port"]             = lan_port;
+    j["lan_auth_token"]       = lan_auth_token;
 
     j["room_id"]              = room_id;
     j["pinned_event_id"]      = pinned_event_id;

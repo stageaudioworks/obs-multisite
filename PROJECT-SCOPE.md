@@ -1187,16 +1187,21 @@ same list.
 
 ## 8.7 LAN / direct delivery
 
-**Status: built, both halves.** A satellite on the same network as the
-encoder, or reachable over an existing site-to-site VPN, downloads directly
-from it — manifest, init segment and media fragments — instead of from the
-bucket, automatically preferring that path when it answers and falling back
-to cloud, per request, when it doesn't. Cloud delivery can also be turned
-off entirely for an operator who wants everything to stay on one network and
-never touch a bucket at all. What follows is kept in its original,
-before-the-fact form, with corrections noted in place where building it
-changed something — the reasoning here is still the reasoning for why it
-works the way it does.
+**Status: built, both halves, and both satellite kinds.** A satellite —
+the OBS decoder plugin or the Raspberry Pi appliance, either one — on the
+same network as the encoder, or reachable over an existing site-to-site VPN,
+downloads directly from it: manifest, init segment, media fragments and
+markers, instead of from the bucket, automatically preferring that path when
+it answers and falling back to cloud, per request, when it doesn't. Cloud
+delivery can also be turned off entirely for an operator who wants
+everything to stay on one network and never touch a bucket at all. The
+appliance's `Config`/`Player` (`src/appliance/config.h`, `player.h/.cpp`)
+gained the identical `lan_host`/`lan_port`/`lan_auth_token` fields and the
+same `LanTransport`/`FallbackTransport` wiring as the OBS decoder — one
+codebase (`src/core/`), two independent settings surfaces, no divergence in
+behaviour. What follows is kept in its original, before-the-fact form, with
+corrections noted in place where building it changed something — the
+reasoning here is still the reasoning for why it works the way it does.
 
 Every campus today reaches the main site the same way, and only that way:
 through the bucket, over whatever internet connection each site has. That is
@@ -1284,6 +1289,18 @@ flipping the whole session to cloud over one old fragment. `DecoderSession`
 is handed whichever of the two — or, for a LAN-only satellite with no cloud
 credentials at all, `LanTransport` alone — it never learns which, the same
 boundary `Session`'s hooks keep on the encoder side.
+
+The Raspberry Pi appliance (`src/appliance/`) is the second satellite this
+applies to, wired the same way: `Player::rebuild_session()` builds the same
+LAN/cloud/fallback choice `multisite_source.cpp` does, `Config` carries the
+matching three fields, and the web settings page (`web/index.html`,
+`api.cpp`'s `/api/config`) is the appliance's equivalent of the decoder
+dock's settings dialog. `Player::storage_health()` (`/api/storage`) reports
+`lan_configured`/`lan_active` the same way the OBS decoder's status JSON
+does, including for a LAN-only box with no cloud transport at all to ask
+about — proven with a real `multisite-player` process pointed at a real
+`LanObjectServer` (an OBS encoder with LAN on), which correctly reported
+"room is LIVE" and served segments with no bucket involved at any point.
 
 - **Discovery — built, and deliberately manual.** A host (and port, and an
   optional shared token) typed into the decoder dock's settings, the same
@@ -1611,10 +1628,14 @@ than deleted.
   (`tests/test_lan_object_server.cpp`, `tests/test_lan_transport.cpp`,
   `tests/test_fallback_transport.cpp`). A `NullTransport`
   (`tests/test_null_transport.cpp`) lets cloud delivery be switched off
-  without Session knowing anything changed. **Still not built:** anything
-  beyond manual host:port discovery (no mDNS — see §8.7 for why), and the
-  device-code pairing flow §8.5 designs for cloud credentials, which LAN's
-  shared-token auth is meant to eventually share rather than duplicate.
+  without Session knowing anything changed. The Raspberry Pi appliance
+  carries the identical decoder-side wiring (`Config`, `Player`, the web
+  settings page) — proven with a real `multisite-player` process against a
+  real encoder, receiving an entire event over LAN with no bucket involved.
+  **Still not built:** anything beyond manual host:port discovery (no mDNS —
+  see §8.7 for why), and the device-code pairing flow §8.5 designs for cloud
+  credentials, which LAN's shared-token auth is meant to eventually share
+  rather than duplicate.
 
   Depends on nothing else here. The pairing step designed for LAN auth is
   meant to eventually match §8.5's device-code flow, but does not require

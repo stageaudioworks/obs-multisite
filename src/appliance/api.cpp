@@ -124,6 +124,14 @@ json config_json(const Config& c) {
     j["secret_set"]     = !c.secret_access_key.empty();
     j["region"]         = c.region;
 
+    j["lan_host"] = c.lan_host;
+    j["lan_port"] = c.lan_port;
+    // Same placeholder convention as the bucket secret above.
+    j["lan_auth_token"] = c.lan_auth_token.empty()
+                              ? std::string()
+                              : std::string(kSecretPlaceholder);
+    j["lan_auth_token_set"] = !c.lan_auth_token.empty();
+
     j["room_id"]            = c.room_id;
     j["pinned_event_id"]    = c.pinned_event_id;
     j["prebuffer_segments"] = c.prebuffer_segments;
@@ -221,6 +229,18 @@ Config apply_edit(Config c, const json& j) {
         }
     }
     take(j, "region",  c.region);
+    take(j, "lan_host", c.lan_host);
+    take(j, "lan_port", c.lan_port);
+    {
+        std::string token;
+        take(j, "lan_auth_token", token);
+        // Same rule as the bucket secret: the placeholder means "unchanged",
+        // an empty string means the operator cleared it on purpose.
+        if (token != kSecretPlaceholder) {
+            auto it = j.find("lan_auth_token");
+            if (it != j.end() && !it->is_null()) c.lan_auth_token = token;
+        }
+    }
     take(j, "room_id", c.room_id);
 
     take(j, "prebuffer_segments",   c.prebuffer_segments);
@@ -282,6 +302,7 @@ Config apply_edit(Config c, const json& j) {
     if (c.max_cached_segments < 10)  c.max_cached_segments = 10;
     if (c.stale_after_ms     < 30000) c.stale_after_ms = 30000;
     if (c.web_port < 1 || c.web_port > 65535) c.web_port = 8080;
+    if (c.lan_port < 1 || c.lan_port > 65535) c.lan_port = 9080;
     return c;
 }
 
@@ -587,6 +608,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             {"colo", h.colo},
             {"server", h.server},
             {"rate_samples", h.rate_samples},
+            {"lan_configured", h.lan_configured},
         };
         // Only send figures that mean something. A zero rate and a zero round
         // trip read as "the link is dead" when they actually mean "nothing has
@@ -594,6 +616,10 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         // fix a link that is fine.
         if (h.rate_samples > 0) j["bytes_per_s"] = h.bytes_per_s;
         if (probe && h.round_trip_ms > 0) j["round_trip_ms"] = h.round_trip_ms;
+        // Absent entirely (not just false) on a box that has never touched a
+        // LAN host — the "via LAN"/"via cloud" distinction is meaningless if
+        // there is no LAN leg to distinguish it from at all.
+        if (h.lan_configured) j["lan_active"] = h.lan_active;
         res.json(j.dump());
     });
 

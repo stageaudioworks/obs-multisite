@@ -149,14 +149,30 @@ Player::StorageHealth Player::storage_health(bool probe) {
     h.endpoint = cfg.endpoint_host.empty() ? cfg.r2_account_id : cfg.endpoint_host;
     h.bucket   = cfg.bucket;
     h.room     = cfg.room_id;
-    h.configured = !cfg.bucket.empty() && !cfg.access_key_id.empty() &&
-                   !cfg.secret_access_key.empty() && !h.endpoint.empty();
+    // ANY way to reach a room — cloud, LAN, or both. See Config::configured().
+    h.configured = cfg.configured();
 
     std::shared_ptr<S3Transport> tx;
-    { std::lock_guard<std::mutex> lk(m_obj_mtx); tx = m_transport; }
+    std::shared_ptr<LanTransport> lan_tx;
+    std::shared_ptr<FallbackTransport> fb;
+    { std::lock_guard<std::mutex> lk(m_obj_mtx);
+      tx = m_transport; lan_tx = m_lan_transport; fb = m_fallback_transport; }
+
+    h.lan_configured = (lan_tx != nullptr);
+    // With both configured, FallbackTransport tracks which path the most
+    // recent request actually took. LAN alone (no fallback object at all —
+    // see rebuild_session) has nothing to ask that of, so ask the LAN
+    // transport itself whether it's actually reachable — never just assume
+    // "configured" means "working", or an unplugged cable reads as healthy.
+    h.lan_active = fb ? fb->last_get_was_primary()
+                       : (lan_tx && lan_tx->last_request_reached_server());
+
     if (!tx) {
+        // No cloud leg at all — either genuinely unconfigured, or a LAN-only
+        // box working exactly as intended. The figures below (colo, server,
+        // throughput, probe) are cloud-specific and simply don't apply.
         if (!h.configured) h.error = "storage has not been set up yet";
-        else h.error = "the player is not running";
+        else if (!lan_tx)  h.error = "the player is not running";
         return h;
     }
 
@@ -208,24 +224,49 @@ void Player::rebuild_session() {
     Config cfg = config();
 
     m_transport.reset();
+    m_lan_transport.reset();
+    m_fallback_transport.reset();
     m_session.reset();
     m_catalog.reset();
 
     if (!cfg.configured()) {
         plog_warn("no storage configured — open the web interface and enter "
-                  "the bucket details");
+                  "the bucket details or a LAN host");
         note_error("no storage configured");
         return;
     }
 
-    S3Config s3;
-    s3.endpoint_host     = cfg.endpoint_host;
-    s3.r2_account_id     = cfg.r2_account_id;
-    s3.bucket            = cfg.bucket;
-    s3.access_key_id     = cfg.access_key_id;
-    s3.secret_access_key = cfg.secret_access_key;
-    s3.region            = cfg.region;
-    m_transport = std::make_shared<S3Transport>(s3);
+    if (cfg.cloud_configured()) {
+        S3Config s3;
+        s3.endpoint_host     = cfg.endpoint_host;
+        s3.r2_account_id     = cfg.r2_account_id;
+        s3.bucket            = cfg.bucket;
+        s3.access_key_id     = cfg.access_key_id;
+        s3.secret_access_key = cfg.secret_access_key;
+        s3.region            = cfg.region;
+        m_transport = std::make_shared<S3Transport>(s3);
+    }
+    if (cfg.lan_configured()) {
+        LanTransportConfig lcfg;
+        lcfg.host       = cfg.lan_host;
+        lcfg.port       = cfg.lan_port;
+        lcfg.auth_token = cfg.lan_auth_token;
+        m_lan_transport = std::make_shared<LanTransport>(lcfg);
+    }
+
+    // Preference and fallback (§8.7): LAN answers when it can, cloud
+    // otherwise, decided per request — see fallback_transport.h. Exactly one
+    // of the three is real when only one leg is configured; cfg.configured()
+    // above already guarantees at least one is.
+    Transport* active = nullptr;
+    if (m_lan_transport && m_transport) {
+        m_fallback_transport = std::make_shared<FallbackTransport>(*m_lan_transport, *m_transport);
+        active = m_fallback_transport.get();
+    } else if (m_lan_transport) {
+        active = m_lan_transport.get();
+    } else {
+        active = m_transport.get();
+    }
 
     DecoderConfig dc;
     dc.room_id              = cfg.room_id;
@@ -237,15 +278,30 @@ void Player::rebuild_session() {
     dc.keep_behind_segments = cfg.keep_behind_segments;
     dc.stale_after_ms       = cfg.stale_after_ms;
     dc.pinned_event_id      = cfg.pinned_event_id;
-    m_session = std::make_shared<DecoderSession>(dc, *m_transport);
+    m_session = std::make_shared<DecoderSession>(dc, *active);
 
-    CatalogConfig cc;
-    cc.room_id        = cfg.room_id;
-    cc.stale_after_ms = cfg.stale_after_ms;
-    m_catalog = std::make_shared<EventCatalog>(cc, *m_transport);
+    // Event browsing (§7.5) is inherently cloud-only — there is no such
+    // thing as "list every event a LAN endpoint has ever served"; it only
+    // ever knows about whichever one is live right now. No catalog at all
+    // when cloud isn't configured, rather than one that can only ever come
+    // back empty and reads as a room with no history.
+    if (m_transport) {
+        CatalogConfig cc;
+        cc.room_id        = cfg.room_id;
+        cc.stale_after_ms = cfg.stale_after_ms;
+        m_catalog = std::make_shared<EventCatalog>(cc, *m_transport);
+    }
 
-    plog_info("receiving room '%s' from %s", cfg.room_id.c_str(),
-              m_transport->base_url().c_str());
+    if (m_transport && m_lan_transport)
+        plog_info("receiving room '%s' — LAN preferred (%s:%d), cloud fallback at %s",
+                  cfg.room_id.c_str(), cfg.lan_host.c_str(), cfg.lan_port,
+                  m_transport->base_url().c_str());
+    else if (m_lan_transport)
+        plog_info("receiving room '%s' — LAN only (%s:%d), no cloud storage configured",
+                  cfg.room_id.c_str(), cfg.lan_host.c_str(), cfg.lan_port);
+    else
+        plog_info("receiving room '%s' from %s", cfg.room_id.c_str(),
+                  m_transport->base_url().c_str());
     note_error("");
 }
 
@@ -294,8 +350,13 @@ void Player::stop() {
     }
     {
         std::lock_guard<std::mutex> lk(m_obj_mtx);
+        // session first: it holds a Transport& into whichever of these it
+        // was actually built against (see rebuild_session), so nothing may
+        // be freed before it is.
         m_session.reset();
         m_catalog.reset();
+        m_fallback_transport.reset();
+        m_lan_transport.reset();
         m_transport.reset();
     }
     // Never leave the last frame of an event on a screen in an empty room.
@@ -363,6 +424,9 @@ void Player::reconfigure(const Config& cfg) {
         before.access_key_id      != cfg.access_key_id ||
         before.secret_access_key  != cfg.secret_access_key ||
         before.region             != cfg.region ||
+        before.lan_host           != cfg.lan_host ||
+        before.lan_port           != cfg.lan_port ||
+        before.lan_auth_token     != cfg.lan_auth_token ||
         before.room_id            != cfg.room_id ||
         before.cache_dir          != cfg.cache_dir ||
         before.prebuffer_segments != cfg.prebuffer_segments ||

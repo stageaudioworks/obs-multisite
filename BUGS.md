@@ -141,6 +141,38 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **LAN / direct delivery and cloud-disable now reach the Raspberry Pi
+  appliance too, not just the OBS decoder plugin (PROJECT-SCOPE.md §8.7).**
+  Ported the exact wiring from `multisite_source.cpp` and `decoder_settings.h`
+  onto `src/appliance/config.h/.cpp` (three new fields, `configured()` split
+  into `cloud_configured()`/`lan_configured()`, same as the OBS side) and
+  `player.h/.cpp` (`Player::rebuild_session()` builds the same
+  LAN/cloud/fallback choice; `m_transport` stayed a concrete `S3Transport`
+  specifically for `storage_health()`'s cloud-only figures — colo, server,
+  probe — none of which mean anything for a LAN leg). The web settings page
+  (`web/index.html`, `web/app.js`, `/api/config` in `api.cpp`) gained the
+  matching host/port/token fields, with the same "dots mean unchanged" secret
+  convention the bucket key already used.
+
+  **A second copy of the same indicator bug, caught before it shipped.**
+  Building this surfaced that `lan_active` in a LAN-only configuration (no
+  `FallbackTransport` at all, since there's no cloud leg to fall back
+  between) was hard-coded `true` whenever a LAN host was merely *configured*
+  — regardless of whether it actually answered. Live-testing the appliance
+  caught it immediately: pointed a real `multisite-player` at an unreachable
+  port and it happily reported `lan_active: true`. Fixed by asking
+  `LanTransport::last_request_reached_server()` directly when there's no
+  `FallbackTransport` to ask instead — and the identical bug existed in
+  `multisite_source.cpp`'s decoder snapshot too (LAN-only there has the same
+  shape), fixed there in the same commit.
+
+  Verified with a real `multisite-player` process (`--no-display`) against
+  first an unreachable port (`lan_active` correctly `false`, no crash, clean
+  "room is offline") and then a real OBS encoder with LAN on and cloud off
+  (`lan_active` correctly `true`, `room_state` LIVE, real segments cached) —
+  an entire event received with no bucket involved at any point, across two
+  independent codebases talking the same protocol.
+
 - **Four issues from using the cloud-disable/LAN work above, all fixed.**
 
   1. **The decoder dock's "via LAN"/"via cloud" indicator really could read

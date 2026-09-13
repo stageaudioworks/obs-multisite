@@ -174,6 +174,33 @@
       <p class="hint">Read-only access is all this box needs.</p>
     </div>
 
+    <h2>LAN / direct delivery</h2>
+    <div class="field">
+      <label for="c-lan-host">Encoder LAN host</label>
+      <input id="c-lan-host" name="lan_host" autocomplete="off"
+             placeholder="192.168.1.50 or a .local name">
+      <p class="hint">
+        If the encoder is on this same network or an existing VPN, this box
+        can download from it directly instead of from the bucket — faster,
+        and free. Leave blank to use cloud storage only. Set alongside the
+        cloud settings above for automatic LAN-preferred, cloud-fallback
+        delivery, or on its own with the fields above left blank for a
+        LAN-only box that never touches the bucket at all.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-lan-port">LAN port</label>
+      <input id="c-lan-port" name="lan_port" type="number" min="1" max="65535">
+    </div>
+    <div class="field">
+      <label for="c-lan-token">Shared token (optional)</label>
+      <input id="c-lan-token" name="lan_auth_token" type="password" autocomplete="new-password">
+      <p class="hint">
+        Leave blank on a plain building network. Set one if this path
+        crosses a VPN — it must match the token entered on the encoder.
+      </p>
+    </div>
+
     <h2>How much to keep ready</h2>
     <div class="field">
       <label for="c-buffer">Download ahead</label>

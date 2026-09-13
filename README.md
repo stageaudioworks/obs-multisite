@@ -465,7 +465,9 @@ that are no longer part of this project, and why.</summary>
   operator who wants everything to stay on one network. Both sides are
   built and tested over real loopback sockets — the encoder's object
   server, the decoder's matching transport and its LAN-preferred/cloud-
-  fallback logic. Designed and built in
+  fallback logic — and both satellite kinds: the OBS decoder plugin and the
+  Raspberry Pi appliance share the same core classes and settings shape.
+  Designed and built in
   [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery).
 
 Phases 11, 12 and 13 are, between them, most of the distance between

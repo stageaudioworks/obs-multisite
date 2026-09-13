@@ -1826,9 +1826,12 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         }
         out.lan_configured = (lan_tx != nullptr);
         // With both configured, FallbackTransport tracks which path the most
-        // recent request actually took. LAN alone (no fallback object at
-        // all — see the construction site) is trivially always "via LAN".
-        out.lan_active = fb ? fb->last_get_was_primary() : (lan_tx != nullptr);
+        // recent request actually took. LAN alone (no fallback object at all
+        // — see the construction site) has nothing to ask that of, so ask
+        // the LAN transport itself whether it's actually reachable — never
+        // just assume "configured" means "working".
+        out.lan_active = fb ? fb->last_get_was_primary()
+                             : (lan_tx && lan_tx->last_request_reached_server());
     }
     out.loading        = loading_event.load();
     out.seek_target_ms = seek_target_ms.load();

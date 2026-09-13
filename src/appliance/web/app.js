@@ -465,6 +465,9 @@ async function loadSettings() {
   set('#c-region', settings.region);
   set('#c-key', settings.access_key_id);
   set('#c-secret', settings.secret_access_key);
+  set('#c-lan-host', settings.lan_host || '');
+  set('#c-lan-port', settings.lan_port);
+  set('#c-lan-token', settings.lan_auth_token || '');
   set('#c-buffer', settings.buffer_minutes);
   set('#c-prebuffer', settings.prebuffer_segments);
   set('#c-start-buffer', settings.start_buffer_seconds);
@@ -588,6 +591,9 @@ $('#settings-form').addEventListener('submit', async (e) => {
     region: $('#c-region').value.trim() || 'auto',
     access_key_id: $('#c-key').value.trim(),
     secret_access_key: $('#c-secret').value,
+    lan_host: $('#c-lan-host').value.trim(),
+    lan_port: Number($('#c-lan-port').value) || 9080,
+    lan_auth_token: $('#c-lan-token').value,
     buffer_minutes: Number($('#c-buffer').value),
     prebuffer_segments: Number($('#c-prebuffer').value),
     start_buffer_seconds: Number($('#c-start-buffer').value),
@@ -895,6 +901,10 @@ async function loadRemote() {
 
 function storageLine(d) {
   if (!d.configured) return ['Not set up yet', false];
+  // LAN-only (PROJECT-SCOPE.md §8.7): no cloud endpoint at all, so none of
+  // reachable/readable/probed below mean anything — they describe the
+  // bucket specifically, and there isn't one.
+  if (!d.bucket && !d.endpoint) return ['LAN only — no cloud storage configured', false];
   if (d.probed && !d.reachable) return [d.error || 'Cannot be reached', true];
   if (d.probed && !d.readable)  return [d.error || 'Refused', true];
   if (d.probed) return ['Reachable' + (d.round_trip_ms
@@ -927,6 +937,12 @@ async function loadStorage(probe) {
   // dead link rather than as an absence of evidence.
   if (d.rate_samples > 0 && d.bytes_per_s)
     add('Link speed', (d.bytes_per_s * 8 / 1e6).toFixed(1) + ' Mbps observed');
+  // LAN / direct delivery (§8.7, "Visibility") — only shown once a LAN host
+  // is actually configured. Which path answers can change request to
+  // request (a segment that aged out of the LAN's retention window falls
+  // back to cloud for that one alone), so this describes the most recent
+  // fetch, not a sticky mode.
+  if (d.lan_configured) add('Delivery path', d.lan_active ? 'via LAN' : 'via cloud');
   el.innerHTML = rows.join('');
 }
 

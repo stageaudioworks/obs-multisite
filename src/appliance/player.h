@@ -35,6 +35,8 @@
 #include "../core/event_catalog.h"
 #include "../core/cmaf_decoder.h"
 #include "../core/s3_transport.h"
+#include "../core/lan_transport.h"
+#include "../core/fallback_transport.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -216,10 +218,13 @@ public:
     // whether the bucket was reachable, which Cloudflare edge was serving it,
     // or what the link was managing.
     struct StorageHealth {
-        bool        configured = false;   // credentials and a feed name are set
+        bool        configured = false;   // ANY way to reach a room — cloud, LAN, or both
         std::string endpoint;
         std::string bucket;
         std::string room;
+        // Everything below is about the CLOUD leg specifically, and stays at
+        // its default (false/empty/0) on a LAN-only box with no cloud
+        // credentials at all — there is no bucket to report on.
         bool        reachable = false;    // the endpoint answered at all
         bool        readable = false;     // …and our key could read the feed
         long        http_status = 0;
@@ -229,6 +234,11 @@ public:
         std::string server;               // the Server header
         double      bytes_per_s = 0.0;    // observed, from real segment traffic
         uint64_t    rate_samples = 0;     // 0 means show no figure at all
+        // LAN / direct delivery (PROJECT-SCOPE.md §8.7). lan_active is which
+        // path the most recent fetch actually took — see FallbackTransport —
+        // not a sticky mode, so it can change from one poll to the next.
+        bool        lan_configured = false;
+        bool        lan_active = false;
     };
     // `probe` issues one read-only request for the room's live pointer; without
     // it only the passively-observed figures are filled in, which is what a
@@ -339,7 +349,17 @@ private:
     VideoOutput& m_video;
     AudioOutput& m_audio;
 
+    // Cloud, null unless cfg.cloud_configured(). Kept independently of
+    // whichever transport DecoderSession actually holds (see rebuild_session)
+    // because storage_health() reports on this one specifically.
     std::shared_ptr<multisite::S3Transport>    m_transport;
+    // LAN (PROJECT-SCOPE.md §8.7), null unless cfg.lan_configured().
+    std::shared_ptr<multisite::LanTransport>       m_lan_transport;
+    // Only constructed when BOTH of the above exist; DecoderSession and
+    // EventCatalog are built against this when it exists, m_lan_transport
+    // alone when there is no cloud leg, or m_transport alone when there is
+    // no LAN leg — see rebuild_session().
+    std::shared_ptr<multisite::FallbackTransport>  m_fallback_transport;
     std::shared_ptr<multisite::DecoderSession> m_session;
     std::shared_ptr<multisite::CmafDecoder>    m_decoder;
     std::shared_ptr<multisite::EventCatalog>   m_catalog;

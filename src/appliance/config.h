@@ -40,6 +40,17 @@ struct Config {
     std::string secret_access_key;
     std::string region = "auto";
 
+    // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ────────────────────────
+    // A host (and port, and an optional shared token) typed in by hand, the
+    // same as the OBS decoder dock's equivalent fields — not auto-discovered.
+    // Empty host means not configured, which is the same convention an empty
+    // bucket above already uses: both may be set together, for automatic
+    // LAN-preferred, cloud-fallback delivery, or LAN alone with no cloud
+    // credentials at all.
+    std::string lan_host;
+    int         lan_port = 9080;
+    std::string lan_auth_token;
+
     // ── What to receive ──────────────────────────────────────────────────────
     std::string room_id = "main-auditorium";
     // Play this specific past event instead of following the room. Empty is
@@ -155,10 +166,16 @@ struct Config {
     // two clicks.
     std::string aes67_previous_device;
 
-    bool configured() const {
+    bool cloud_configured() const {
         return !bucket.empty() &&
                (!endpoint_host.empty() || !r2_account_id.empty());
     }
+    bool lan_configured() const { return !lan_host.empty(); }
+    // Whether there is any way to reach a room at all — the gate the player
+    // checks before it will try to build a session. cloud_configured() alone
+    // used to BE this gate; a LAN-only box (no cloud credentials at all) is
+    // exactly why it no longer is.
+    bool configured() const { return cloud_configured() || lan_configured(); }
 
     // Read from `path`. Missing file is not an error: a freshly installed box
     // has no config and must still boot far enough to show its IP address so
