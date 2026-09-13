@@ -141,6 +141,40 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **Four issues from using the cloud-disable/LAN work above, all fixed.**
+
+  1. **The decoder dock's "via LAN"/"via cloud" indicator really could read
+     wrong**, not just as a live-testing artifact. `FallbackTransport` used
+     to track "did the very last `get()` happen to come from LAN" — but a
+     LAN 404 for a key that's an ordinary, expected miss (a segment that
+     aged out of the retention window, `markers.json` before the first
+     marker) would flip it to "cloud" even with LAN working perfectly.
+     `Transport` gained `last_request_reached_server()` (default `true`;
+     `LanTransport` already tracked exactly this) so a miss can be told
+     apart from a connection failure — `FallbackTransport`'s health flag now
+     only changes on the latter. Verified live: polled `decoder/status`
+     every 3s for 24s straight during a cloud-disabled broadcast;
+     `lan_active` held `true` throughout, where it had flickered before.
+  2. **The encoder dock's LAN status line was widening the whole dock** —
+     appending "(cloud upload disabled — LAN only)" to a single-line stat
+     cell in a compact grid. Moved to the label's tooltip instead of its
+     text.
+  3. **The cloud-upload checkbox was in the LAN group box.** It says what
+     happens to cloud storage, so it now lives in the Storage box with the
+     rest of the cloud settings — `updateLanFields()` still shows/hides it
+     based on whether LAN is on, just reaching into a different box's layout
+     to do it. Relabelled and inverted while moving it, too: it read "Also
+     upload to cloud storage" (checked = enabled), which undersold that
+     cloud is the normal, default path and this is the exception. It's now
+     "Disable cloud storage (LAN only)" (checked = disabled), `m_disableCloud`
+     in the code — `onSaveSettings()` and `loadIntoFields()` negate it at the
+     one point each where it crosses into `BroadcastSettings::cloud_enabled`,
+     which keeps its own sense (true = enabled) unchanged everywhere else.
+  4. **Disabling cloud upload now asks for confirmation** (re-enabling
+     doesn't — that's the safe direction). `EncoderDock::onDisableCloudToggled`
+     intercepts the checkbox instead of saving directly; declining reverts it
+     without saving.
+
 - **LAN / direct delivery is now built end to end, and cloud upload can be
   turned off entirely (PROJECT-SCOPE.md §8.7, Phase 14).** The encoder half
   landed in an earlier pass; this pass built the decoder's matching client

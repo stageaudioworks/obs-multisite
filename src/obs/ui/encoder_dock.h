@@ -44,6 +44,12 @@ private slots:
     void updateProviderFields();
     // Shows the port/token fields only while LAN delivery is turned on.
     void updateLanFields();
+    // Confirms before actually turning cloud upload off — nothing else warns
+    // an operator that an event is about to stop leaving this machine at
+    // all. Reverts the checkbox (without saving) if the operator backs out.
+    // Turning cloud back ON (unchecking this) needs no confirmation: that's
+    // the safe direction.
+    void onDisableCloudToggled(bool checked);
     void refresh();
 
 private:
@@ -81,9 +87,11 @@ private:
     QCheckBox* m_lanEnabled = nullptr;
     QSpinBox*  m_lanPort = nullptr;
     QLineEdit* m_lanToken = nullptr;
-    // Only shown while m_lanEnabled is checked — disabling cloud with LAN
-    // off would leave nothing delivered anywhere at all.
-    QCheckBox* m_cloudEnabled = nullptr;
+    // Cloud storage is the primary, default delivery path — this is an
+    // opt-in exception to it, so checked means DISABLED, not enabled. Only
+    // shown while m_lanEnabled is checked — disabling cloud with LAN off
+    // would leave nothing delivered anywhere at all.
+    QCheckBox* m_disableCloud = nullptr;
 
     // media
     QComboBox* m_encoder = nullptr;

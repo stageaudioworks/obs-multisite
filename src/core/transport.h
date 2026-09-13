@@ -123,6 +123,20 @@ public:
     // No-op by default: a mock transport used in tests never blocks, so it
     // has nothing to cancel.
     virtual void cancel_pending() {}
+
+    // Whether the last get() actually reached this transport's server at
+    // all — true even for a 404, false only for a connection-level failure
+    // (refused, timed out, unreachable host). Lets a caller distinguish "this
+    // particular object isn't here" (the transport is fine) from "this
+    // transport itself is down" (see FallbackTransport, which uses exactly
+    // this distinction to decide whether one request falling through to a
+    // second transport means anything about the first one's health).
+    //
+    // True by default: most transports (S3Transport, every mock used in
+    // tests) have no reason to report otherwise, and a caller with no
+    // interest in the distinction should see the optimistic, harmless
+    // answer rather than have to override this just to get "yes".
+    virtual bool last_request_reached_server() const { return true; }
 };
 
 } // namespace multisite

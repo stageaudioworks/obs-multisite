@@ -11,10 +11,14 @@
 // that boundary: a plain Transport that happens to try one thing before
 // another.
 //
-// Deliberately per-request, not a single up-front "which one is healthy"
-// decision: a segment that aged out of the LAN's bounded retention window
-// (see lan_object_server.h) should fall back to cloud for THAT segment alone,
-// not flip the whole session to cloud because one old fragment was asked for.
+// Which transport actually serves a given key is decided per request, not by
+// a single up-front "which one is healthy" choice: a segment that aged out of
+// the LAN's bounded retention window (see lan_object_server.h) should fall
+// back to cloud for THAT segment alone, not flip the whole session to cloud
+// because one old fragment was asked for. The HEALTH signal exposed for the
+// dock (last_get_was_primary()) is a separate question, tracked by whether
+// the primary was actually reachable — see get() below — precisely so an
+// expected, harmless miss like that one doesn't masquerade as LAN being down.
 //
 #include "transport.h"
 
@@ -29,8 +33,15 @@ public:
 
     GetResult get(const std::string& key) override {
         GetResult r = m_primary.get(key);
-        if (r.success) { m_last_via_primary = true; return r; }
-        m_last_via_primary = false;
+        if (r.success) { m_primary_healthy = true; return r; }
+        // A miss on the primary does not by itself mean it's unhealthy — a
+        // 404 for markers.json before the first marker, or a segment that
+        // aged out of the LAN's retention window, are both ordinary and
+        // expected while LAN is working fine. Only a genuine connection-level
+        // failure (see Transport::last_request_reached_server) means the
+        // primary itself is the problem, so only that updates the health
+        // flag the decoder dock's "via LAN" / "via cloud" indicator reads.
+        if (!m_primary.last_request_reached_server()) m_primary_healthy = false;
         return m_secondary.get(key);
     }
 
@@ -60,16 +71,18 @@ public:
         m_secondary.cancel_pending();
     }
 
-    // Which path actually answered the last get() — the decoder dock's
-    // "via LAN" / "via cloud" indicator (§8.7, "Visibility"). Reflects the
-    // most recent attempt only; a decoder polls every few seconds, so this
-    // is never stale for long.
-    bool last_get_was_primary() const { return m_last_via_primary.load(); }
+    // Whether the primary (LAN) is currently healthy — the decoder dock's
+    // "via LAN" / "via cloud" indicator (§8.7, "Visibility"). NOT "did the
+    // very last get() happen to come from LAN": a request for something LAN
+    // legitimately doesn't have (see get() above) leaves this unchanged,
+    // rather than flipping the indicator to "cloud" for a request that says
+    // nothing about whether LAN itself is working.
+    bool last_get_was_primary() const { return m_primary_healthy.load(); }
 
 private:
     Transport& m_primary;    // LAN
     Transport& m_secondary;  // cloud
-    std::atomic<bool> m_last_via_primary{false};
+    std::atomic<bool> m_primary_healthy{false};
 };
 
 } // namespace multisite

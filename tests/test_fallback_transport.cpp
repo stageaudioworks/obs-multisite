@@ -49,6 +49,12 @@ public:
         PutResult r; r.success = true; r.http_status = 200; return r;
     }
 
+    // Overrides the base class's optimistic default so a test can simulate
+    // a genuine connection failure (host down) distinctly from an ordinary
+    // 404 (host fine, object just isn't there) — see transport.h.
+    bool last_request_reached_server() const override { return reachable; }
+    bool reachable = true;
+
     int requests = 0;
 
 private:
@@ -76,24 +82,51 @@ int main() {
     }
 
     std::printf("LAN 404s this key (aged out of its retention window) — "
-                "cloud answers for THIS request only\n");
+                "cloud answers for THIS request only, and the health "
+                "indicator correctly does NOT read this as LAN being down\n");
     {
         FakeStore lan("lan"), cloud("cloud");
         cloud.put_object("events/E1/segments/00000000.m4s", "old segment bytes");
         FallbackTransport ft(lan, cloud);
+        // Prove the indicator was already true (a prior request succeeded)
+        // so this test actually proves the miss below leaves it alone,
+        // rather than starting from the same false default it would end at.
+        lan.put_object("events/E1/manifest.json", "{}");
+        ft.get("events/E1/manifest.json");
+        CHECK(ft.last_get_was_primary(), "healthy after a real LAN success");
 
         auto r = ft.get("events/E1/segments/00000000.m4s");
         CHECK(r.success, "get() succeeds via the fallback");
         CHECK(std::string(r.body.begin(), r.body.end()) == "old segment bytes",
               "the body came from cloud");
-        CHECK(!ft.last_get_was_primary(), "the indicator says cloud for this one");
-
-        // And the very next request, for a key LAN DOES have, goes back to
-        // LAN — this is per-request, not a sticky "switched to cloud" state.
-        lan.put_object("events/E1/segments/00000005.m4s", "new segment bytes");
-        auto r2 = ft.get("events/E1/segments/00000005.m4s");
         CHECK(ft.last_get_was_primary(),
-              "back to LAN immediately — no session-wide fallback flag to get stuck");
+              "still reads healthy — LAN answered (with a 404), it just "
+              "doesn't have THIS key, which says nothing about its health");
+    }
+
+    std::printf("A GENUINE LAN outage (connection failure, not a 404) is "
+                "what actually flips the health indicator to cloud\n");
+    {
+        FakeStore lan("lan"), cloud("cloud");
+        cloud.put_object("events/E1/segments/00000000.m4s", "old segment bytes");
+        FallbackTransport ft(lan, cloud);
+        lan.put_object("events/E1/manifest.json", "{}");
+        ft.get("events/E1/manifest.json");
+        CHECK(ft.last_get_was_primary(), "healthy after a real LAN success");
+
+        lan.reachable = false;   // simulate the LAN host itself going down
+        auto r = ft.get("events/E1/segments/00000000.m4s");
+        CHECK(r.success, "still succeeds via cloud");
+        CHECK(!ft.last_get_was_primary(),
+              "NOW the indicator says cloud — this was a connection "
+              "failure, not an ordinary miss");
+
+        // And recovers immediately once LAN answers again — per-request,
+        // not a sticky "switched to cloud" state.
+        lan.reachable = true;
+        auto r2 = ft.get("events/E1/manifest.json");
+        CHECK(ft.last_get_was_primary(),
+              "back to healthy immediately once LAN actually answers again");
     }
 
     std::printf("Neither has it — a clean miss, not a crash\n");

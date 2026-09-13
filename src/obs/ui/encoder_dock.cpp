@@ -232,6 +232,17 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // The caveats are a tooltip, not part of the label: as a label they were a
     // single unwrapped line that set the width of the entire dialog.
     m_tags->setToolTip(tr_("SendExpiryTagHint"));
+    // Lives here, not in the LAN box below: it says what happens to CLOUD
+    // storage, so it belongs with the rest of the cloud storage settings.
+    // Cloud is the primary, default path — this checkbox is the opt-in
+    // exception to it, so it reads "disable", not "enable", and only shows
+    // up once LAN is on (disabling cloud with LAN off would mean nothing is
+    // delivered anywhere — see BroadcastController::go_live()'s guard
+    // against exactly that). updateLanFields() shows/hides this row even
+    // though it lives in a different group box than the checkbox that
+    // controls its visibility.
+    m_disableCloud = new QCheckBox(tr_("Dock.DisableCloud"), storeBox);
+    m_disableCloud->setToolTip(tr_("Dock.DisableCloudHint"));
     form->addRow(tr_("Dock.StorageProvider"), m_provider);
     form->addRow(tr_("R2AccountID"), m_accountId);
     form->addRow(tr_("EndpointHost"), m_endpoint);
@@ -241,6 +252,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_room);
     form->addRow(QString(), m_tags);
+    form->addRow(QString(), m_disableCloud);
     storePageLayout->addWidget(storeBox);
 
     // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
@@ -255,15 +267,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_lanPort->setRange(1, 65535);
     m_lanToken = new QLineEdit(lanBox);
     m_lanToken->setToolTip(tr_("Dock.LanTokenHint"));
-    // Only meaningful, and only ever shown, once LAN is on: disabling cloud
-    // with LAN off would mean nothing is delivered anywhere (see
-    // BroadcastController::go_live()'s guard against exactly that).
-    m_cloudEnabled = new QCheckBox(tr_("Dock.CloudEnabled"), lanBox);
-    m_cloudEnabled->setToolTip(tr_("Dock.CloudEnabledHint"));
     lform->addRow(QString(), m_lanEnabled);
     lform->addRow(tr_("Dock.LanPort"), m_lanPort);
     lform->addRow(tr_("Dock.LanToken"), m_lanToken);
-    lform->addRow(QString(), m_cloudEnabled);
     storePageLayout->addWidget(lanBox);
 
     storePageLayout->addStretch(1);
@@ -367,7 +373,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_tags, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
     connect(m_lanEnabled, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
     connect(m_lanPort, &QSpinBox::editingFinished, this, &EncoderDock::onSaveSettings);
-    connect(m_cloudEnabled, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
+    connect(m_disableCloud, &QCheckBox::toggled, this, &EncoderDock::onDisableCloudToggled);
     connect(m_provider, &QComboBox::currentIndexChanged, this,
             [this](int) { onSaveSettings(); });
     connect(m_encoder, &QComboBox::currentIndexChanged, this,
@@ -432,14 +438,31 @@ void EncoderDock::updateLanFields() {
     if (auto* form = qobject_cast<QFormLayout*>(m_lanPort->parentWidget()->layout())) {
         form->setRowVisible(m_lanPort,  on);
         form->setRowVisible(m_lanToken, on);
-        form->setRowVisible(m_cloudEnabled, on);
     }
+    // m_disableCloud lives in the storage box, not this one — a different
+    // QFormLayout, so it needs its own parent's layout looked up separately.
+    if (m_disableCloud)
+        if (auto* cform = qobject_cast<QFormLayout*>(m_disableCloud->parentWidget()->layout()))
+            cform->setRowVisible(m_disableCloud, on);
     // Turning LAN off with cloud already disabled would silently leave
     // nothing delivered anywhere at all — the checkbox is about to be
-    // hidden, so re-enable cloud now rather than leave that state stranded
-    // where the operator can no longer even see it.
-    if (!on && m_cloudEnabled && !m_cloudEnabled->isChecked())
-        m_cloudEnabled->setChecked(true);
+    // hidden, so re-enable cloud now (uncheck "disable") rather than leave
+    // that state stranded where the operator can no longer even see it.
+    if (!on && m_disableCloud && m_disableCloud->isChecked())
+        m_disableCloud->setChecked(false);
+}
+
+void EncoderDock::onDisableCloudToggled(bool checked) {
+    if (!checked) { onSaveSettings(); return; }   // turning cloud back on is the safe direction
+    if (QMessageBox::question(this, tr_("Dock.DisableCloud"),
+                              tr_("Dock.CloudDisableConfirm"),
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes) {
+        const QSignalBlocker noRecurse(m_disableCloud);
+        m_disableCloud->setChecked(false);
+        return;
+    }
+    onSaveSettings();
 }
 
 void EncoderDock::onOpenSettings() {
@@ -536,7 +559,7 @@ void EncoderDock::loadIntoFields() {
     const QSignalBlocker noSaveProvider(m_provider);
     const QSignalBlocker noSaveEncoder(m_encoder);
     const QSignalBlocker noSaveLan(m_lanEnabled);
-    const QSignalBlocker noSaveCloud(m_cloudEnabled);
+    const QSignalBlocker noSaveCloud(m_disableCloud);
 
     auto cfg = BroadcastController::instance().settings();
     cfg.load();
@@ -587,7 +610,7 @@ void EncoderDock::loadIntoFields() {
     m_lanEnabled->setChecked(cfg.lan_enabled);
     m_lanPort->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
-    m_cloudEnabled->setChecked(cfg.cloud_enabled);
+    m_disableCloud->setChecked(!cfg.cloud_enabled);
     updateLanFields();
 }
 
@@ -632,7 +655,7 @@ void EncoderDock::onSaveSettings() {
     cfg.lan_enabled    = m_lanEnabled->isChecked();
     cfg.lan_port       = m_lanPort->value();
     cfg.lan_auth_token = m_lanToken->text().trimmed().toStdString();
-    cfg.cloud_enabled  = m_cloudEnabled->isChecked();
+    cfg.cloud_enabled  = !m_disableCloud->isChecked();
     // The event name is per-event, not a saved setting. Send it only when the
     // operator has typed their own; an untouched date/time default is sent
     // empty so the satellite falls back to the time and a resumed event keeps
@@ -771,7 +794,7 @@ void EncoderDock::setLiveState(bool live) {
                         (QWidget*)m_room, (QWidget*)m_segDur,
                         (QWidget*)m_tracks, (QWidget*)m_lanEnabled,
                         (QWidget*)m_lanPort, (QWidget*)m_lanToken,
-                        (QWidget*)m_cloudEnabled })
+                        (QWidget*)m_disableCloud })
         w->setEnabled(!live);
 }
 
@@ -850,20 +873,21 @@ void EncoderDock::refresh() {
         if (!st.lan_enabled) {
             m_lan->setText(tr_("Dock.LanOff"));
             m_lan->setStyleSheet(QString());
+            m_lan->setToolTip(QString());
             return;
         }
         // Cloud upload is unaffected either way, EXCEPT when the operator
-        // deliberately turned it off — worth saying right next to LAN's own
-        // status, since that's the one place a "did I actually configure
-        // this right" question would come up.
-        const QString cloudSuffix = st.cloud_enabled ? QString()
-                                                      : " " + tr_("Dock.CloudOffSuffix");
+        // deliberately turned it off — worth surfacing, but as a tooltip
+        // rather than appended to the status text: a stat cell in this grid
+        // is meant to be one short line, and the full sentence here was
+        // wide enough to widen the whole dock around it.
+        m_lan->setToolTip(st.cloud_enabled ? QString() : tr_("Dock.CloudOffSuffix"));
         if (!st.live) {
-            m_lan->setText(tr_("Dock.LanWillStart") + cloudSuffix);
+            m_lan->setText(tr_("Dock.LanWillStart"));
             m_lan->setStyleSheet(QString());
         } else if (st.lan_running) {
             m_lan->setText(tr_("Dock.LanRunning").arg(st.lan_port)
-                               .arg((qulonglong)st.lan_cached_segments) + cloudSuffix);
+                               .arg((qulonglong)st.lan_cached_segments));
             m_lan->setStyleSheet("color: #35c489;");
         } else {
             m_lan->setText(st.lan_error.empty()

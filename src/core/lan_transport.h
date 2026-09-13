@@ -72,9 +72,12 @@ public:
     // Whether the last get() actually reached the LAN endpoint (any HTTP
     // response at all, including a 404) rather than failing to connect —
     // i.e. "is the LAN path itself alive", independent of whether this
-    // particular key happened to be found. FallbackTransport surfaces this
-    // as the decoder dock's "via LAN" / "via cloud" indicator (§8.7).
-    bool last_request_reached_server() const { return m_last_reached.load(); }
+    // particular key happened to be found. FallbackTransport uses exactly
+    // this distinction to decide the decoder dock's "via LAN" / "via cloud"
+    // indicator (§8.7): a 404 for one key (markers.json before the first
+    // marker, a segment that aged out of the retention window) must not
+    // read as "LAN is down" the way a connection failure genuinely should.
+    bool last_request_reached_server() const override { return m_last_reached.load(); }
 
 private:
     LanTransportConfig m_cfg;
