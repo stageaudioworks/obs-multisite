@@ -1113,6 +1113,131 @@ implementation that happens to work.
 
 ---
 
+## 8.6 Storage provider selection (planned)
+
+Setting up storage today means an operator typing six fields — account ID or
+endpoint, bucket, key, secret, region — into the encoder dock's Storage tab,
+having first worked out which of those six their provider actually needs and
+what shape the endpoint hostname has to be in. Cloudflare R2 needs an account
+ID and no region. AWS S3, Backblaze B2 and Wasabi each need a region and
+derive their hostname from it, in three slightly different ways. A church
+volunteer configuring this for the first time has no way to know any of that,
+and the dock currently doesn't either — it shows the same six blank fields
+regardless of where the bucket actually lives.
+
+**A provider dropdown, not a new field shape.** `S3Config` — bucket, key,
+secret, and either an account id or an endpoint host plus region — does not
+change. What changes is what builds it. A `Provider` choice
+(*Cloudflare R2 · AWS S3 · Backblaze B2 · Wasabi · Custom / other
+S3-compatible*) selects which of a small set of templates derives the
+endpoint from the fields that provider actually needs, and the dock shows
+only those fields:
+
+- **Cloudflare R2** — Account ID, Bucket, Key, Secret. Region is fixed
+  (`auto`); the endpoint is `https://<account>.r2.cloudflarestorage.com`.
+- **AWS S3 / Backblaze B2 / Wasabi** — Region, Bucket, Key, Secret. Each
+  derives its own hostname template from the region (`s3.<region>.amazonaws.com`
+  and so on).
+- **Custom / other S3-compatible** — today's full form, unchanged: raw
+  endpoint, bucket, key, secret, region. This is not a legacy fallback to be
+  deprecated later — someone running MinIO in their own rack, or a provider
+  not in the list, is a first-class user of this option, exactly as §8.5
+  already says of "Direct" credentials generally.
+
+The templates themselves live in one small bundled table
+(`data/providers.json`), read by both docks, rather than in per-dock C++ —
+the same "decided in one place" instinct behind `audio_plan.h` and
+`disk_health.h` elsewhere in this codebase. Adding a provider, or fixing one
+whose hostname convention changes, is a data edit, not new UI code. A
+manifest fetched over the network was considered and rejected for this: it
+would make populating a dropdown depend on connectivity, against this
+project's general reluctance to add network dependencies where none is
+needed — Phase 11's update-check manifest (§10) is the place that pattern
+already belongs, if it's ever needed here too.
+
+**Where "Multisite Cloud" fits.** §8.5 already frames the future brokered
+option as a second producer of the same `S3Config` — "two providers, one
+`S3Config`." This dropdown is the literal UI expression of that sentence,
+generalized to N providers instead of two: *Multisite Cloud* becomes one
+more entry, greyed out until built, and when selected shows §8.5's
+device-code pairing flow (a *"Connect to a storage service"* button, a
+status line, a Disconnect button) instead of key/secret fields. No new
+settings surface is built for it later — it slots into the one that
+already exists for R2, AWS, Backblaze and Wasabi.
+
+**Not settled.** Whether region-based providers (AWS/Backblaze/Wasabi) offer
+a dropdown of common regions, free text, or both — free text alone repeats
+today's "which exact string does the hostname want" problem; a dropdown
+needs to be honest about the fact that not every provider's regions are the
+same list.
+
+---
+
+## 8.7 LAN / direct delivery (planned)
+
+Every campus today reaches the main site the same way, and only that way:
+through the bucket, over whatever internet connection each site has. That is
+correct and stays correct — it is the whole reason this project works on
+mobile data and LEO satellite links that would defeat a direct stream. But a
+campus on the same building network as the main site, or reachable over a
+VPN the church already runs between sites, has a faster and cheaper path
+sitting unused: the encoder machine itself.
+
+**What this adds, and what it deliberately does not replace.** A satellite
+that can reach the encoder directly — over the LAN, or over an existing
+site-to-site VPN — downloads from it instead of from the bucket, while the
+encoder keeps uploading to the bucket exactly as it does today,
+unconditionally. Nothing about §3's "decentralized, no control plane" holds
+any less true for this: the encoder's HTTP server serves the *identical*
+object shape (`manifest.json`, `init.mp4`, `segments/{seq}.m4s`) straight from
+the same durable spool and the same published manifest state a cloud decoder
+already reads — the media path and the signaling path are still the same
+path, there is just a second, local way to walk it. Cloud upload is never
+optional and never paused for this: it is what makes LAN mode safe to
+attempt in the first place, since a cloud-only decoder, a LAN decoder whose
+link just dropped, and the archival recording all still depend on it running
+regardless of who else is connected directly.
+
+**Shape.** `Transport` is already the abstraction a decoder downloads
+through (`src/core/transport.h`), and the encoder already runs its own small
+HTTP server for the remote-control page (`src/core/http_server.cpp`). LAN
+mode adds a second route table to that same server — the object paths above,
+served from what the encoder already has on disk — and a `LanTransport` on
+the decoder side that speaks plain HTTP GET against it. This is substantially
+"implement two abstractions that already exist," not new architecture.
+
+- **Discovery.** A host:port typed into the decoder's settings, with a "test
+  connection" button in the same style as the appliance's own "Check now" for
+  storage. mDNS auto-discovery was considered and set aside for a first build:
+  it does nothing for the VPN case, where the two ends are rarely on the same
+  broadcast domain, and it is one more thing to fail silently on a locked-down
+  church network.
+- **Auth.** A pre-shared token, generated by the encoder and entered once at
+  each decoder — using the *same* device-code pairing UX §8.5 already designs
+  for cloud credentials, so an operator learns one pairing flow, not two. A
+  plain LAN inside one building is already treated as the trust boundary
+  elsewhere in this project (the remote-control pages have no password and no
+  TLS, deliberately); a token matters more once the path crosses a VPN.
+- **Preference and fallback.** LAN preferred automatically whenever it's
+  healthy, falling back to cloud the instant it isn't — the same `LinkHealth`
+  hysteresis the S3 transport already uses, tracked per-transport instead of
+  once. Never a manual switch: an operator who isn't standing at the
+  satellite when a VPN drops should not have to be.
+- **Visibility.** The decoder dock shows which path is actually serving
+  it right now — *"Receiving directly from main site"* vs. *"Receiving via
+  cloud storage (fallback)"* — not just a link-health colour, because "why
+  does this satellite feel laggy" wants a different answer depending on
+  which one is true.
+
+**Deferred rather than decided against.** Whether LAN mode serves a segment
+the moment it's spooled (lower latency than cloud, since it skips waiting for
+upload confirmation) or only once the bucket has confirmed it (identical
+consistency guarantee to cloud, simpler to reason about) is left for a later,
+explicitly opt-in mode. A first build serves only what's already confirmed —
+the same manifest a cloud decoder would eventually see, just sooner.
+
+---
+
 ## 9. Capability overview
 
 What this project does, and where each piece stands. Status is against the
@@ -1154,6 +1279,8 @@ is the better answer for a given church, section 12 says so plainly.
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
 | Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
+| Choosing a storage provider from a list instead of typing raw endpoint fields | planned (§8.6, §10 Phase 13) |
+| Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | planned (§8.7, §10 Phase 14) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -1172,14 +1299,19 @@ paths — is a separate Stage Audio Works product line now, not built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phases 9–12 have not been started.
+event. Phases 9–14 have not been started.
 
-**Phases 11 and 12 are the two that carry weight now.** Between them they are
-most of the distance between a project a technician can deploy and one an
-ordinary church can — knowing a new build exists and installing it without a
-manual reinstall, and connecting a bucket without minting a token by hand.
-Neither depends on 9 or 10, and both were written as late phases when the
-list assumed the hardest problem was features rather than deployment.
+**Phases 11, 12 and 13 carry weight now.** Between them they are most of the
+distance between a project a technician can deploy and one an ordinary
+church can — knowing a new build exists and installing it without a manual
+reinstall, connecting a bucket without minting a token by hand, and choosing
+a provider from a list rather than typing a hostname convention nobody
+outside this project has memorized. 13 is deliberately the smaller half of
+what 12 needs anyway, worth doing first. Phase 14 answers a different
+question — cost and reliability for a campus already on the same network or
+VPN as the main site — and depends on none of the others. None of the four
+depends on 9 or 10, and all were written as late phases when the list
+assumed the hardest problem was features rather than deployment.
 
 This project's scope is now the OBS plugin pair and the Raspberry Pi
 appliance — nothing wider. Three things that used to be on this list are not
@@ -1351,6 +1483,36 @@ than deleted.
 
   Depends on nothing else here. Along with Phase 11, the most useful work
   available once the plugins are finished.
+
+- **Phase 13 — Storage provider selection.** ⬜ A provider dropdown
+  (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom / other
+  S3-compatible) that shows only the fields each one actually needs and
+  derives the rest, instead of six blank fields regardless of where the
+  bucket lives. Designed in §8.6. `S3Config` itself does not change; this is
+  a UI-layer derivation in front of it, backward compatible with every saved
+  setup today (an existing configuration reads as "Custom"). Also the seam
+  Phase 12's brokered credentials slot into later — "Multisite Cloud" becomes
+  one more entry in the same dropdown rather than a second settings surface.
+
+  Depends on nothing else here, and nothing here depends on it. Worth
+  building before Phase 12 specifically, since it's the smaller piece of the
+  same seam and makes the larger one easier to place.
+
+- **Phase 14 — LAN / direct delivery.** ⬜ A satellite on the same network as
+  the main site, or reachable over a VPN the church already runs, downloads
+  directly from the encoder instead of from the bucket — automatically
+  preferred when healthy, falling back to cloud the instant it isn't.
+  Designed in §8.7. Cloud upload keeps running unconditionally throughout;
+  this adds a second path to reach the same objects, it does not remove the
+  first or introduce a control plane §3 doesn't already have.
+
+  The larger of the two new phases here, but built substantially from
+  abstractions that already exist: `Transport` on the decoder side, and the
+  encoder's own `HttpServer` (already serving the remote-control page) on the
+  other. Depends on nothing else here; the pairing step it uses for LAN auth
+  is designed to match §8.5's device-code flow, but does not require §8.5 or
+  Phase 12 to be built first — a plainer pre-shared-token exchange is enough
+  on its own until brokered pairing exists to share.
 
 
 ### Three things that were on this list

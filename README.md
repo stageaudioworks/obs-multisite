@@ -392,10 +392,11 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 12, from storage redundancy and
-satellite output routing to keeping installations current and an easier way
-to connect a bucket — plus three things that are no longer part of this
-project, and why.</summary>
+<summary>What is planned next: phases 6 to 14, from storage redundancy and
+satellite output routing to keeping installations current, an easier way to
+connect a bucket, choosing a storage provider from a list, and a satellite
+receiving directly from the encoder on the same network — plus three things
+that are no longer part of this project, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -444,10 +445,32 @@ project, and why.</summary>
   service address is a setting, not a constant — anyone can run their own — and
   nothing contacts anything until an operator asks it to. Designed in
   [PROJECT-SCOPE.md §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
+- **Phase 13 — Storage provider selection.** A dropdown — Cloudflare R2, AWS
+  S3, Backblaze B2, Wasabi, or a custom endpoint — that shows only the fields
+  each provider actually needs and works out the rest, instead of six blank
+  fields and a hostname convention nobody outside this project has
+  memorized. The underlying settings don't change; this sits in front of
+  them, and an existing setup just reads as "Custom". It's also where Phase
+  12's paired credentials will eventually show up, as one more entry in the
+  same list rather than a second settings screen. Designed in
+  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection-planned).
+- **Phase 14 — LAN / direct delivery.** A satellite on the same network as
+  the main site, or reachable over a VPN the church already runs, downloads
+  straight from the encoder instead of the bucket — automatically, falling
+  back to cloud the instant that path isn't healthy. Cloud upload never
+  stops for this: it's what every other satellite and the recording itself
+  still depend on. Built substantially from pieces that already exist —
+  the decoder's transport abstraction, and the encoder's own small HTTP
+  server that already serves its remote-control page. Designed in
+  [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery-planned).
 
-Phases 11 and 12 are where the work goes once the plugins are finished. Between
-them they are most of the distance between something a technician can deploy and
-something an ordinary church can, and neither depends on phases 9 or 10.
+Phases 11, 12 and 13 are where the work goes once the plugins are finished.
+Between them they are most of the distance between something a technician
+can deploy and something an ordinary church can — 13 in particular is the
+smaller half of what 12 needs anyway, worth doing first. Phase 14 answers a
+different question, cost and reliability for a campus already on the same
+network, and depends on none of the others. None of the four depends on
+phases 9 or 10.
 
 Three things that used to be on this list are not any more. **The ABR
 transcoder** is no longer part of this project: a rendition ladder exists to
