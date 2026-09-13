@@ -141,6 +141,19 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The appliance's settings page collapses into sections now** — Room
+  and storage, LAN, buffering, Picture, Sound, Remote access, On power-up,
+  Network audio output — instead of one long flat scroll of every field at
+  once, which is what all the storage/LAN work above had grown it into.
+  Reuses the exact `<details>`/`<summary>` pattern already on the same page
+  for Preview picture and Sound meters — no JavaScript, the browser's own
+  disclosure widget, so it needed a CSS rule (`details.settings-section >
+  summary`, styled to match the existing section headings) and nothing else.
+  "Where the event comes from" opens by default since it's what a first-time
+  setup actually needs; the rest start closed. Pure `web/index.html` +
+  `web/style.css` — no C++, no rebuild needed on a box that already has the
+  binary, just updated files.
+
 - **The storage provider dropdown (§8.6, Phase 13) now reaches the Raspberry
   Pi appliance's web settings page too.** Spotted immediately after the LAN
   work above landed there: the appliance never got Phase 13 at all — its web

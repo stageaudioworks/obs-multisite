@@ -139,7 +139,8 @@
 <section id="tab-settings" class="panel">
   <form id="settings-form">
 
-    <h2>Where the event comes from</h2>
+    <details class="settings-section" open>
+    <summary>Where the event comes from</summary>
     <div class="field">
       <label for="c-room">Room</label>
       <input id="c-room" name="room_id" autocomplete="off">
@@ -177,7 +178,10 @@
       <p class="hint">Read-only access is all this box needs.</p>
     </div>
 
-    <h2>LAN / direct delivery</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>LAN / direct delivery</summary>
     <div class="field">
       <label for="c-lan-host">Encoder LAN host</label>
       <input id="c-lan-host" name="lan_host" autocomplete="off"
@@ -204,7 +208,10 @@
       </p>
     </div>
 
-    <h2>How much to keep ready</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>How much to keep ready</summary>
     <div class="field">
       <label for="c-buffer">Download ahead</label>
       <input id="c-buffer" name="buffer_minutes" type="number" min="1" max="240">
@@ -234,7 +241,10 @@
       <p class="hint" id="cache-warning"></p>
     </div>
 
-    <h2>Picture</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>Picture</summary>
     <div class="field">
       <label for="c-display">Display</label>
       <select id="c-display" name="connector"></select>
@@ -277,7 +287,10 @@
       <input id="c-idle-image" name="idle_image_path" placeholder="/var/lib/multisite-player/slate.png">
     </div>
 
-    <h2>Sound</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>Sound</summary>
     <div class="field">
       <label for="c-audio-on">Sound out</label>
       <select id="c-audio-on" name="audio_enabled">
@@ -308,7 +321,10 @@
       </p>
     </div>
 
-    <h2>Remote access</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>Remote access</summary>
     <p class="hint">
       How this box can be reached from outside the building, so a setting can
       be fixed without driving to the campus. Both are optional and neither is
@@ -338,7 +354,10 @@
       <span class="muted" id="remote-note"></span>
     </div>
 
-    <h2>On power-up</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>On power-up</summary>
     <div class="field">
       <label for="c-autoplay">Start playing by itself</label>
       <select id="c-autoplay" name="auto_play">
@@ -347,7 +366,10 @@
       </select>
     </div>
 
-    <h2>Network audio output</h2>
+    </details>
+
+    <details class="settings-section">
+    <summary>Network audio output</summary>
     <div class="field">
       <label for="c-aes67-on">Put the sound on the network</label>
       <select id="c-aes67-on">
@@ -388,6 +410,8 @@
       <button type="button" id="btn-aes67">Apply network audio</button>
       <span class="muted" id="aes67-note"></span>
     </div>
+
+    </details>
 
     <div class="row sticky-save">
       <button type="submit" class="big go">Save settings</button>

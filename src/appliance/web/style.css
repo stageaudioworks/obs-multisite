@@ -130,6 +130,22 @@ h2 {
   padding-bottom: 6px;
 }
 
+/* ── Collapsible settings sections ─────────────────────────────────────────
+   The settings form is long enough on a phone that finding one field meant
+   scrolling past a dozen others. Same <details>/<summary> pattern already
+   used for Preview picture and Sound meters above, so a triangle already
+   means "expand this" everywhere on the page before it means anything here. */
+details.settings-section > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 28px 0 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
 /* ── Now playing ────────────────────────────────────────────────────────── */
 .now { text-align: center; margin: 8px 0 18px; }
 .clock {
