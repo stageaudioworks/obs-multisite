@@ -30,6 +30,77 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.18-alpha
+
+A campus on the same network as the main site, or reachable over a VPN the
+church already runs, can now receive over that path directly instead of
+through the bucket — on both the OBS decoder plugin and the Raspberry Pi
+appliance. Cloud storage can also be turned off entirely, for a single
+building with no interest in an off-site copy at all. Two real bugs were
+found live-testing this, both fixed, both written up below rather than
+quietly folded in.
+
+### LAN / direct delivery
+
+An encoder can now serve satellites directly over plain HTTP on the same
+network or an existing VPN, instead of every satellite going through the
+bucket regardless of where it actually sits. A satellite prefers that path
+automatically whenever it answers, and falls back to cloud per request —
+not per session — the instant it doesn't, so one segment that happens to
+have aged out of the LAN side's retention window falls back for that
+segment alone rather than dropping the whole connection to cloud.
+
+Cloud upload stays on by default throughout: every other satellite, and the
+archival recording, still depend on it. It can now be switched off entirely
+for an event — a new checkbox in the encoder's Storage settings, shown only
+once LAN delivery is turned on, with a confirmation prompt before it takes
+effect (turning it back on needs no confirmation, since that's always the
+safe direction). With it off, nothing for that event ever reaches the
+bucket at all; every satellite still gets the full event, provided it can
+reach the encoder directly.
+
+The Raspberry Pi appliance gained the identical capability in the same
+pass — LAN host/port/token fields in its web settings page, the same
+automatic preference and fallback, and the same ability to run cloud-free.
+
+### A shutdown hang that could look like a crash
+
+Ending a broadcast could freeze OBS's main thread for as long as a stuck
+upload had left to retry — with retries set to continue forever in
+production, that had no real upper bound. A hang long enough looks, from
+the outside, exactly like a crash: the window stops responding, and
+force-quitting it is indistinguishable from OBS actually having crashed on
+the next launch. Found after a report of exactly that on Windows, and
+reproduced on macOS too once we knew what to look for.
+
+The drain now genuinely respects its own deadline — bounded to 8 seconds by
+default, down from a technical (but non-functional) 30-second cap — so a
+segment that's still stuck when time runs out is left in the local queue
+for the next resume, exactly as a real crash would have left it, instead of
+holding the whole application hostage to it.
+
+### The decoder's "receiving via LAN" indicator could say the wrong thing
+
+Built alongside LAN delivery, and caught before it reached anyone: the
+indicator tracked which path answered the single most recent request,
+which is the wrong question. A request for something LAN legitimately
+doesn't have yet — a marker before the first one was dropped, a segment
+that aged out of the retention window — isn't evidence that LAN itself is
+down, but it was being read as exactly that, and the display would flip to
+"via cloud" on requests that had nothing to do with the actual link. It now
+distinguishes a real connection failure from an ordinary miss, and reports
+accordingly. The same fix applies to the Pi appliance's equivalent readout.
+
+### The Raspberry Pi appliance catches up
+
+Beyond LAN delivery: the storage provider dropdown (Cloudflare R2 / AWS S3 /
+Backblaze B2 / Wasabi / Custom) that the two OBS docks have had since
+v0.1.13-alpha now appears on the appliance's own web settings page too — it
+had never reached there until now. And that settings page, grown long
+across several releases of new fields, now collapses into named sections
+you open one at a time instead of scrolling past everything to find the
+one you came for.
+
 ## What's new in v0.1.17-alpha
 
 ### A satellite on the network audio card could put digital noise on air
