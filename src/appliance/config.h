@@ -33,6 +33,12 @@ IdleMode    idle_mode_from_string(const std::string& s, IdleMode fallback);
 
 struct Config {
     // ── Storage (S3-compatible) ──────────────────────────────────────────────
+    // Which provider the web page's dropdown is showing (see
+    // storage_providers.h) — "r2", "aws", "backblaze", "wasabi" or "custom".
+    // Empty on a config saved before this existed; the page then falls back
+    // to guessing from endpoint_host/r2_account_id (detect_provider()), so an
+    // upgrade never loses or misrepresents a working setup.
+    std::string storage_provider;
     std::string endpoint_host;          // blank when using an R2 account id
     std::string r2_account_id;
     std::string bucket;

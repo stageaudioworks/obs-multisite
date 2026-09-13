@@ -6,6 +6,7 @@
 #include "audio_output.h"
 #include "aes67.h"   // the daemon on this box: its shapes, and talking to it
 #include "preview.h"
+#include "../core/storage_providers.h"
 
 #include "../vendor/nlohmann/json.hpp"
 
@@ -20,6 +21,13 @@ using multisite::HttpHandler;
 using multisite::HttpRequest;
 using multisite::HttpResponse;
 using multisite::HttpServer;
+using multisite::StorageProvider;
+using multisite::all_providers;
+using multisite::provider_info;
+using multisite::provider_key;
+using multisite::provider_from_key;
+using multisite::detect_provider;
+using multisite::derive;
 
 namespace multisite_player {
 
@@ -112,6 +120,16 @@ json status_json(const Player& player) {
 
 json config_json(const Config& c) {
     json j;
+    // Empty storage_provider means this was saved before the provider
+    // dropdown existed (or hand-edited): fall back to guessing from the raw
+    // fields rather than defaulting blindly to R2, so an upgrade never
+    // misrepresents a working AWS/Backblaze/Wasabi/Custom setup as something
+    // it isn't. Resolved here, once, rather than in the page's JS, on the
+    // same "decide in one place" principle as the rest of storage_providers.h.
+    const StorageProvider provider = c.storage_provider.empty()
+        ? detect_provider(c.endpoint_host, c.r2_account_id)
+        : provider_from_key(c.storage_provider);
+    j["storage_provider"] = provider_key(provider);
     j["endpoint_host"]  = c.endpoint_host;
     j["r2_account_id"]  = c.r2_account_id;
     j["bucket"]         = c.bucket;
@@ -214,8 +232,35 @@ void take(const json& j, const char* key, T& out) {
 // keeps its current value, so a partial form cannot wipe settings it never
 // showed.
 Config apply_edit(Config c, const json& j) {
-    take(j, "endpoint_host", c.endpoint_host);
-    take(j, "r2_account_id", c.r2_account_id);
+    // The provider decides how the ONE field the operator actually typed
+    // becomes endpoint_host/r2_account_id/region — see storage_providers.h.
+    // Custom's fields already ARE that shape, unchanged. Applied only when
+    // the browser actually sent a provider (every page built against this
+    // API does); an older or hand-built client that only ever sends the raw
+    // fields leaves storage_provider untouched and simply edits them as
+    // before Phase 13 existed here.
+    auto provider_it = j.find("storage_provider");
+    if (provider_it != j.end() && provider_it->is_string()) {
+        const StorageProvider provider = provider_from_key(provider_it->get<std::string>());
+        c.storage_provider = provider_key(provider);
+        if (provider == StorageProvider::Custom) {
+            take(j, "endpoint_host", c.endpoint_host);
+            take(j, "region",        c.region);
+            c.r2_account_id.clear();
+        } else {
+            std::string input;
+            if (provider == StorageProvider::CloudflareR2) take(j, "r2_account_id", input);
+            else                                            take(j, "region", input);
+            const auto derived = derive(provider, input);
+            c.endpoint_host = derived.endpoint_host;
+            c.r2_account_id = derived.r2_account_id;
+            c.region        = derived.region;
+        }
+    } else {
+        take(j, "endpoint_host", c.endpoint_host);
+        take(j, "r2_account_id", c.r2_account_id);
+        take(j, "region",        c.region);
+    }
     take(j, "bucket",        c.bucket);
     take(j, "access_key_id", c.access_key_id);
     {
@@ -228,7 +273,6 @@ Config apply_edit(Config c, const json& j) {
             if (it != j.end() && !it->is_null()) c.secret_access_key = secret;
         }
     }
-    take(j, "region",  c.region);
     take(j, "lan_host", c.lan_host);
     take(j, "lan_port", c.lan_port);
     {
@@ -467,6 +511,25 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     });
 
     // ── Settings ─────────────────────────────────────────────────────────────
+    // What the storage-provider dropdown offers (PROJECT-SCOPE.md §8.6) —
+    // static, so fetched once rather than folded into every /api/config
+    // response.
+    server.route("GET", "/api/storage/providers", [](const HttpRequest&,
+                                                     HttpResponse& res) {
+        json list = json::array();
+        for (const auto& info : all_providers()) {
+            list.push_back(json{
+                {"key", info.key},
+                {"display_name", info.display_name},
+                {"needs_account_id", info.needs_account_id},
+                {"needs_region", info.needs_region},
+                {"needs_endpoint", info.needs_endpoint},
+                {"available", info.available},
+            });
+        }
+        res.json(json{{"providers", list}}.dump());
+    });
+
     server.route("GET", "/api/config", [&player](const HttpRequest&,
                                                  HttpResponse& res) {
         res.json(config_json(player.config()).dump());

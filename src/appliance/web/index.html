@@ -146,23 +146,26 @@
       <p class="hint">The name the main site broadcasts under, e.g. main-auditorium.</p>
     </div>
     <div class="field">
+      <label for="c-provider">Storage provider</label>
+      <select id="c-provider" name="storage_provider"></select>
+      <p class="hint">Which fields below this needs depends on the provider.</p>
+    </div>
+    <div class="field">
       <label for="c-bucket">Bucket</label>
       <input id="c-bucket" name="bucket" autocomplete="off">
     </div>
-    <div class="field">
+    <div class="field" id="field-account">
       <label for="c-account">Cloudflare R2 account ID</label>
       <input id="c-account" name="r2_account_id" autocomplete="off">
-      <p class="hint">Leave blank if you are giving a full endpoint below instead.</p>
     </div>
-    <div class="field">
+    <div class="field" id="field-endpoint">
       <label for="c-endpoint">Endpoint host</label>
       <input id="c-endpoint" name="endpoint_host" autocomplete="off"
              placeholder="s3.eu-west-2.amazonaws.com">
     </div>
-    <div class="field">
+    <div class="field" id="field-region">
       <label for="c-region">Region</label>
       <input id="c-region" name="region" autocomplete="off">
-      <p class="hint">"auto" for Cloudflare R2; the real region for AWS.</p>
     </div>
     <div class="field">
       <label for="c-key">Access key ID</label>

@@ -1115,9 +1115,11 @@ implementation that happens to work.
 
 ## 8.6 Storage provider selection
 
-**Status: built.** What follows is kept in its original, before-the-fact
-form, with one deviation from it noted where it happens — the reasoning here
-is still the reasoning for why it works the way it does.
+**Status: built — the two OBS docks first, the Raspberry Pi appliance's web
+settings page after an operator noticed it was missing there.** What follows
+is kept in its original, before-the-fact form, with deviations from it noted
+where they happen — the reasoning here is still the reasoning for why it
+works the way it does.
 
 Setting up storage used to mean an operator typing six fields — account ID or
 endpoint, bucket, key, secret, region — into the encoder dock's Storage tab,
@@ -1149,11 +1151,19 @@ only those fields:
   already says of "Direct" credentials generally.
 
 The templates themselves live in one place, `src/core/storage_providers.h/.cpp`
-— read by both docks rather than duplicated in per-dock C++, the same
-"decided in one place" instinct behind `audio_plan.h` and `disk_health.h`
-elsewhere in this codebase, and fully unit-tested with no Qt and no OBS
-(`tests/test_storage_providers.cpp`). **One deviation from the original
-plan here:** this was designed as a bundled `data/providers.json`, editable
+— read by every settings surface that needs them, not duplicated per surface,
+the same "decided in one place" instinct behind `audio_plan.h` and
+`disk_health.h` elsewhere in this codebase, and fully unit-tested with no Qt
+and no OBS (`tests/test_storage_providers.cpp`). That portability is what
+made the appliance's own dropdown a small job once it was noticed missing:
+`src/appliance/api.cpp` derives the same way `onSaveSettings()` does in both
+docks (a new `/api/storage/providers` route lists the choices; `apply_edit()`
+derives `endpoint_host`/`r2_account_id`/`region` from whichever one field the
+operator typed, exactly the OBS logic, just in C++ building JSON instead of
+setting `S3Config` members directly), and `Config` gained the matching
+`storage_provider` field with the identical empty-means-guess-from-
+`detect_provider()` fallback for a config saved before this existed.
+**One deviation from the original plan here:** this was designed as a bundled `data/providers.json`, editable
 without a rebuild, the same way locale strings and web pages are. Built as a
 compiled table instead — these five providers' hostname conventions are a
 technical fact that essentially never changes, not operator-facing content
@@ -1595,15 +1605,17 @@ than deleted.
   (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom / other
   S3-compatible) that shows only the fields each one actually needs and
   derives the rest, instead of six blank fields regardless of where the
-  bucket lives. Built per §8.6, in both docks. `S3Config` itself did not
-  change; this is a UI-layer derivation in front of it
-  (`src/core/storage_providers.h/.cpp`), backward compatible with every saved
-  setup — a configuration saved before this existed reads back as whichever
-  provider its endpoint actually matches, or "Custom" if none does, never
-  misrepresented as something it isn't. Also the seam Phase 12's brokered
-  credentials will slot into later — "Multisite Cloud" is already a greyed-out
-  entry in the same dropdown, not a second settings surface waiting to be
-  built.
+  bucket lives. Built per §8.6, in both OBS docks and — added in a later
+  pass, once its absence there was noticed — the Raspberry Pi appliance's
+  web settings page too. `S3Config` itself did not change; this is a
+  UI-layer derivation in front of it (`src/core/storage_providers.h/.cpp`),
+  read by all three settings surfaces rather than reimplemented per surface,
+  backward compatible with every saved setup — a configuration saved before
+  this existed reads back as whichever provider its endpoint actually
+  matches, or "Custom" if none does, never misrepresented as something it
+  isn't. Also the seam Phase 12's brokered credentials will slot into later —
+  "Multisite Cloud" is already a greyed-out entry in the same dropdown, not a
+  second settings surface waiting to be built.
 
   Depended on nothing else here, and nothing here depends on it.
 

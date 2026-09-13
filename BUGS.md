@@ -141,6 +141,34 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The storage provider dropdown (§8.6, Phase 13) now reaches the Raspberry
+  Pi appliance's web settings page too.** Spotted immediately after the LAN
+  work above landed there: the appliance never got Phase 13 at all — its web
+  page still had the original six raw fields with no provider-aware show/hide,
+  because that phase was scoped to "both docks" back when the appliance had
+  no reason to touch storage config beyond typing it in once. Ported using the
+  exact same `src/core/storage_providers.h/.cpp` table the two OBS docks
+  already read: `Config` gained `storage_provider`; a new
+  `GET /api/storage/providers` route lists the choices (mirrors `/api/outputs`
+  listing hardware choices, rather than folding a static list into
+  `/api/config`); `apply_edit()` derives `endpoint_host`/`r2_account_id`/
+  `region` from whichever one field the operator typed, the identical logic
+  `DecoderDock::onSaveSettings()` runs, just building a `Config` instead of
+  setting `S3Config` members; `config_json()` resolves an empty
+  `storage_provider` via `detect_provider()` the same way `loadIntoFields()`
+  does, so an upgrade never misrepresents an existing AWS/Backblaze/Wasabi/
+  Custom setup as something it isn't. `web/index.html` gained the dropdown
+  and three now-hideable fields; `web/app.js` fetches the provider list once
+  and shows/hides them the same way `updateProviderFields()` does in Qt.
+
+  Verified live against a real `multisite-player` process: fetched the
+  provider list, then round-tripped all three shapes through a real
+  `PUT /api/config` — R2 (account id in, blank endpoint + `region: auto`
+  out), AWS (region in, `s3.eu-west-2.amazonaws.com` derived out, a stale
+  account id from a previous save correctly cleared), and Custom (both raw
+  fields preserved exactly) — all three came back exactly as the OBS docks'
+  own derivation would produce them.
+
 - **LAN / direct delivery and cloud-disable now reach the Raspberry Pi
   appliance too, not just the OBS decoder plugin (PROJECT-SCOPE.md §8.7).**
   Ported the exact wiring from `multisite_source.cpp` and `decoder_settings.h`

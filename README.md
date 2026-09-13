@@ -451,8 +451,10 @@ that are no longer part of this project, and why.</summary>
   blank fields and a hostname convention nobody outside this project has
   memorized. The underlying settings didn't change; this sits in front of
   them, and a setup saved before this existed reads back as whichever
-  provider its endpoint actually matches, or "Custom" if none does. It's
-  also where Phase 12's paired credentials will eventually show up —
+  provider its endpoint actually matches, or "Custom" if none does. Built for
+  both OBS docks first; the Raspberry Pi appliance's web settings page got
+  the identical dropdown in a later pass, reading the same underlying table.
+  It's also where Phase 12's paired credentials will eventually show up —
   "Multisite Cloud" is already a greyed-out entry in the same list, not a
   second settings screen waiting to be built. Built per
   [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection).

@@ -455,6 +455,41 @@ $('#btn-follow-live').onclick = async () => {
 
 /* ── Settings ────────────────────────────────────────────────────────────── */
 
+// Which fields the storage-provider dropdown needs (PROJECT-SCOPE.md §8.6) —
+// fetched once, since the list is static. Keyed by provider key ("r2", "aws",
+// …) for updateProviderFields() below.
+let storageProviders = {};
+
+async function loadStorageProviderChoices() {
+  try {
+    const data = await api('GET', '/api/storage/providers');
+    const sel = $('#c-provider');
+    storageProviders = {};
+    sel.innerHTML = (data.providers || []).map((p) => {
+      storageProviders[p.key] = p;
+      // display_name already carries its own "(coming soon)" where that
+      // applies (see storage_providers.cpp) — just disable the option.
+      return `<option value="${escapeHtml(p.key)}"${p.available ? '' : ' disabled'}>
+                ${escapeHtml(p.display_name)}
+              </option>`;
+    }).join('');
+  } catch (e) {
+    /* An older box with no such endpoint yet. The raw fields still work. */
+  }
+}
+
+// Shows only the fields the selected provider actually needs — an account id
+// for R2, a region for AWS/Backblaze/Wasabi, both endpoint and region for
+// Custom — the same rule the OBS docks apply to the identical dropdown.
+function updateProviderFields() {
+  const key = $('#c-provider').value;
+  const info = storageProviders[key];
+  if (!info) return;
+  $('#field-account').hidden  = !info.needs_account_id;
+  $('#field-endpoint').hidden = !info.needs_endpoint;
+  $('#field-region').hidden   = !info.needs_region;
+}
+
 async function loadSettings() {
   settings = await api('GET', '/api/config');
   const set = (sel, value) => { const el = $(sel); if (el) el.value = value; };
@@ -463,6 +498,9 @@ async function loadSettings() {
   set('#c-account', settings.r2_account_id);
   set('#c-endpoint', settings.endpoint_host);
   set('#c-region', settings.region);
+  await loadStorageProviderChoices();
+  set('#c-provider', settings.storage_provider);
+  updateProviderFields();
   set('#c-key', settings.access_key_id);
   set('#c-secret', settings.secret_access_key);
   set('#c-lan-host', settings.lan_host || '');
@@ -505,6 +543,8 @@ async function loadSettings() {
 $('#c-idle').addEventListener('change', (e) => {
   $('#idle-image-field').hidden = e.target.value !== 'image';
 });
+
+$('#c-provider').addEventListener('change', updateProviderFields);
 
 // The display and sound-card pickers list what the box actually has, so a
 // setting cannot be typed that the hardware will refuse.
@@ -585,6 +625,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
   const mode = ($('#c-mode').value || '0x0x0').split('x').map(Number);
   const body = {
     room_id: $('#c-room').value.trim(),
+    storage_provider: $('#c-provider').value,
     bucket: $('#c-bucket').value.trim(),
     r2_account_id: $('#c-account').value.trim(),
     endpoint_host: $('#c-endpoint').value.trim(),

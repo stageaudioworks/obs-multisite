@@ -72,6 +72,7 @@ bool Config::load(const std::string& path, std::string& error) {
         return false;
     }
 
+    take(j, "storage_provider",     storage_provider);
     take(j, "endpoint_host",        endpoint_host);
     take(j, "r2_account_id",        r2_account_id);
     take(j, "bucket",               bucket);
@@ -133,6 +134,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     error.clear();
 
     json j;
+    j["storage_provider"]     = storage_provider;
     j["endpoint_host"]        = endpoint_host;
     j["r2_account_id"]        = r2_account_id;
     j["bucket"]               = bucket;
