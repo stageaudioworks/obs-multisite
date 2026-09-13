@@ -82,6 +82,9 @@ private slots:
     void onStart();
     void onSaveSettings();
     void onOpenSettings();
+    // Shows only the storage fields the selected provider actually needs
+    // (PROJECT-SCOPE.md §8.6) — the same dropdown as the encoder dock.
+    void updateProviderFields();
     void onPause();
     void onResume();
     void onJumpLive();
@@ -194,6 +197,7 @@ private:
     size_t m_marker_count = 0;
 
     // Machine-wide storage settings, entered once here.
+    QComboBox* m_provider = nullptr;
     QLineEdit* m_accountId = nullptr;
     QLineEdit* m_endpoint = nullptr;
     QLineEdit* m_bucket = nullptr;

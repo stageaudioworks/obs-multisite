@@ -15,6 +15,13 @@
 namespace multisite_obs {
 
 struct DecoderSettings {
+    // Which provider the dock's dropdown is showing (see storage_providers.h)
+    // — "r2", "aws", "backblaze", "wasabi" or "custom". Empty on a config
+    // saved before this existed; the dock then falls back to
+    // detect_provider() against whatever endpoint_host / r2_account_id is
+    // already there, so an upgrade never loses or misrepresents a working
+    // setup.
+    std::string storage_provider;
     std::string endpoint_host;      // blank when using an R2 account id
     std::string r2_account_id;
     std::string bucket;

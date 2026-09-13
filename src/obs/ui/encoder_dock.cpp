@@ -9,6 +9,7 @@
 #include "storage_dialog.h"
 
 #include "../../core/s3_transport.h"
+#include "../../core/storage_providers.h"
 
 #include <obs-module.h>
 
@@ -25,6 +26,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -202,6 +204,18 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     auto* storePageLayout = new QVBoxLayout(storePage);
     auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
+    m_provider  = new QComboBox(storeBox);
+    for (const auto& info : multisite::all_providers()) {
+        m_provider->addItem(QString::fromStdString(info.display_name),
+                            QString::fromStdString(info.key));
+        if (!info.available) {
+            // Multisite Cloud: listed so an operator knows it's coming, not
+            // yet selectable (PROJECT-SCOPE.md §8.5 hasn't been built).
+            if (auto* model = qobject_cast<QStandardItemModel*>(m_provider->model()))
+                if (auto* item = model->item(m_provider->count() - 1))
+                    item->setEnabled(false);
+        }
+    }
     m_accountId = new QLineEdit(storeBox);
     m_endpoint  = new QLineEdit(storeBox);
     m_bucket    = new QLineEdit(storeBox);
@@ -214,6 +228,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // The caveats are a tooltip, not part of the label: as a label they were a
     // single unwrapped line that set the width of the entire dialog.
     m_tags->setToolTip(tr_("SendExpiryTagHint"));
+    form->addRow(tr_("Dock.StorageProvider"), m_provider);
     form->addRow(tr_("R2AccountID"), m_accountId);
     form->addRow(tr_("EndpointHost"), m_endpoint);
     form->addRow(tr_("Bucket"), m_bucket);
@@ -225,6 +240,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     storePageLayout->addWidget(storeBox);
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
+
+    connect(m_provider, &QComboBox::currentIndexChanged,
+            this, &EncoderDock::updateProviderFields);
 
     // ── Media ────────────────────────────────────────────────────────────────
     auto* mediaPage = new QWidget(tabs);
@@ -318,6 +336,8 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         connect(e, &QLineEdit::editingFinished, this,
                 &EncoderDock::onSaveSettings);
     connect(m_tags, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
+    connect(m_provider, &QComboBox::currentIndexChanged, this,
+            [this](int) { onSaveSettings(); });
     connect(m_encoder, &QComboBox::currentIndexChanged, this,
             [this](int) { onSaveSettings(); });
     connect(m_segDur, &QDoubleSpinBox::editingFinished, this,
@@ -362,10 +382,23 @@ void EncoderDock::updateAudioFields() {
     }
 }
 
+void EncoderDock::updateProviderFields() {
+    if (!m_provider) return;
+    auto provider = multisite::provider_from_key(
+        m_provider->currentData().toString().toStdString());
+    const auto& info = multisite::provider_info(provider);
+    if (auto* form = qobject_cast<QFormLayout*>(m_accountId->parentWidget()->layout())) {
+        form->setRowVisible(m_accountId, info.needs_account_id);
+        form->setRowVisible(m_endpoint,  info.needs_endpoint);
+        form->setRowVisible(m_region,    info.needs_region);
+    }
+}
+
 void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
     populateEncoders();        // by now every module has registered its own
     updateAudioFields();       // OBS's audio layout may have changed
+    updateProviderFields();
 
     // Fit the screen it is about to open on, not the one it was built on. The
     // scroll area means everything can be reached, but Qt will still size the
@@ -441,6 +474,19 @@ void EncoderDock::loadIntoFields() {
     cfg.load();
     BroadcastController::instance().set_settings(cfg);
 
+    // An empty storage_provider means this was saved before the provider
+    // dropdown existed (or migrated from one that predates it): fall back to
+    // guessing from the raw fields rather than defaulting blindly to R2, so
+    // an upgrade never misrepresents a working AWS/Backblaze/Wasabi/Custom
+    // setup as something it isn't.
+    auto provider = cfg.storage_provider.empty()
+        ? multisite::detect_provider(cfg.endpoint_host, cfg.r2_account_id)
+        : multisite::provider_from_key(cfg.storage_provider);
+    {
+        const int idx = m_provider->findData(
+            QString::fromStdString(multisite::provider_key(provider)));
+        m_provider->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
     m_accountId->setText(QString::fromStdString(cfg.r2_account_id));
     m_endpoint->setText(QString::fromStdString(cfg.endpoint_host));
     m_bucket->setText(QString::fromStdString(cfg.bucket));
@@ -449,6 +495,7 @@ void EncoderDock::loadIntoFields() {
     m_region->setText(QString::fromStdString(cfg.region));
     m_room->setText(QString::fromStdString(cfg.room_id));
     m_tags->setChecked(cfg.send_expiry_tag);
+    updateProviderFields();
     {
         const int idx = m_encoder->findData(
             QString::fromStdString(cfg.video_encoder_id));
@@ -476,12 +523,28 @@ void EncoderDock::onSaveSettings() {
     // trailing space in a key or bucket produces failures that look nothing
     // like their cause.
     BroadcastSettings cfg;
-    cfg.r2_account_id     = m_accountId->text().trimmed().toStdString();
-    cfg.endpoint_host     = m_endpoint->text().trimmed().toStdString();
+    // The provider decides how the fields the operator actually typed become
+    // S3Config's raw shape (endpoint_host / r2_account_id / region) — see
+    // storage_providers.h. Custom's fields already ARE that shape, unchanged.
+    auto provider = multisite::provider_from_key(
+        m_provider->currentData().toString().toStdString());
+    cfg.storage_provider = multisite::provider_key(provider);
+    if (provider == multisite::StorageProvider::Custom) {
+        cfg.r2_account_id = "";
+        cfg.endpoint_host = m_endpoint->text().trimmed().toStdString();
+        cfg.region        = m_region->text().trimmed().toStdString();
+    } else {
+        const std::string input = provider == multisite::StorageProvider::CloudflareR2
+            ? m_accountId->text().trimmed().toStdString()
+            : m_region->text().trimmed().toStdString();
+        auto derived = multisite::derive(provider, input);
+        cfg.r2_account_id = derived.r2_account_id;
+        cfg.endpoint_host = derived.endpoint_host;
+        cfg.region        = derived.region;
+    }
     cfg.bucket            = m_bucket->text().trimmed().toStdString();
     cfg.access_key_id     = m_keyId->text().trimmed().toStdString();
     cfg.secret_access_key = m_secret->text().trimmed().toStdString();
-    cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_room->text().trimmed().toStdString();
     cfg.send_expiry_tag   = m_tags->isChecked();
     cfg.video_encoder_id   = m_encoder->currentData().toString().toStdString();
@@ -624,7 +687,8 @@ void EncoderDock::setLiveState(bool live) {
     m_end->setEnabled(live);
     for (auto* b : m_markers) b->setEnabled(live);
     // Storage cannot change mid-broadcast.
-    for (QWidget* w : { (QWidget*)m_accountId, (QWidget*)m_endpoint,
+    for (QWidget* w : { (QWidget*)m_provider, (QWidget*)m_accountId,
+                        (QWidget*)m_endpoint,
                         (QWidget*)m_bucket, (QWidget*)m_keyId,
                         (QWidget*)m_secret, (QWidget*)m_region,
                         (QWidget*)m_room, (QWidget*)m_segDur,

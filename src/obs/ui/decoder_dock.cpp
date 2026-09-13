@@ -8,11 +8,13 @@
 #include "web_box.h"
 
 #include "../../core/position_interp.h"
+#include "../../core/storage_providers.h"
 
 #include <obs-module.h>
 
 #include <QComboBox>
 #include <QFormLayout>
+#include <QStandardItemModel>
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QGridLayout>
@@ -497,6 +499,18 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* storePageLayout = new QVBoxLayout(storePage);
     auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
+    m_provider  = new QComboBox(storeBox);
+    for (const auto& info : multisite::all_providers()) {
+        m_provider->addItem(QString::fromStdString(info.display_name),
+                            QString::fromStdString(info.key));
+        if (!info.available) {
+            // Multisite Cloud: listed so an operator knows it's coming, not
+            // yet selectable (PROJECT-SCOPE.md §8.5 hasn't been built).
+            if (auto* model = qobject_cast<QStandardItemModel*>(m_provider->model()))
+                if (auto* item = model->item(m_provider->count() - 1))
+                    item->setEnabled(false);
+        }
+    }
     m_accountId = new QLineEdit(storeBox);
     m_endpoint  = new QLineEdit(storeBox);
     m_bucket    = new QLineEdit(storeBox);
@@ -508,6 +522,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_prebuffer = new QSpinBox(storeBox);
     m_prebuffer->setRange(0, 10);
     m_prebuffer->setToolTip(tr_("Dock.PrebufferHint"));
+    form->addRow(tr_("Dock.StorageProvider"), m_provider);
     form->addRow(tr_("R2AccountID"), m_accountId);
     form->addRow(tr_("EndpointHost"), m_endpoint);
     form->addRow(tr_("Bucket"), m_bucket);
@@ -548,6 +563,16 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
 
     {
         const DecoderSettings cfg = decoder_settings();
+        // Empty storage_provider means this was saved before the provider
+        // dropdown existed: fall back to guessing from the raw fields rather
+        // than defaulting blindly to R2, so an upgrade never misrepresents a
+        // working AWS/Backblaze/Wasabi/Custom setup as something it isn't.
+        auto provider = cfg.storage_provider.empty()
+            ? multisite::detect_provider(cfg.endpoint_host, cfg.r2_account_id)
+            : multisite::provider_from_key(cfg.storage_provider);
+        const int idx = m_provider->findData(
+            QString::fromStdString(multisite::provider_key(provider)));
+        m_provider->setCurrentIndex(idx >= 0 ? idx : 0);
         m_accountId->setText(QString::fromStdString(cfg.r2_account_id));
         m_endpoint->setText(QString::fromStdString(cfg.endpoint_host));
         m_bucket->setText(QString::fromStdString(cfg.bucket));
@@ -558,7 +583,12 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         m_prebuffer->setValue(cfg.prebuffer_segments);
         m_startBufferS->setValue(cfg.start_buffer_seconds);
         m_bufferMins->setValue(cfg.buffer_minutes);
+        updateProviderFields();
     }
+    connect(m_provider, &QComboBox::currentIndexChanged,
+            this, &DecoderDock::updateProviderFields);
+    connect(m_provider, &QComboBox::currentIndexChanged,
+            this, &DecoderDock::onSaveSettings);
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId,
                           m_secret, m_region, m_roomId })
         connect(e, &QLineEdit::editingFinished, this,
@@ -616,16 +646,44 @@ void DecoderDock::onOpenSettings() {
     decoder_reconfigure_all();   // apply straight away
 }
 
+void DecoderDock::updateProviderFields() {
+    if (!m_provider) return;
+    auto provider = multisite::provider_from_key(
+        m_provider->currentData().toString().toStdString());
+    const auto& info = multisite::provider_info(provider);
+    if (auto* form = qobject_cast<QFormLayout*>(m_accountId->parentWidget()->layout())) {
+        form->setRowVisible(m_accountId, info.needs_account_id);
+        form->setRowVisible(m_endpoint,  info.needs_endpoint);
+        form->setRowVisible(m_region,    info.needs_region);
+    }
+}
+
 void DecoderDock::onSaveSettings() {
     // Trimmed: these are pasted from a dashboard, and a stray space produces
     // failures that look nothing like their cause.
     DecoderSettings cfg = decoder_settings();
-    cfg.r2_account_id     = m_accountId->text().trimmed().toStdString();
-    cfg.endpoint_host     = m_endpoint->text().trimmed().toStdString();
+    // The provider decides how the fields the operator actually typed become
+    // the raw shape DecoderSettings shares with S3Config — see
+    // storage_providers.h. Custom's fields already ARE that shape, unchanged.
+    auto provider = multisite::provider_from_key(
+        m_provider->currentData().toString().toStdString());
+    cfg.storage_provider = multisite::provider_key(provider);
+    if (provider == multisite::StorageProvider::Custom) {
+        cfg.r2_account_id = "";
+        cfg.endpoint_host = m_endpoint->text().trimmed().toStdString();
+        cfg.region        = m_region->text().trimmed().toStdString();
+    } else {
+        const std::string input = provider == multisite::StorageProvider::CloudflareR2
+            ? m_accountId->text().trimmed().toStdString()
+            : m_region->text().trimmed().toStdString();
+        auto derived = multisite::derive(provider, input);
+        cfg.r2_account_id = derived.r2_account_id;
+        cfg.endpoint_host = derived.endpoint_host;
+        cfg.region        = derived.region;
+    }
     cfg.bucket            = m_bucket->text().trimmed().toStdString();
     cfg.access_key_id     = m_keyId->text().trimmed().toStdString();
     cfg.secret_access_key = m_secret->text().trimmed().toStdString();
-    cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_roomId->text().trimmed().toStdString();
     cfg.prebuffer_segments = m_prebuffer->value();
     cfg.start_buffer_seconds = m_startBufferS->value();

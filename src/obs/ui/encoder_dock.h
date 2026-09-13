@@ -38,6 +38,10 @@ private slots:
     void onMarker(int index);
     void onManageStorage();
     void updateAudioFields();
+    // Shows only the storage fields the selected provider actually needs
+    // (PROJECT-SCOPE.md §8.6) — an account id for R2, a region for
+    // AWS/Backblaze/Wasabi, both endpoint and region for Custom.
+    void updateProviderFields();
     void refresh();
 
 private:
@@ -54,6 +58,11 @@ private:
     QString defaultEventName() const;
 
     // storage
+    // Which provider's fields are showing. Storage.NotConfigured / S3Config
+    // itself never learns about this choice directly — onSaveSettings()
+    // derives the raw endpoint/region/account-id fields from it before they
+    // ever reach BroadcastSettings. See PROJECT-SCOPE.md §8.6.
+    QComboBox* m_provider = nullptr;
     QLineEdit* m_accountId = nullptr;
     QLineEdit* m_endpoint = nullptr;
     QLineEdit* m_bucket = nullptr;

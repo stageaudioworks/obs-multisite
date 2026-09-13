@@ -141,6 +141,36 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **A storage provider dropdown replaces six blank fields with only the ones
+  each provider actually needs.** Built per `PROJECT-SCOPE.md` §8.6 (Phase
+  13). Choosing Cloudflare R2, AWS S3, Backblaze B2, Wasabi or Custom shows
+  only that provider's fields — an account id for R2, a region for the other
+  three (the hostname is derived from it), both endpoint and region for
+  Custom — instead of an operator having to know which of six fields their
+  provider needs and what shape its hostname convention takes.
+
+  `S3Config` itself did not change: the derivation lives in front of it,
+  entirely in a new `src/core/storage_providers.h/.cpp` (fully unit-tested,
+  no Qt, no OBS — `tests/test_storage_providers.cpp`), used identically by
+  both docks. A configuration saved before this existed reads back as
+  whichever provider its endpoint actually matches (`detect_provider()`), or
+  Custom if none does — never misrepresented as something it isn't. Also the
+  seam Phase 12's brokered "Multisite Cloud" option will slot into later: it
+  is already a greyed-out entry in the same dropdown, not a second settings
+  surface waiting to be built.
+
+  One deliberate deviation from the original design write-up, corrected in
+  place there: the provider table was designed as a bundled
+  `data/providers.json`, editable without a rebuild. Built instead as a
+  compiled table — these five providers' hostname conventions are a
+  technical fact that essentially never changes, not operator-facing content
+  worth the file-loading machinery. See §8.6 for the reasoning.
+
+  Qt-layer wiring (the dropdown itself, show/hide per field, both docks) is
+  unverified locally for the usual reason — no libobs/Qt6 SDK on this
+  machine — but matches the `updateAudioFields()`/`QFormLayout::setRowVisible`
+  pattern already used elsewhere in both docks exactly.
+
 - **Resuming an interrupted event now asks, instead of always deciding
   silently.** Go Live used to call `Session::check_resumable()` and, if it
   found an unfinished event on disk, resume it unconditionally — no prompt,

@@ -445,15 +445,17 @@ that are no longer part of this project, and why.</summary>
   service address is a setting, not a constant — anyone can run their own — and
   nothing contacts anything until an operator asks it to. Designed in
   [PROJECT-SCOPE.md §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
-- **Phase 13 — Storage provider selection.** A dropdown — Cloudflare R2, AWS
-  S3, Backblaze B2, Wasabi, or a custom endpoint — that shows only the fields
-  each provider actually needs and works out the rest, instead of six blank
-  fields and a hostname convention nobody outside this project has
-  memorized. The underlying settings don't change; this sits in front of
-  them, and an existing setup just reads as "Custom". It's also where Phase
-  12's paired credentials will eventually show up, as one more entry in the
-  same list rather than a second settings screen. Designed in
-  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection-planned).
+- **Phase 13 — Storage provider selection.** ✅ A dropdown — Cloudflare R2,
+  AWS S3, Backblaze B2, Wasabi, or a custom endpoint — that shows only the
+  fields each provider actually needs and works out the rest, instead of six
+  blank fields and a hostname convention nobody outside this project has
+  memorized. The underlying settings didn't change; this sits in front of
+  them, and a setup saved before this existed reads back as whichever
+  provider its endpoint actually matches, or "Custom" if none does. It's
+  also where Phase 12's paired credentials will eventually show up —
+  "Multisite Cloud" is already a greyed-out entry in the same list, not a
+  second settings screen waiting to be built. Built per
+  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection).
 - **Phase 14 — LAN / direct delivery.** A satellite on the same network as
   the main site, or reachable over a VPN the church already runs, downloads
   straight from the encoder instead of the bucket — automatically, falling
@@ -464,13 +466,13 @@ that are no longer part of this project, and why.</summary>
   server that already serves its remote-control page. Designed in
   [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery-planned).
 
-Phases 11, 12 and 13 are where the work goes once the plugins are finished.
-Between them they are most of the distance between something a technician
-can deploy and something an ordinary church can — 13 in particular is the
-smaller half of what 12 needs anyway, worth doing first. Phase 14 answers a
-different question, cost and reliability for a campus already on the same
-network, and depends on none of the others. None of the four depends on
-phases 9 or 10.
+Phases 11, 12 and 13 are, between them, most of the distance between
+something a technician can deploy and something an ordinary church can —
+13 is done, was deliberately the smaller half of what 12 needs anyway, and
+"Multisite Cloud" is already sitting in its dropdown greyed out, waiting
+for 12 to make it real. Phase 14 answers a different question, cost and
+reliability for a campus already on the same network, and depends on none
+of the others. None of the four depends on phases 9 or 10.
 
 Three things that used to be on this list are not any more. **The ABR
 transcoder** is no longer part of this project: a rendition ladder exists to

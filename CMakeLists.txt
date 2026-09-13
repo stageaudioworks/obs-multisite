@@ -43,6 +43,7 @@ add_library(multisite_core STATIC
     src/core/link_health.cpp
     src/core/event_catalog.cpp
     src/core/storage_manager.cpp
+    src/core/storage_providers.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
     # remote-control pages. Portable rather than POSIX-only, because a plugin
@@ -160,6 +161,12 @@ add_test(NAME crypto COMMAND test_crypto)
 add_executable(test_storage_health tests/test_storage_health.cpp)
 target_link_libraries(test_storage_health PRIVATE multisite_core)
 add_test(NAME storage_health COMMAND test_storage_health)
+
+# The provider-dropdown derivation both docks use (PROJECT-SCOPE.md §8.6) —
+# pure string arithmetic, kept out of the Qt layer so it's tested without it.
+add_executable(test_storage_providers tests/test_storage_providers.cpp)
+target_link_libraries(test_storage_providers PRIVATE multisite_core)
+add_test(NAME storage_providers COMMAND test_storage_providers)
 
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.

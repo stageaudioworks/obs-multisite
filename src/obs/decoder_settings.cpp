@@ -46,6 +46,7 @@ void DecoderSettings::load() {
     bfree(path);
     if (!d) return;
 
+    storage_provider  = obs_data_get_string(d, "storage_provider");
     endpoint_host     = obs_data_get_string(d, "endpoint_host");
     r2_account_id     = obs_data_get_string(d, "r2_account_id");
     bucket            = obs_data_get_string(d, "bucket");
@@ -73,6 +74,7 @@ void DecoderSettings::save() const {
     if (dir) { os_mkdirs(dir); bfree(dir); }
 
     obs_data_t* d = obs_data_create();
+    obs_data_set_string(d, "storage_provider", storage_provider.c_str());
     obs_data_set_string(d, "endpoint_host", endpoint_host.c_str());
     obs_data_set_string(d, "r2_account_id", r2_account_id.c_str());
     obs_data_set_string(d, "bucket", bucket.c_str());

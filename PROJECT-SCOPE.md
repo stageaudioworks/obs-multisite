@@ -1113,17 +1113,21 @@ implementation that happens to work.
 
 ---
 
-## 8.6 Storage provider selection (planned)
+## 8.6 Storage provider selection
 
-Setting up storage today means an operator typing six fields — account ID or
+**Status: built.** What follows is kept in its original, before-the-fact
+form, with one deviation from it noted where it happens — the reasoning here
+is still the reasoning for why it works the way it does.
+
+Setting up storage used to mean an operator typing six fields — account ID or
 endpoint, bucket, key, secret, region — into the encoder dock's Storage tab,
 having first worked out which of those six their provider actually needs and
 what shape the endpoint hostname has to be in. Cloudflare R2 needs an account
 ID and no region. AWS S3, Backblaze B2 and Wasabi each need a region and
 derive their hostname from it, in three slightly different ways. A church
-volunteer configuring this for the first time has no way to know any of that,
-and the dock currently doesn't either — it shows the same six blank fields
-regardless of where the bucket actually lives.
+volunteer configuring this for the first time had no way to know any of
+that, and the dock didn't tell them either — it showed the same six blank
+fields regardless of where the bucket actually lived.
 
 **A provider dropdown, not a new field shape.** `S3Config` — bucket, key,
 secret, and either an account id or an endpoint host plus region — does not
@@ -1144,16 +1148,24 @@ only those fields:
   not in the list, is a first-class user of this option, exactly as §8.5
   already says of "Direct" credentials generally.
 
-The templates themselves live in one small bundled table
-(`data/providers.json`), read by both docks, rather than in per-dock C++ —
-the same "decided in one place" instinct behind `audio_plan.h` and
-`disk_health.h` elsewhere in this codebase. Adding a provider, or fixing one
-whose hostname convention changes, is a data edit, not new UI code. A
-manifest fetched over the network was considered and rejected for this: it
-would make populating a dropdown depend on connectivity, against this
-project's general reluctance to add network dependencies where none is
-needed — Phase 11's update-check manifest (§10) is the place that pattern
-already belongs, if it's ever needed here too.
+The templates themselves live in one place, `src/core/storage_providers.h/.cpp`
+— read by both docks rather than duplicated in per-dock C++, the same
+"decided in one place" instinct behind `audio_plan.h` and `disk_health.h`
+elsewhere in this codebase, and fully unit-tested with no Qt and no OBS
+(`tests/test_storage_providers.cpp`). **One deviation from the original
+plan here:** this was designed as a bundled `data/providers.json`, editable
+without a rebuild, the same way locale strings and web pages are. Built as a
+compiled table instead — these five providers' hostname conventions are a
+technical fact that essentially never changes, not operator-facing content
+an integrator would want to edit on a live machine, so the file-loading
+machinery (`obs_module_file()` path resolution, one more thing to get wrong
+on three platforms) bought less than it cost. Adding a provider is still a
+small, self-contained change; it just needs a rebuild, the same as any other
+fix in this codebase. A network-fetched manifest was considered too, for the
+same "add a provider without a release" property, and rejected for the same
+reason as the file: this project's general reluctance to add a network
+dependency where none was truly needed. Phase 11's update-check manifest
+(§10) is the place that pattern already belongs, if it's ever needed here.
 
 **Where "Multisite Cloud" fits.** §8.5 already frames the future brokered
 option as a second producer of the same `S3Config` — "two providers, one
@@ -1279,7 +1291,7 @@ is the better answer for a given church, section 12 says so plainly.
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
 | Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
-| Choosing a storage provider from a list instead of typing raw endpoint fields | planned (§8.6, §10 Phase 13) |
+| Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | planned (§8.7, §10 Phase 14) |
 
 Further directions to explore: web/mobile simulcast served directly from the
@@ -1299,18 +1311,20 @@ paths — is a separate Stage Audio Works product line now, not built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phases 9–14 have not been started.
+event. Phase 13 is built. Phases 9, 10, 12 and 14 have not been started.
 
-**Phases 11, 12 and 13 carry weight now.** Between them they are most of the
-distance between a project a technician can deploy and one an ordinary
-church can — knowing a new build exists and installing it without a manual
-reinstall, connecting a bucket without minting a token by hand, and choosing
-a provider from a list rather than typing a hostname convention nobody
-outside this project has memorized. 13 is deliberately the smaller half of
-what 12 needs anyway, worth doing first. Phase 14 answers a different
-question — cost and reliability for a campus already on the same network or
-VPN as the main site — and depends on none of the others. None of the four
-depends on 9 or 10, and all were written as late phases when the list
+**Phases 11, 12 and 13 carry weight together.** Between them they are most
+of the distance between a project a technician can deploy and one an
+ordinary church can — knowing a new build exists and installing it without a
+manual reinstall, connecting a bucket without minting a token by hand, and
+choosing a provider from a list rather than typing a hostname convention
+nobody outside this project has memorized. 13 was deliberately the smaller
+half of what 12 needs anyway, and is done first for that reason — "Multisite
+Cloud" is already sitting in the dropdown, greyed out, waiting for 12 to make
+it real. Phase 14 answers a different question — cost and reliability for a
+campus already on the same network or VPN as the main site — and depends on
+none of the others. None of the four depends on 9 or 10, and all were
+written as late phases when the list
 assumed the hardest problem was features rather than deployment.
 
 This project's scope is now the OBS plugin pair and the Raspberry Pi
@@ -1484,19 +1498,21 @@ than deleted.
   Depends on nothing else here. Along with Phase 11, the most useful work
   available once the plugins are finished.
 
-- **Phase 13 — Storage provider selection.** ⬜ A provider dropdown
+- **Phase 13 — Storage provider selection.** ✅ A provider dropdown
   (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom / other
   S3-compatible) that shows only the fields each one actually needs and
   derives the rest, instead of six blank fields regardless of where the
-  bucket lives. Designed in §8.6. `S3Config` itself does not change; this is
-  a UI-layer derivation in front of it, backward compatible with every saved
-  setup today (an existing configuration reads as "Custom"). Also the seam
-  Phase 12's brokered credentials slot into later — "Multisite Cloud" becomes
-  one more entry in the same dropdown rather than a second settings surface.
+  bucket lives. Built per §8.6, in both docks. `S3Config` itself did not
+  change; this is a UI-layer derivation in front of it
+  (`src/core/storage_providers.h/.cpp`), backward compatible with every saved
+  setup — a configuration saved before this existed reads back as whichever
+  provider its endpoint actually matches, or "Custom" if none does, never
+  misrepresented as something it isn't. Also the seam Phase 12's brokered
+  credentials will slot into later — "Multisite Cloud" is already a greyed-out
+  entry in the same dropdown, not a second settings surface waiting to be
+  built.
 
-  Depends on nothing else here, and nothing here depends on it. Worth
-  building before Phase 12 specifically, since it's the smaller piece of the
-  same seam and makes the larger one easier to place.
+  Depended on nothing else here, and nothing here depends on it.
 
 - **Phase 14 — LAN / direct delivery.** ⬜ A satellite on the same network as
   the main site, or reachable over a VPN the church already runs, downloads
