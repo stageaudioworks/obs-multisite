@@ -8,6 +8,7 @@
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
 #include "../plugin_role.h"
+#include "core/storage_providers.h"
 
 #include <obs-module.h>
 
@@ -15,6 +16,12 @@
 #include <string>
 
 namespace multisite_obs {
+
+using multisite::StorageProvider;
+using multisite::provider_key;
+using multisite::provider_from_key;
+using multisite::detect_provider;
+using multisite::derive;
 
 namespace {
 
@@ -47,11 +54,38 @@ std::string default_event_name() {
 // live here rather than in the caller: a mistyped figure must not be able to
 // make broadcasting impossible from the very interface being used to fix it.
 void apply_encoder_settings(const json& j, BroadcastSettings& s) {
-    json_str(j, "endpoint_host",    s.endpoint_host);
-    json_str(j, "r2_account_id",    s.r2_account_id);
+    // The provider decides how the one field the operator actually typed
+    // becomes endpoint_host/r2_account_id/region — see storage_providers.h.
+    // Custom's fields already ARE that shape, unchanged. Applied only when
+    // the page sent a provider; an older or hand-built client that only
+    // sends the raw fields leaves the stored provider untouched and edits
+    // them directly, as before this dropdown existed.
+    std::string provider_str;
+    if (json_str(j, "storage_provider", provider_str)) {
+        const StorageProvider provider = provider_from_key(provider_str);
+        s.storage_provider = provider_key(provider);
+        if (provider == StorageProvider::Custom) {
+            json_str(j, "endpoint_host", s.endpoint_host);
+            json_str(j, "region",        s.region);
+            s.r2_account_id.clear();
+        } else {
+            std::string input;
+            if (provider == StorageProvider::CloudflareR2)
+                json_str(j, "r2_account_id", input);
+            else
+                json_str(j, "region", input);
+            const auto derived = derive(provider, input);
+            s.endpoint_host = derived.endpoint_host;
+            s.r2_account_id = derived.r2_account_id;
+            s.region        = derived.region;
+        }
+    } else {
+        json_str(j, "endpoint_host", s.endpoint_host);
+        json_str(j, "r2_account_id", s.r2_account_id);
+        json_str(j, "region",        s.region);
+    }
     json_str(j, "bucket",           s.bucket);
     json_str(j, "access_key_id",    s.access_key_id);
-    json_str(j, "region",           s.region);
     json_str(j, "room_id",          s.room_id);
     json_str(j, "video_encoder_id", s.video_encoder_id);
     json_str(j, "track_labels",     s.track_labels);
@@ -62,6 +96,22 @@ void apply_encoder_settings(const json& j, BroadcastSettings& s) {
     std::string secret;
     if (json_str(j, "secret_access_key", secret) && secret != kSecretPlaceholder)
         s.secret_access_key = secret;
+
+    // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — the same fields the
+    // dock's LAN group exposes.
+    json_bool(j, "lan_enabled", s.lan_enabled);
+    int lan_port;
+    if (json_int(j, "lan_port", lan_port)) s.lan_port = lan_port;
+    if (s.lan_port < 1 || s.lan_port > 65535) s.lan_port = 9080;
+    std::string lan_token;
+    if (json_str(j, "lan_auth_token", lan_token) && lan_token != kSecretPlaceholder)
+        s.lan_auth_token = lan_token;
+    json_bool(j, "cloud_enabled", s.cloud_enabled);
+    // Cloud off with LAN also off would deliver this event nowhere at all —
+    // the dock's own safety net (encoder_dock.cpp's updateLanFields())
+    // applies the identical rule when LAN is switched off with cloud
+    // already disabled.
+    if (!s.lan_enabled && !s.cloud_enabled) s.cloud_enabled = true;
 
     double d;
     if (json_num(j, "segment_duration_s", d)) s.segment_duration_s = d;
@@ -85,16 +135,49 @@ void apply_encoder_settings(const json& j, BroadcastSettings& s) {
 // Guard rails rather than trust: a figure typed on a phone in a dark room must
 // not be able to stop this campus playing, from the page being used to fix it.
 void apply_decoder_settings(const json& j, DecoderSettings& s) {
-    json_str(j, "endpoint_host", s.endpoint_host);
-    json_str(j, "r2_account_id", s.r2_account_id);
+    // See apply_encoder_settings() above — identical provider-aware handling
+    // against the identical table (storage_providers.h).
+    std::string provider_str;
+    if (json_str(j, "storage_provider", provider_str)) {
+        const StorageProvider provider = provider_from_key(provider_str);
+        s.storage_provider = provider_key(provider);
+        if (provider == StorageProvider::Custom) {
+            json_str(j, "endpoint_host", s.endpoint_host);
+            json_str(j, "region",        s.region);
+            s.r2_account_id.clear();
+        } else {
+            std::string input;
+            if (provider == StorageProvider::CloudflareR2)
+                json_str(j, "r2_account_id", input);
+            else
+                json_str(j, "region", input);
+            const auto derived = derive(provider, input);
+            s.endpoint_host = derived.endpoint_host;
+            s.r2_account_id = derived.r2_account_id;
+            s.region        = derived.region;
+        }
+    } else {
+        json_str(j, "endpoint_host", s.endpoint_host);
+        json_str(j, "r2_account_id", s.r2_account_id);
+        json_str(j, "region",        s.region);
+    }
     json_str(j, "bucket",        s.bucket);
     json_str(j, "access_key_id", s.access_key_id);
-    json_str(j, "region",        s.region);
     json_str(j, "room_id",       s.room_id);
 
     std::string secret;
     if (json_str(j, "secret_access_key", secret) && secret != kSecretPlaceholder)
         s.secret_access_key = secret;
+
+    // LAN / direct delivery — read straight from the encoder's LanObjectServer
+    // instead of the bucket, LAN-preferred with cloud fallback, or LAN alone.
+    json_str(j, "lan_host", s.lan_host);
+    int lan_port;
+    if (json_int(j, "lan_port", lan_port)) s.lan_port = lan_port;
+    if (s.lan_port < 1 || s.lan_port > 65535) s.lan_port = 9080;
+    std::string lan_token;
+    if (json_str(j, "lan_auth_token", lan_token) && lan_token != kSecretPlaceholder)
+        s.lan_auth_token = lan_token;
 
     int n;
     if (json_int(j, "prebuffer_segments", n))   s.prebuffer_segments = n;
@@ -170,6 +253,14 @@ std::string encoder_settings_json() {
         BroadcastController::instance().settings_copy();
 
     json j;
+    // Empty means this was saved before the dropdown existed (or hand-edited):
+    // fall back to guessing from the raw fields, the same rule the dock's own
+    // loadIntoFields() applies, so an upgrade never misrepresents an existing
+    // AWS/Backblaze/Wasabi/Custom setup as something it isn't.
+    const StorageProvider provider = s.storage_provider.empty()
+        ? detect_provider(s.endpoint_host, s.r2_account_id)
+        : provider_from_key(s.storage_provider);
+    j["storage_provider"] = provider_key(provider);
     j["endpoint_host"] = s.endpoint_host;
     j["r2_account_id"] = s.r2_account_id;
     j["bucket"]        = s.bucket;
@@ -191,6 +282,14 @@ std::string encoder_settings_json() {
     j["track_labels"]       = s.track_labels;
     j["channel_labels"]     = s.channel_labels;
     j["marker_labels"]      = s.marker_labels;
+
+    j["lan_enabled"] = s.lan_enabled;
+    j["lan_port"]    = s.lan_port;
+    // Same placeholder convention as the bucket secret above.
+    j["lan_auth_token"] = s.lan_auth_token.empty()
+                              ? std::string()
+                              : std::string(kSecretPlaceholder);
+    j["cloud_enabled"] = s.cloud_enabled;
 
     // The encoders this machine actually has, so a page offers the same list
     // the dock does rather than a text field to mistype an id into.
@@ -318,6 +417,10 @@ std::string decoder_settings_json() {
     const DecoderSettings& s = decoder_settings();
 
     json j;
+    const StorageProvider provider = s.storage_provider.empty()
+        ? detect_provider(s.endpoint_host, s.r2_account_id)
+        : provider_from_key(s.storage_provider);
+    j["storage_provider"] = provider_key(provider);
     j["endpoint_host"] = s.endpoint_host;
     j["r2_account_id"] = s.r2_account_id;
     j["bucket"]        = s.bucket;
@@ -333,6 +436,12 @@ std::string decoder_settings_json() {
     j["poll_interval_ms"]     = s.poll_interval_ms;
     j["keep_behind_segments"] = s.keep_behind_segments;
     j["buffer_minutes"]       = s.buffer_minutes;
+
+    j["lan_host"] = s.lan_host;
+    j["lan_port"] = s.lan_port;
+    j["lan_auth_token"] = s.lan_auth_token.empty()
+                              ? std::string()
+                              : std::string(kSecretPlaceholder);
     return j.dump();
 }
 

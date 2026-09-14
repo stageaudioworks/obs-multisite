@@ -63,15 +63,21 @@
 <section id="tab-settings" class="panel">
   <form id="settings-form">
 
-    <h2>Where the event is stored</h2>
+    <details class="settings-section" open>
+    <summary>Where the event is stored</summary>
     <div class="field">
+      <label for="s-provider">Storage provider</label>
+      <select id="s-provider" name="storage_provider"></select>
+      <p class="hint">Which fields below this needs depends on the provider.</p>
+    </div>
+    <div class="field" id="field-account">
       <label for="s-account">Cloudflare R2 account id</label>
       <input id="s-account" name="r2_account_id" type="text" spellcheck="false">
-      <p class="hint">Either this, or an endpoint host below.</p>
     </div>
-    <div class="field">
+    <div class="field" id="field-endpoint">
       <label for="s-endpoint">Endpoint host</label>
-      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false">
+      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false"
+             placeholder="s3.eu-west-2.amazonaws.com">
       <p class="hint">For S3, Backblaze, Wasabi, or a MinIO box in the building.</p>
     </div>
     <div class="field">
@@ -90,7 +96,7 @@
         a phone on a church network is not somewhere to read a secret out.
       </p>
     </div>
-    <div class="field">
+    <div class="field" id="field-region">
       <label for="s-region">Region</label>
       <input id="s-region" name="region" type="text" spellcheck="false">
       <p class="hint">auto unless the store insists on one.</p>
@@ -107,8 +113,50 @@
         <option value="true">Yes — the store has a lifecycle rule that reads them</option>
       </select>
     </div>
+    <div class="field">
+      <label class="check">
+        <input id="s-cloud-off" name="cloud_enabled_off" type="checkbox">
+        Disable cloud storage (LAN only)
+      </label>
+      <p class="hint">
+        Cloud storage is how every satellite and the archival recording
+        normally receive this event, and stays on by default. Check this
+        only if you want everything to stay on this network — nothing will
+        leave this machine, and there is no cloud copy to fall back on if a
+        satellite can't reach it over LAN.
+      </p>
+    </div>
+    </details>
 
-    <h2>What is sent</h2>
+    <details class="settings-section">
+    <summary>LAN / direct delivery</summary>
+    <div class="field">
+      <label class="check">
+        <input id="s-lan-on" name="lan_enabled" type="checkbox">
+        Serve satellites directly over LAN
+      </label>
+      <p class="hint">
+        A satellite on this network, or reachable over an existing VPN, can
+        download straight from this machine instead of the bucket — faster,
+        and free. Cloud upload keeps running as normal unless disabled above.
+      </p>
+    </div>
+    <div class="field">
+      <label for="s-lan-port">LAN port</label>
+      <input id="s-lan-port" name="lan_port" type="number" min="1" max="65535">
+    </div>
+    <div class="field">
+      <label for="s-lan-token">Shared token (optional)</label>
+      <input id="s-lan-token" name="lan_auth_token" type="password" spellcheck="false">
+      <p class="hint">
+        Leave blank on a plain building network. Set one if this path
+        crosses a VPN — it must match the token entered on each satellite.
+      </p>
+    </div>
+    </details>
+
+    <details class="settings-section">
+    <summary>What is sent</summary>
     <div class="field">
       <label for="s-encoder">Video encoder</label>
       <select id="s-encoder" name="video_encoder_id"></select>
@@ -147,6 +195,7 @@
       <input id="s-markerlabels" name="marker_labels" type="text">
       <p class="hint">Comma-separated, four at most. These are the buttons above.</p>
     </div>
+    </details>
 
     <div class="row sticky-save">
       <button type="submit" class="big go">Save settings</button>

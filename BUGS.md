@@ -154,6 +154,44 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The OBS plugin's own remote-control pages (§8.4) now match the "standard"
+  every other web surface in this project had already converged on** —
+  collapsible `<details>`/`<summary>` settings sections, the storage
+  provider dropdown (§8.6), and the encoder's LAN/cloud-disable settings
+  (§8.7). Both `data/web/encoder/` and `data/web/decoder/` had none of the
+  three: they still had the original six raw storage fields with no
+  provider-aware show/hide, no collapsible sections at all, and — since
+  these pages predate LAN delivery entirely — no `lan_host`/`lan_port`/
+  `lan_auth_token` fields and no way to disable cloud storage, even though
+  `BroadcastSettings` and `DecoderSettings` have carried those fields for a
+  while now. `src/obs/web/commands.cpp`'s `apply_encoder_settings()` and
+  `apply_decoder_settings()` gained the identical provider-derivation block
+  the appliance's and the relay's `apply_edit()` already run (same
+  `storage_providers.h` table, same "only act on it if the page actually
+  sent one" fallback for an older client); `encoder_settings_json()` and
+  `decoder_settings_json()` resolve an empty `storage_provider` via
+  `detect_provider()` the same way. A `GET /api/storage/providers` route
+  lives in `web_ui.cpp`, registered once outside the encoder/decoder role
+  split since the list itself is role-agnostic — registering it inside both
+  `register_encoder_api()`/`register_decoder_api()` would double-register it
+  on a machine running both.
+
+  The "disable cloud storage" checkbox is the one field that could not go
+  through the generic name-matched load/save loop both pages already used:
+  it reads "disable", the setting reads "enable", so it is the one name
+  (`cloud_enabled_off`) excluded from that loop and translated by hand in
+  both directions, with the confirmation dialog firing on check rather than
+  on Save — same wording as the dock's, same "cloud off with LAN also off"
+  safety net applied server-side in `apply_encoder_settings()`.
+
+  Verified by building the real plugin (`obs-multisite.plugin`) against a
+  full OBS Studio checkout and confirming the settings JSON compiles/loads
+  correctly, and by serving the actual `data/web/encoder`/`decoder` pages
+  statically to check the collapsible sections, the provider dropdown's
+  hide/show, and the LAN section all render as designed — no live OBS
+  instance was driven end-to-end this pass, so the settings round-trip
+  through a running plugin is still unverified.
+
 - **LAN delivery, cloud-disable and the storage provider dropdown now reach
   the simulcast relay too** — the same three §8.6/§8.7 capabilities already
   built for the OBS decoder and the Raspberry Pi appliance, ported to

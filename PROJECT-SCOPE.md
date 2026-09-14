@@ -1117,7 +1117,10 @@ implementation that happens to work.
 ## 8.6 Storage provider selection
 
 **Status: built — the two OBS docks first, the Raspberry Pi appliance's web
-settings page after an operator noticed it was missing there.** What follows
+settings page after an operator noticed it was missing there, the simulcast
+relay's alongside its own LAN work, and the OBS plugin's own remote-control
+pages last of all (§8.4) — an operator on a phone had exactly the six raw
+fields the docks left behind years ago.** What follows
 is kept in its original, before-the-fact form, with deviations from it noted
 where they happen — the reasoning here is still the reasoning for why it
 works the way it does.
@@ -1650,12 +1653,12 @@ than deleted.
   S3-compatible) that shows only the fields each one actually needs and
   derives the rest, instead of six blank fields regardless of where the
   bucket lives. Built per §8.6, in both OBS docks and — added in later
-  passes, once its absence there was noticed — the Raspberry Pi appliance's
-  and the simulcast relay's web settings pages too. `S3Config` itself did
-  not change; this is a UI-layer derivation in front of it
-  (`src/core/storage_providers.h/.cpp`), read by all four settings surfaces
-  rather than reimplemented per surface, backward compatible with every
-  saved setup — a configuration saved before
+  passes, once its absence there was noticed — the Raspberry Pi appliance's,
+  the simulcast relay's and the OBS plugin's own remote-control pages too.
+  `S3Config` itself did not change; this is a UI-layer derivation in front
+  of it (`src/core/storage_providers.h/.cpp`), read by all five settings
+  surfaces rather than reimplemented per surface, backward compatible with
+  every saved setup — a configuration saved before
   this existed reads back as whichever provider its endpoint actually
   matches, or "Custom" if none does, never misrepresented as something it
   isn't. Also the seam Phase 12's brokered credentials will slot into later —

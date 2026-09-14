@@ -8,6 +8,7 @@
 #include "../plugin_role.h"
 
 #include "core/http_server.h"
+#include "core/storage_providers.h"
 #include "vendor/nlohmann/json.hpp"
 
 #include <obs-module.h>
@@ -247,6 +248,24 @@ void start_web_ui() {
         route_file(*server, "/", "web/index.html");
 
     // ── Shared by both pages ────────────────────────────────────────────────
+    // Static and role-agnostic, so it is registered exactly once regardless
+    // of which page(s) this machine serves — the encoder and decoder
+    // settings pages both read the identical list for the identical
+    // dropdown (see storage_providers.h).
+    server->route("GET", "/api/storage/providers",
+                 [](const HttpRequest&, HttpResponse& res) {
+        json list = json::array();
+        for (const auto& info : multisite::all_providers()) {
+            list.push_back(json{{"key", info.key},
+                                {"display_name", info.display_name},
+                                {"needs_account_id", info.needs_account_id},
+                                {"needs_region", info.needs_region},
+                                {"needs_endpoint", info.needs_endpoint},
+                                {"available", info.available}});
+        }
+        res.json(json{{"providers", list}}.dump());
+    });
+
     // An operator with a phone and no access to the desk should still be able
     // to see why nothing is happening.
     server->route("GET", "/api/log", [](const HttpRequest& req,

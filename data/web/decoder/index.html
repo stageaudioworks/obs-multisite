@@ -101,17 +101,24 @@
 <section id="tab-settings" class="panel">
   <form id="settings-form">
 
-    <h2>Where the event is stored</h2>
+    <details class="settings-section" open>
+    <summary>Where the event is stored</summary>
     <p class="hint">
       Set once on this machine and shared by everything that plays here.
     </p>
     <div class="field">
+      <label for="s-provider">Storage provider</label>
+      <select id="s-provider" name="storage_provider"></select>
+      <p class="hint">Which fields below this needs depends on the provider.</p>
+    </div>
+    <div class="field" id="field-account">
       <label for="s-account">Cloudflare R2 account id</label>
       <input id="s-account" name="r2_account_id" type="text" spellcheck="false">
     </div>
-    <div class="field">
+    <div class="field" id="field-endpoint">
       <label for="s-endpoint">Endpoint host</label>
-      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false">
+      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false"
+             placeholder="s3.eu-west-2.amazonaws.com">
     </div>
     <div class="field">
       <label for="s-bucket">Bucket</label>
@@ -126,7 +133,7 @@
       <input id="s-secret" name="secret_access_key" type="password" spellcheck="false">
       <p class="hint">Left as the dots, it is not changed.</p>
     </div>
-    <div class="field">
+    <div class="field" id="field-region">
       <label for="s-region">Region</label>
       <input id="s-region" name="region" type="text" spellcheck="false">
     </div>
@@ -135,8 +142,39 @@
       <input id="s-room" name="room_id" type="text" spellcheck="false">
       <p class="hint">Which building to receive. The main site names it when it sends.</p>
     </div>
+    </details>
 
-    <h2>How far ahead to keep</h2>
+    <details class="settings-section">
+    <summary>LAN / direct delivery</summary>
+    <div class="field">
+      <label for="s-lan-host">Encoder LAN host</label>
+      <input id="s-lan-host" name="lan_host" type="text" spellcheck="false"
+             placeholder="192.168.1.50 or a .local name">
+      <p class="hint">
+        If the encoder is on this same network or an existing VPN, this box
+        can download from it directly instead of from the bucket — faster,
+        and free. Leave blank to use cloud storage only. Set alongside the
+        cloud settings above for automatic LAN-preferred, cloud-fallback
+        delivery, or on its own with those left blank for a LAN-only box
+        that never touches the bucket at all.
+      </p>
+    </div>
+    <div class="field">
+      <label for="s-lan-port">LAN port</label>
+      <input id="s-lan-port" name="lan_port" type="number" min="1" max="65535">
+    </div>
+    <div class="field">
+      <label for="s-lan-token">Shared token (optional)</label>
+      <input id="s-lan-token" name="lan_auth_token" type="password" spellcheck="false">
+      <p class="hint">
+        Leave blank on a plain building network. Set one if this path
+        crosses a VPN — it must match the token entered on the encoder.
+      </p>
+    </div>
+    </details>
+
+    <details class="settings-section">
+    <summary>How far ahead to keep</summary>
     <div class="field">
       <label for="s-startbuffer">Bank this many seconds before going to air</label>
       <input id="s-startbuffer" name="start_buffer_seconds" type="number" min="0" max="600">
@@ -162,6 +200,7 @@
       <input id="s-keepbehind" name="keep_behind_segments" type="number" min="10" max="2000">
       <p class="hint">What can still be rewound into.</p>
     </div>
+    </details>
 
     <div class="row sticky-save">
       <button type="submit" class="big go">Save settings</button>

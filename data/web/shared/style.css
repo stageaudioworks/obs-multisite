@@ -330,6 +330,31 @@ input[type="number"] { width: 6.5rem; }
 .field { margin: 14px 0; }
 .field label { display: block; color: var(--muted); margin-bottom: 6px; }
 .field input, .field select { width: 100%; }
+.field label.check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.field label.check input { width: auto; margin: 0; }
+
+/* Collapsible settings sections — the same <details>/<summary> pattern
+   already used for Preview above, so a triangle already means "expand this"
+   everywhere on the page before it means anything here. The form is long
+   enough on a phone that finding one field meant scrolling past a dozen
+   others. */
+details.settings-section > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 28px 0 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+details.settings-section[open] > summary { margin-bottom: 10px; }
 .sticky-save {
   position: sticky;
   bottom: 0;

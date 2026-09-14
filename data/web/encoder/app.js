@@ -233,6 +233,70 @@ $('#lock').onclick = async () => {
 
 const SECRET_PLACEHOLDER = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
 
+// Fields the generic load/save loop below must not touch itself: each is
+// either populated from its own endpoint (the encoder list, the provider
+// list) or carries the opposite sense of the setting it represents (the
+// "disable cloud" checkbox against `cloud_enabled`).
+const SETTINGS_SPECIAL = new Set([
+  'video_encoder_id', 'storage_provider', 'cloud_enabled_off',
+]);
+
+// Which fields the storage-provider dropdown needs (PROJECT-SCOPE.md section
+// 8.6) \u2014 fetched once, since the list is static. Keyed by provider key
+// ("r2", "aws", \u2026) for updateProviderFields() below \u2014 identical to the
+// appliance's and the relay's copy of this same logic.
+let storageProviders = {};
+
+async function loadStorageProviderChoices() {
+  try {
+    const data = await api('GET', '/api/storage/providers');
+    const sel = $('#s-provider');
+    const keep = sel.value;
+    storageProviders = {};
+    sel.textContent = '';
+    (data.providers || []).forEach((p) => {
+      storageProviders[p.key] = p;
+      const o = document.createElement('option');
+      o.value = p.key;
+      // display_name already carries its own "(coming soon)" where that
+      // applies (see storage_providers.cpp) \u2014 just disable the option.
+      o.textContent = p.display_name;
+      o.disabled = !p.available;
+      sel.appendChild(o);
+    });
+    if (keep) sel.value = keep;
+  } catch (e) {
+    /* An older build with no such endpoint yet. The raw fields still work. */
+  }
+}
+
+// Shows only the fields the selected provider actually needs \u2014 an account id
+// for R2, a region for AWS/Backblaze/Wasabi, both endpoint and region for
+// Custom \u2014 the same rule the Qt docks, the appliance and the relay apply to
+// the identical dropdown.
+function updateProviderFields() {
+  const info = storageProviders[$('#s-provider').value];
+  if (!info) return;
+  $('#field-account').hidden  = !info.needs_account_id;
+  $('#field-endpoint').hidden = !info.needs_endpoint;
+  $('#field-region').hidden   = !info.needs_region;
+}
+$('#s-provider').addEventListener('change', updateProviderFields);
+
+// Disabling cloud storage means this event has nowhere else to go if a
+// satellite can't reach this machine over LAN \u2014 the same confirmation the
+// dock asks before applying it. Checking the box asks immediately, rather
+// than waiting for Save, so a change of mind costs nothing: the box simply
+// reverts.
+$('#s-cloud-off').addEventListener('change', (ev) => {
+  if (!ev.target.checked) return;
+  const ok = confirm(
+    "Stop uploading to cloud storage? Nothing from this event will leave " +
+    "this machine, and satellites that can't reach it over LAN will have " +
+    'no cloud copy to fall back on.');
+  if (!ok) ev.target.checked = false;
+});
+
 async function loadSettings() {
   try {
     const s = await api('GET', '/api/encoder/settings');
@@ -250,9 +314,17 @@ async function loadSettings() {
     });
     sel.value = keep;
 
+    await loadStorageProviderChoices();
+    $('#s-provider').value = s.storage_provider || 'custom';
+    updateProviderFields();
+    // The checkbox reads "disable", the setting reads "enable" \u2014 opposite
+    // senses of the same fact, so this is the one field the generic loop
+    // below must not assign directly.
+    $('#s-cloud-off').checked = s.cloud_enabled === false;
+
     const f = $('#settings-form');
     for (const el of f.elements) {
-      if (!el.name || el.name === 'video_encoder_id') continue;
+      if (!el.name || SETTINGS_SPECIAL.has(el.name)) continue;
       const v = s[el.name];
       if (v === undefined) continue;
       if (el.type === 'checkbox') el.checked = !!v;
@@ -271,7 +343,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
 
   const out = {};
   for (const el of ev.target.elements) {
-    if (!el.name) continue;
+    if (!el.name || el.name === 'cloud_enabled_off') continue;
     if (el.type === 'checkbox') { out[el.name] = el.checked; continue; }
     if (el.type === 'number') {
       const n = Number(el.value);
@@ -280,8 +352,10 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     }
     out[el.name] = el.value.trim();
   }
+  out.cloud_enabled = !$('#s-cloud-off').checked;
   // The dots mean "unchanged", so they are never posted back as a secret.
   if (out.secret_access_key === SECRET_PLACEHOLDER) delete out.secret_access_key;
+  if (out.lan_auth_token === SECRET_PLACEHOLDER) delete out.lan_auth_token;
 
   try {
     await api('POST', '/api/encoder/settings', out);

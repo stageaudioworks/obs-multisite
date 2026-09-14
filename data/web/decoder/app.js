@@ -502,12 +502,53 @@ $('#btn-events-refresh').onclick = async () => {
 
 const SECRET_PLACEHOLDER = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
 
+// Which fields the storage-provider dropdown needs (PROJECT-SCOPE.md section
+// 8.6) — fetched once, since the list is static. Keyed by provider key
+// ("r2", "aws", …) for updateProviderFields() below — identical to the
+// appliance's, the relay's and the encoder page's copy of this same logic.
+let storageProviders = {};
+
+async function loadStorageProviderChoices() {
+  try {
+    const data = await api('GET', '/api/storage/providers');
+    const sel = $('#s-provider');
+    const keep = sel.value;
+    storageProviders = {};
+    sel.textContent = '';
+    (data.providers || []).forEach((p) => {
+      storageProviders[p.key] = p;
+      const o = document.createElement('option');
+      o.value = p.key;
+      o.textContent = p.display_name;
+      o.disabled = !p.available;
+      sel.appendChild(o);
+    });
+    if (keep) sel.value = keep;
+  } catch (e) {
+    /* An older build with no such endpoint yet. The raw fields still work. */
+  }
+}
+
+function updateProviderFields() {
+  const info = storageProviders[$('#s-provider').value];
+  if (!info) return;
+  $('#field-account').hidden  = !info.needs_account_id;
+  $('#field-endpoint').hidden = !info.needs_endpoint;
+  $('#field-region').hidden   = !info.needs_region;
+}
+$('#s-provider').addEventListener('change', updateProviderFields);
+
 async function loadSettings() {
   try {
     const s = await api('GET', '/api/decoder/settings');
+
+    await loadStorageProviderChoices();
+    $('#s-provider').value = s.storage_provider || 'custom';
+    updateProviderFields();
+
     const f = $('#settings-form');
     for (const el of f.elements) {
-      if (!el.name) continue;
+      if (!el.name || el.name === 'storage_provider') continue;
       const v = s[el.name];
       if (v === undefined) continue;
       el.value = v;
@@ -535,6 +576,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
   }
   // The dots mean "unchanged", so they are never posted back as a secret.
   if (out.secret_access_key === SECRET_PLACEHOLDER) delete out.secret_access_key;
+  if (out.lan_auth_token === SECRET_PLACEHOLDER) delete out.lan_auth_token;
 
   try {
     await api('POST', '/api/decoder/settings', out);
