@@ -5,7 +5,7 @@ each entry has enough context to act on without anyone having been in the
 room when it was written. Delete an entry once it's fixed and released;
 this file is not a changelog.
 
-Last updated: 2026-09-12.
+Last updated: 2026-09-14.
 
 ---
 
@@ -140,6 +140,56 @@ is for the rest of what the daemon can do.
 which is point 2 above.
 
 ## Recently landed (context, not action items)
+
+- **LAN delivery, cloud-disable and the storage provider dropdown now reach
+  the simulcast relay too** — the same three §8.6/§8.7 capabilities already
+  built for the OBS decoder and the Raspberry Pi appliance, ported to
+  `relay/`. The relay reads its live feed through `RoomFeeder`, which was a
+  concrete `S3Transport` wrapped around `DecoderSession`; it is now the same
+  three-way `S3Transport`/`LanTransport`/`FallbackTransport` construction the
+  appliance's `Player::rebuild_session()` already does, keyed off whichever
+  of cloud or LAN (or both) `ConfigStore` reports configured. `ConfigStore`
+  gained `LanConfig` (`lan_host`/`lan_port`/`lan_auth_token`, stored in the
+  existing generic `settings` key/value table — no schema migration needed)
+  and `storage_provider`, plus `configured()` as the combined gate that
+  replaces `storage_configured()` everywhere a LAN-only relay needs to be
+  treated as set up.
+
+  One thing does *not* follow LAN: past-event browsing, download and
+  rebroadcast. All three are `list()`-based (`RoomFeeder::events()`/
+  `event_parts()`), and `LanObjectServer` only ever holds the event currently
+  in progress — the identical limitation the appliance and the OBS decoder
+  already have, for the identical reason. `RoomFeeder` now holds `m_transport`
+  (cloud, nullable), `m_lan_transport` and `m_fallback_transport` separately
+  from `m_active` (whichever of the three the live feed and `event.json`
+  fetch actually use), so a LAN-only relay simply has no `m_transport` and
+  those three methods say so rather than crashing or returning nonsense.
+  `check_storage()` (the Settings page's "Test storage" button) tests
+  whichever path is actually configured — `S3Transport::self_test()` when
+  there's cloud, a real `live.json` GET checked against
+  `LanTransport::last_request_reached_server()` when there's only LAN.
+
+  `/api/status`'s `storage_configured` field is renamed `configured` (now
+  cloud-or-LAN) and gained `lan_configured`/`lan_active`, mirroring the
+  appliance's `/api/storage` shape — `lan_active` is "is the LAN path
+  healthy right now", not "did the last request come from LAN" (see
+  `FallbackTransport::last_get_was_primary()`'s doc comment; a 404 for an
+  ordinary miss must not read as LAN being down). `RELAY_LAN_HOST`/
+  `RELAY_LAN_PORT`/`RELAY_LAN_AUTH_TOKEN` seed the settings on first run,
+  matching every other `RELAY_*` variable's "seeds once, the database wins
+  after" rule.
+
+  Verified live against a real `multisite-relay` process: booted LAN-only
+  against an unreachable test address (`configured: true`, `lan_active:
+  false`, `check_storage` reporting "Could not reach the encoder..."),
+  switched to AWS via the provider dropdown (`region` in, `s3.us-east-1
+  .amazonaws.com` derived out, a real credentials-redirect back from AWS
+  proving `self_test()` actually reached the network), confirmed both paths
+  configured together, then cleared cloud back to LAN-only and watched
+  `/api/events` correctly go empty and the "Test storage" error return. The
+  settings page's provider dropdown and its hideable fields, and the
+  Sending tab's new "via LAN" / "via cloud (LAN unreachable)" line, were
+  checked in the browser against the same running instance.
 
 - **The appliance's settings page collapses into sections now** — Room
   and storage, LAN, buffering, Picture, Sound, Remote access, On power-up,

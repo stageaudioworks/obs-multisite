@@ -15,10 +15,31 @@ int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
 }
+
+bool cloud_configured(const S3Config& c) {
+    return !c.bucket.empty() &&
+           (!c.endpoint_host.empty() || !c.r2_account_id.empty());
+}
 } // namespace
 
 RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
-    m_tx = std::make_unique<S3Transport>(m_cfg.storage);
+    if (cloud_configured(m_cfg.storage))
+        m_transport = std::make_unique<S3Transport>(m_cfg.storage);
+    if (!m_cfg.lan.host.empty())
+        m_lan_transport = std::make_unique<LanTransport>(m_cfg.lan);
+
+    if (m_transport && m_lan_transport) {
+        m_fallback_transport =
+            std::make_unique<FallbackTransport>(*m_lan_transport, *m_transport);
+        m_active = m_fallback_transport.get();
+    } else if (m_lan_transport) {
+        m_active = m_lan_transport.get();
+    } else {
+        // Guaranteed non-null: Service::reload() only builds a RoomFeeder
+        // once ConfigStore::configured() is true, so cloud alone is the only
+        // remaining case here.
+        m_active = m_transport.get();
+    }
 
     DecoderConfig dc;
     dc.room_id = m_cfg.room_id;
@@ -34,12 +55,26 @@ RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
     // a start-buffer window; it starts as soon as its first segment is ready.
     dc.start_buffer_seconds = 0;
     dc.pinned_event_id = m_cfg.pinned_event_id;
-    m_session = std::make_unique<DecoderSession>(dc, *m_tx);
+    m_session = std::make_unique<DecoderSession>(dc, *m_active);
 }
 
 RoomFeeder::~RoomFeeder() { stop(); }
 
-std::string RoomFeeder::check_storage() { return m_tx->self_test(); }
+std::string RoomFeeder::check_storage() {
+    // Cloud, when there is one, is the more informative check: self_test()
+    // actually verifies the credentials rather than just reachability, and a
+    // relay with both configured cares most about the path event browsing and
+    // download rely on.
+    if (m_transport) return m_transport->self_test();
+    if (m_lan_transport) {
+        m_lan_transport->get(live_pointer_key(m_cfg.room_id));
+        if (!m_lan_transport->last_request_reached_server())
+            return "Could not reach the encoder at " + m_cfg.lan.host + ":" +
+                   std::to_string(m_cfg.lan.port) + ".";
+        return {};
+    }
+    return "Storage has not been set up yet.";
+}
 
 void RoomFeeder::start() {
     if (m_running.exchange(true)) return;
@@ -75,7 +110,7 @@ void RoomFeeder::run() {
                 need = !ev.empty() && (ev != m_info_event_id || !m_have_info);
             }
             if (need) {
-                auto r = m_tx->get(event_prefix_for(ev) + "event.json");
+                auto r = m_active->get(event_prefix_for(ev) + "event.json");
                 if (r.success) {
                     try {
                         EventInfo info = EventInfo::from_json(
@@ -114,6 +149,11 @@ void RoomFeeder::run() {
 }
 
 std::vector<EventSummary> RoomFeeder::events(bool force) {
+    // Browsing past events needs list(), which LAN does not serve — see
+    // lan_transport.h. A LAN-only relay has nothing to show here; it can
+    // still relay the live feed, just not the history behind it.
+    if (!m_transport) return {};
+
     {
         std::lock_guard<std::mutex> lk(m_events_mtx);
         // One request per event, so this is not something to do on every poll
@@ -126,7 +166,7 @@ std::vector<EventSummary> RoomFeeder::events(bool force) {
     CatalogConfig cc;
     cc.room_id = m_cfg.room_id;
     cc.stale_after_ms = m_cfg.stale_after_ms;
-    EventCatalog cat(cc, *m_tx);
+    EventCatalog cat(cc, *m_transport);
     cat.refresh();
     auto found = cat.events();
 
@@ -138,13 +178,18 @@ std::vector<EventSummary> RoomFeeder::events(bool force) {
 
 std::vector<RoomFeeder::EventPart> RoomFeeder::event_parts(
         const std::string& event_id, std::string& error) const {
+    if (!m_transport) {
+        error = "This relay has no cloud storage configured, and past "
+                "events need it.";
+        return {};
+    }
     const std::string prefix = event_prefix_for(event_id);
     const std::string seg_prefix = prefix + "segments/";
 
     std::vector<EventPart> init_part, segments;
     std::string token;
     do {
-        auto r = m_tx->list(prefix, "", token, 1000);
+        auto r = m_transport->list(prefix, "", token, 1000);
         if (!r.success) {
             error = "Could not read that event from storage.";
             return {};
@@ -192,8 +237,13 @@ bool RoomFeeder::stream_parts(
         const std::vector<EventPart>& parts,
         const std::function<bool(const uint8_t*, size_t)>& sink,
         std::string& error) const {
+    if (!m_transport) {
+        error = "This relay has no cloud storage configured, and past "
+                "events need it.";
+        return false;
+    }
     for (const auto& part : parts) {
-        auto obj = m_tx->get(part.key);
+        auto obj = m_transport->get(part.key);
         if (!obj.success) {
             // Nothing can be done about this mid-stream: the length has
             // already been promised, so the download will be short and the
@@ -246,6 +296,16 @@ RoomSnapshot RoomFeeder::snapshot() const {
     s.manifest.latest_seq = s.latest_seq;
     s.manifest.first_available_seq = s.first_available_seq;
     s.manifest.event_id = s.event_id;
+
+    s.lan_configured = m_lan_transport != nullptr;
+    // Not "did the last request come from LAN" but "is the LAN path
+    // currently healthy" — see FallbackTransport::last_get_was_primary()'s
+    // own doc comment. On a LAN-only relay it is simply whether the last
+    // request reached the encoder at all.
+    s.lan_active = m_fallback_transport
+                       ? m_fallback_transport->last_get_was_primary()
+                       : (m_lan_transport &&
+                          m_lan_transport->last_request_reached_server());
     return s;
 }
 

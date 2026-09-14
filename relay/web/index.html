@@ -169,12 +169,19 @@
     </label>
 
     <h2>Storage</h2>
-    <label>Cloudflare Account ID
-      <input name="r2_account_id">
-      <span class="hint">Leave blank if you are not using Cloudflare R2.</span>
+    <p class="hint">
+      Past events are always read from here. The live feed can be too, or it
+      can come straight from the encoder — see LAN delivery below.
+    </p>
+    <label>Storage provider
+      <select name="storage_provider"></select>
+      <span class="hint">Which fields below this needs depends on the provider.</span>
     </label>
-    <label>Server address
-      <input name="endpoint_host" placeholder="leave blank for Cloudflare R2">
+    <label id="field-account">Cloudflare Account ID
+      <input name="r2_account_id">
+    </label>
+    <label id="field-endpoint">Server address
+      <input name="endpoint_host" placeholder="s3.eu-west-2.amazonaws.com">
     </label>
     <label>Bucket name
       <input name="bucket">
@@ -185,9 +192,10 @@
     <label>Secret Access Key
       <input name="secret_access_key" type="password" autocomplete="off"
              placeholder="unchanged">
-      <span class="hint">Leave blank to keep the one already saved.</span>
+      <span class="hint">Leave blank to keep the one already saved. Read-only
+        credentials are enough and are what you should use.</span>
     </label>
-    <label>Region
+    <label id="field-region">Region
       <input name="region" placeholder="auto">
     </label>
     <label class="check">
@@ -195,6 +203,32 @@
       Connect securely (HTTPS)
       <span class="hint">Leave this on. Turn it off only for storage running
         on your own network without a certificate.</span>
+    </label>
+
+    <h2>LAN delivery</h2>
+    <label>Encoder LAN host
+      <input name="lan_host" autocomplete="off"
+             placeholder="192.168.1.50 or a .local name">
+      <span class="hint">
+        If this relay is on the same network as the encoder, or reachable over
+        an existing VPN, it can read the live feed straight from it instead of
+        the bucket — faster, and free. Leave blank to use the bucket for the
+        live feed too. Set alongside the storage settings above for
+        LAN-preferred, cloud-fallback delivery, or on its own with those left
+        blank for a relay that never touches the bucket for the live feed at
+        all — past events still need the bucket either way.
+      </span>
+    </label>
+    <label>LAN port
+      <input name="lan_port" type="number" min="1" max="65535" placeholder="9080">
+    </label>
+    <label>Shared token (optional)
+      <input name="lan_auth_token" type="password" autocomplete="off"
+             placeholder="unchanged">
+      <span class="hint">
+        Leave blank on a plain building network. Set one if this path crosses
+        a VPN — it must match the token entered on the encoder.
+      </span>
     </label>
 
     <div class="row">

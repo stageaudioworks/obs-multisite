@@ -68,6 +68,20 @@ void seed_from_environment(Service& service) {
     }
     if (changed) service.config().set_storage(c);
 
+    auto lan = service.config().lan();
+    bool lan_changed = false;
+    const std::string lan_host = env("RELAY_LAN_HOST", "");
+    if (!lan_host.empty() && lan.host.empty()) { lan.host = lan_host; lan_changed = true; }
+    const std::string lan_port = env("RELAY_LAN_PORT", "");
+    if (!lan_port.empty() && lan.port == 9080) {
+        try { lan.port = std::stoi(lan_port); lan_changed = true; } catch (...) {}
+    }
+    const std::string lan_token = env("RELAY_LAN_AUTH_TOKEN", "");
+    if (!lan_token.empty() && lan.auth_token.empty()) {
+        lan.auth_token = lan_token; lan_changed = true;
+    }
+    if (lan_changed) { service.config().set_lan(lan); changed = true; }
+
     auto r = service.config().room();
     const std::string room = env("RELAY_ROOM", "");
     if (!room.empty() && r.room_id == "main-auditorium" && room != r.room_id) {
@@ -167,8 +181,9 @@ int main(int argc, char** argv) {
     if (bind != "127.0.0.1" && bind != "localhost" && !in_container)
         rlog_warn("listening on %s, not just localhost — make sure something "
                   "in front of this is terminating TLS", bind.c_str());
-    if (!service.config().storage_configured())
-        rlog_info("storage is not set up yet — open the page and fill it in");
+    if (!service.config().configured())
+        rlog_info("storage is not set up yet — open the page and fill in the "
+                  "bucket, a LAN host, or both");
     if (!ffmpeg_supports_srt())
         rlog_warn("this ffmpeg was built without SRT, so only rtmp:// and "
                   "rtmps:// destinations will work here");

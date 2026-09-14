@@ -1197,19 +1197,25 @@ same list.
 
 ## 8.7 LAN / direct delivery
 
-**Status: built, both halves, and both satellite kinds.** A satellite —
-the OBS decoder plugin or the Raspberry Pi appliance, either one — on the
-same network as the encoder, or reachable over an existing site-to-site VPN,
-downloads directly from it: manifest, init segment, media fragments and
-markers, instead of from the bucket, automatically preferring that path when
-it answers and falling back to cloud, per request, when it doesn't. Cloud
-delivery can also be turned off entirely for an operator who wants
-everything to stay on one network and never touch a bucket at all. The
+**Status: built, both halves, and every kind of receiver.** A receiver —
+the OBS decoder plugin, the Raspberry Pi appliance, or the simulcast relay —
+on the same network as the encoder, or reachable over an existing
+site-to-site VPN, downloads directly from it: manifest, init segment, media
+fragments and markers, instead of from the bucket, automatically preferring
+that path when it answers and falling back to cloud, per request, when it
+doesn't. Cloud delivery can also be turned off entirely for an operator who
+wants everything to stay on one network and never touch a bucket at all. The
 appliance's `Config`/`Player` (`src/appliance/config.h`, `player.h/.cpp`)
-gained the identical `lan_host`/`lan_port`/`lan_auth_token` fields and the
-same `LanTransport`/`FallbackTransport` wiring as the OBS decoder — one
-codebase (`src/core/`), two independent settings surfaces, no divergence in
-behaviour. What follows is kept in its original, before-the-fact form, with
+and the relay's `ConfigStore`/`RoomFeeder` (`relay/src/config_store.h`,
+`room_feeder.h/.cpp`) both gained the identical `lan_host`/`lan_port`/
+`lan_auth_token` fields and the same `LanTransport`/`FallbackTransport`
+wiring as the OBS decoder — one codebase (`src/core/`), three independent
+settings surfaces, no divergence in behaviour. The relay's own past-events
+browsing, download and rebroadcast stay cloud-only regardless of LAN
+settings: they are `list()`-based, which `LanObjectServer` does not serve —
+it only ever holds the one event currently in progress, the same reason a
+satellite's event browser is cloud-only too. What follows is kept in its
+original, before-the-fact form, with
 corrections noted in place where building it changed something — the
 reasoning here is still the reasoning for why it works the way it does.
 
@@ -1605,12 +1611,13 @@ than deleted.
   (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom / other
   S3-compatible) that shows only the fields each one actually needs and
   derives the rest, instead of six blank fields regardless of where the
-  bucket lives. Built per §8.6, in both OBS docks and — added in a later
-  pass, once its absence there was noticed — the Raspberry Pi appliance's
-  web settings page too. `S3Config` itself did not change; this is a
-  UI-layer derivation in front of it (`src/core/storage_providers.h/.cpp`),
-  read by all three settings surfaces rather than reimplemented per surface,
-  backward compatible with every saved setup — a configuration saved before
+  bucket lives. Built per §8.6, in both OBS docks and — added in later
+  passes, once its absence there was noticed — the Raspberry Pi appliance's
+  and the simulcast relay's web settings pages too. `S3Config` itself did
+  not change; this is a UI-layer derivation in front of it
+  (`src/core/storage_providers.h/.cpp`), read by all four settings surfaces
+  rather than reimplemented per surface, backward compatible with every
+  saved setup — a configuration saved before
   this existed reads back as whichever provider its endpoint actually
   matches, or "Custom" if none does, never misrepresented as something it
   isn't. Also the seam Phase 12's brokered credentials will slot into later —
@@ -1644,7 +1651,15 @@ than deleted.
   carries the identical decoder-side wiring (`Config`, `Player`, the web
   settings page) — proven with a real `multisite-player` process against a
   real encoder, receiving an entire event over LAN with no bucket involved.
-  **Still not built:** anything beyond manual host:port discovery (no mDNS —
+  The simulcast relay carries the same wiring for the live feed it reads
+  before pushing onward (`RoomFeeder`, `ConfigStore`, the web settings
+  page) — a relay in the same building as the encoder can now read the
+  feed straight from it instead of round-tripping through the bucket, LAN-
+  preferred with cloud fallback or LAN alone. Past events stay cloud-only
+  on the relay, exactly as they do everywhere else this pattern appears:
+  browsing them is a `list()` operation, and `LanObjectServer` only ever
+  holds the event currently in progress. **Still not built:** anything
+  beyond manual host:port discovery (no mDNS —
   see §8.7 for why), and the device-code pairing flow §8.5 designs for cloud
   credentials, which LAN's shared-token auth is meant to eventually share
   rather than duplicate.

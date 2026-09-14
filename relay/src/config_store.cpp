@@ -158,6 +158,33 @@ bool ConfigStore::storage_configured() const {
            (!c.endpoint_host.empty() || !c.r2_account_id.empty());
 }
 
+std::string ConfigStore::storage_provider() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return get_setting(m_db, "storage_provider");
+}
+
+void ConfigStore::set_storage_provider(const std::string& key) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    put_setting(m_db, "storage_provider", key);
+}
+
+ConfigStore::LanConfig ConfigStore::lan() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    LanConfig c;
+    c.host = get_setting(m_db, "lan_host");
+    const std::string p = get_setting(m_db, "lan_port", "9080");
+    try { c.port = std::stoi(p); } catch (...) {}
+    c.auth_token = get_setting(m_db, "lan_auth_token");
+    return c;
+}
+
+void ConfigStore::set_lan(const LanConfig& c) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    put_setting(m_db, "lan_host", c.host);
+    put_setting(m_db, "lan_port", std::to_string(c.port));
+    put_setting(m_db, "lan_auth_token", c.auth_token);
+}
+
 RoomSettings ConfigStore::room() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     RoomSettings r;

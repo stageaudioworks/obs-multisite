@@ -48,20 +48,27 @@ static bool same_storage(const multisite::S3Config& a,
         && a.use_https == b.use_https;
 }
 
+static bool same_lan(const ConfigStore::LanConfig& a,
+                     const ConfigStore::LanConfig& b) {
+    return a.host == b.host && a.port == b.port && a.auth_token == b.auth_token;
+}
+
 void Service::reload() {
     const auto storage = m_cfg.storage();
+    const auto lan = m_cfg.lan();
     const auto room = m_cfg.room();
     const auto dests = m_cfg.destinations();
 
     std::lock_guard<std::mutex> lk(m_mtx);
 
-    // Does the downloader itself have to be rebuilt? Only if the bucket or the
-    // room changed. Adding a destination must NOT reach this far: doing so
-    // tore down every stream that was already on air, which is precisely what
-    // an operator does mid-event when they decide to add Facebook.
+    // Does the downloader itself have to be rebuilt? Only if the bucket, the
+    // LAN path, or the room changed. Adding a destination must NOT reach this
+    // far: doing so tore down every stream that was already on air, which is
+    // precisely what an operator does mid-event when they decide to add
+    // Facebook.
     const bool feeder_stale =
         !m_feeder || !same_storage(storage, m_feeder_storage) ||
-        room.room_id != m_feeder_room;
+        !same_lan(lan, m_feeder_lan) || room.room_id != m_feeder_room;
 
     if (!feeder_stale) {
         sync_destinations_locked(dests, room);
@@ -72,7 +79,9 @@ void Service::reload() {
     m_sessions.clear();
     if (m_feeder) { m_feeder->stop(); m_feeder.reset(); }
 
-    if (!m_cfg.storage_configured()) {
+    // Cloud alone used to be the whole gate here; a LAN-only relay has no
+    // bucket credentials at all, and configured() is what admits that case.
+    if (!m_cfg.configured()) {
         m_storage_error = "Storage has not been set up yet.";
         return;
     }
@@ -80,6 +89,9 @@ void Service::reload() {
 
     FeederConfig fc;
     fc.storage = storage;
+    fc.lan.host = lan.host;
+    fc.lan.port = lan.port;
+    fc.lan.auth_token = lan.auth_token;
     fc.room_id = room.room_id;
     fc.cache_dir = "/data/cache";
     if (const char* c = ::getenv("RELAY_CACHE_DIR")) fc.cache_dir = c;
@@ -96,6 +108,7 @@ void Service::reload() {
     m_feeder = std::make_unique<RoomFeeder>(fc);
     m_feeder->start();
     m_feeder_storage = storage;
+    m_feeder_lan = lan;
     m_feeder_room = room.room_id;
 
     sync_destinations_locked(dests, room);
@@ -200,6 +213,12 @@ std::vector<EventSummary> Service::events(bool force) {
 
 std::string Service::check_event_is_finished(const std::string& event_id) {
     if (event_id.empty()) return "No event was chosen.";
+    // Past events are found by listing the bucket, which LAN does not serve —
+    // see RoomFeeder::events(). A LAN-only relay can still carry the live
+    // event; it just has nothing to offer here.
+    if (!m_cfg.storage_configured())
+        return "Past events need cloud storage, which this relay does not "
+               "have configured.";
     for (const auto& e : events()) {
         if (e.event_id != event_id) continue;
         // The rule the brief asks for, and the reason for it: an event still
@@ -290,7 +309,7 @@ ServiceStatus Service::status() const {
     ServiceStatus s;
     const auto room = const_cast<ConfigStore&>(m_cfg).room();
     s.room_id = room.room_id;
-    s.storage_configured = const_cast<ConfigStore&>(m_cfg).storage_configured();
+    s.configured = const_cast<ConfigStore&>(m_cfg).configured();
 
     std::lock_guard<std::mutex> lk(m_mtx);
     s.storage_error = m_storage_error;
@@ -302,6 +321,8 @@ ServiceStatus Service::status() const {
 
     const auto snap = m_feeder->snapshot();
     s.event_id = snap.event_id;
+    s.lan_configured = snap.lan_configured;
+    s.lan_active = snap.lan_active;
     switch (snap.room) {
         case RoomState::Live:
             s.room_state = "live";

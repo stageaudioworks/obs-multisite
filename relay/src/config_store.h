@@ -57,6 +57,35 @@ public:
     void set_storage(const multisite::S3Config& c);
     bool storage_configured() const;
 
+    // Which entry the settings page's provider dropdown is showing — "r2",
+    // "aws", "backblaze", "wasabi" or "custom" (see storage_providers.h).
+    // Empty on a database saved before this existed; api.cpp falls back to
+    // detect_provider() in that case, the same rule the appliance uses.
+    std::string storage_provider() const;
+    void set_storage_provider(const std::string& key);
+
+    // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
+    // A relay sitting on the same network as the encoder (or reachable over an
+    // existing VPN) can read the live feed straight from it instead of round-
+    // tripping through the bucket — the same capability the OBS decoder and
+    // the Pi appliance already have. Past events still need the bucket: an
+    // event that has finished is no longer being served by the encoder's own
+    // LanObjectServer, which only ever holds the one currently in progress.
+    struct LanConfig {
+        std::string host;              // empty means not configured
+        int         port = 9080;
+        std::string auth_token;
+    };
+    LanConfig lan() const;
+    void set_lan(const LanConfig& c);
+    bool lan_configured() const { return !lan().host.empty(); }
+
+    // Whether the relay can reach the room at all, over either path. This is
+    // the gate that decides whether a downloader gets built, and it is why
+    // storage_configured() alone stopped being enough: a LAN-only relay has
+    // no bucket credentials whatsoever.
+    bool configured() const { return storage_configured() || lan_configured(); }
+
     // ── Room ─────────────────────────────────────────────────────────────────
     RoomSettings room() const;
     void set_room(const RoomSettings& r);

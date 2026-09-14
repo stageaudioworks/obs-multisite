@@ -452,9 +452,10 @@ that are no longer part of this project, and why.</summary>
   memorized. The underlying settings didn't change; this sits in front of
   them, and a setup saved before this existed reads back as whichever
   provider its endpoint actually matches, or "Custom" if none does. Built for
-  both OBS docks first; the Raspberry Pi appliance's web settings page got
-  the identical dropdown in a later pass, reading the same underlying table.
-  It's also where Phase 12's paired credentials will eventually show up —
+  both OBS docks first; the Raspberry Pi appliance's and the simulcast
+  relay's web settings pages got the identical dropdown in later passes,
+  reading the same underlying table. It's also where Phase 12's paired
+  credentials will eventually show up —
   "Multisite Cloud" is already a greyed-out entry in the same list, not a
   second settings screen waiting to be built. Built per
   [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-provider-selection).
@@ -467,8 +468,11 @@ that are no longer part of this project, and why.</summary>
   operator who wants everything to stay on one network. Both sides are
   built and tested over real loopback sockets — the encoder's object
   server, the decoder's matching transport and its LAN-preferred/cloud-
-  fallback logic — and both satellite kinds: the OBS decoder plugin and the
-  Raspberry Pi appliance share the same core classes and settings shape.
+  fallback logic — and every kind of receiver: the OBS decoder plugin, the
+  Raspberry Pi appliance and the simulcast relay all share the same core
+  classes and settings shape. (The relay's own past-events browsing,
+  download and rebroadcast stay cloud-only regardless — they list the
+  bucket, which the encoder's LAN server was never built to serve.)
   Designed and built in
   [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery).
 

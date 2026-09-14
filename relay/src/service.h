@@ -25,7 +25,13 @@
 namespace multisite_relay {
 
 struct ServiceStatus {
-    bool        storage_configured = false;
+    // Whether the relay can reach the room at all, over either the bucket or
+    // LAN. Cloud alone used to be this whole gate; it is not any more.
+    bool        configured = false;
+    // Whether the live feed is being read over LAN rather than the bucket —
+    // see RoomSnapshot's identical fields, which these are copied from.
+    bool        lan_configured = false;
+    bool        lan_active = false;
     std::string room_id;
     std::string room_state;       // "live", "offline", "ended", "interrupted"
     std::string room_state_text;  // plain language for the banner
@@ -103,8 +109,9 @@ private:
     std::unique_ptr<RoomFeeder> m_feeder;
     std::map<int64_t, std::unique_ptr<RelaySession>> m_sessions;
     // What the current downloader was built from, so a save that changes
-    // nothing about the bucket does not rebuild it.
+    // nothing about the bucket or the LAN path does not rebuild it.
     multisite::S3Config m_feeder_storage;
+    ConfigStore::LanConfig m_feeder_lan;
     std::string         m_feeder_room;
 
     // A rebroadcast gets its own downloader, pinned to the event it is

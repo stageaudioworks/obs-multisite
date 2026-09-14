@@ -19,6 +19,8 @@
 //
 #include "decoder_session.h"
 #include "event_catalog.h"
+#include "fallback_transport.h"
+#include "lan_transport.h"
 #include "model.h"
 #include "s3_transport.h"
 
@@ -36,6 +38,10 @@ namespace multisite_relay {
 
 struct FeederConfig {
     multisite::S3Config storage;
+    // Empty host means not configured — see ConfigStore::LanConfig. May be
+    // set alongside `storage` (LAN-preferred, cloud-fallback), or alone for a
+    // relay that never touches the bucket for the live feed at all.
+    multisite::LanTransportConfig lan;
     std::string room_id = "main-auditorium";
     std::string cache_dir = "/data/cache";
     int poll_interval_ms = 3000;
@@ -65,6 +71,12 @@ struct RoomSnapshot {
     std::string last_error;
     uint64_t downloaded = 0;
     uint64_t checksum_failures = 0;
+    // Whether the live feed is (or could be) coming over LAN rather than the
+    // bucket — the same distinction the OBS decoder dock and the Pi appliance
+    // already surface. lan_active means the LAN path is actually reachable
+    // right now, not merely configured.
+    bool lan_configured = false;
+    bool lan_active = false;
 };
 
 class RoomFeeder {
@@ -136,7 +148,19 @@ private:
     void run();
 
     FeederConfig m_cfg;
-    std::unique_ptr<multisite::S3Transport> m_tx;
+    // Present only when cloud storage is configured — nullptr on a LAN-only
+    // relay. Past events (list()-based) always go through this one, never
+    // through LAN: LanObjectServer only ever holds the event in progress.
+    std::unique_ptr<multisite::S3Transport> m_transport;
+    std::unique_ptr<multisite::LanTransport> m_lan_transport;
+    // Present only when both are configured; composes the two above for the
+    // live feed the session reads.
+    std::unique_ptr<multisite::FallbackTransport> m_fallback_transport;
+    // Whichever of the three above the session and the live event.json fetch
+    // actually read from. Never null once the constructor returns: the caller
+    // (Service::reload()) only builds a RoomFeeder when at least one of cloud
+    // or LAN is configured.
+    multisite::Transport* m_active = nullptr;
     std::unique_ptr<multisite::DecoderSession> m_session;
 
     std::thread m_thread;

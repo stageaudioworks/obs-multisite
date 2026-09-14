@@ -23,6 +23,14 @@ main site delays the public stream rather than breaking it.
   destinations, over **RTMP** (`rtmp://`, `rtmps://`) or **SRT** (`srt://`).
   You do not choose which: the address you paste decides, because the two are
   unmistakable.
+- If the relay sits on the same network as the encoder, or an existing VPN
+  reaches it, it can read the live feed straight from the encoder instead of
+  round-tripping through the bucket — faster, and free. This is the same LAN
+  delivery the OBS decoder and the Pi campus player already support, and it
+  works whether or not cloud storage is also configured: LAN-preferred with a
+  cloud fallback, or LAN alone for a relay that never touches the bucket for
+  the live feed. Past events still need the bucket either way — the encoder
+  only ever keeps the event in progress ready to serve over LAN.
 - Sends one chosen audio track per destination, picked by the name the main
   site published — "Main Mix", "Sermon ISO".
 - Sits a configurable time behind the event (three minutes by default), so
@@ -182,6 +190,9 @@ is not overwritten by a stale variable on the next restart.
 | `RELAY_SECRET_ACCESS_KEY` | |
 | `RELAY_REGION` | `auto` for R2, a real region for AWS. |
 | `RELAY_USE_HTTPS` | `0` only for storage on your own network with no certificate. |
+| `RELAY_LAN_HOST` | If the relay is on the same network as the encoder (or an existing VPN), the encoder's LAN address — the relay then reads the live feed straight from it instead of the bucket. Leave unset to use cloud storage only. |
+| `RELAY_LAN_PORT` | Defaults to 9080. |
+| `RELAY_LAN_AUTH_TOKEN` | Only if the LAN path crosses a VPN and the encoder has one set; must match. |
 | `RELAY_PORT` | Defaults to 8080. |
 | `RELAY_BIND` | Which interface the process listens on. The image sets `0.0.0.0`, which is correct: inside a container that is not what decides exposure — the host side of the port mapping is. Running outside a container it defaults to `127.0.0.1`. |
 | `RELAY_USER` / `RELAY_PASSWORD` | Claims the relay on first run, so the login is set before anyone can reach it. Ignored once a login exists. |

@@ -149,14 +149,17 @@ async function refresh() {
   const bits = [];
   if (s.room_id) bits.push('Feed: ' + s.room_id);
   if (s.video) bits.push(s.video);
+  // The same "via LAN" / "via cloud" distinction the OBS decoder dock and the
+  // Pi campus player already show — only worth a line once LAN is even set up.
+  if (s.lan_configured) bits.push(s.lan_active ? 'via LAN' : 'via cloud (LAN unreachable)');
   $('#room-detail').textContent = bits.join(' · ');
 
   // One warning line, showing whichever problem actually stops a stream.
   const warn = $('#warning');
   let message = '';
-  if (!s.storage_configured) {
+  if (!s.configured) {
     message = 'Storage is not set up yet. Open Settings and fill in the '
-            + 'bucket details from the main site.';
+            + 'bucket details from the main site, a LAN host, or both.';
   } else if (s.storage_error) {
     message = s.storage_error;
   } else if (s.cannot_send_reason) {
@@ -308,13 +311,58 @@ $('#add-form').onsubmit = async (e) => {
 };
 
 // ── settings ────────────────────────────────────────────────────────────────
+
+// Which fields the storage-provider dropdown needs (PROJECT-SCOPE.md §8.6) —
+// fetched once, since the list is static. Keyed by provider key ("r2", "aws",
+// …) for updateProviderFields() below. Identical to the appliance's copy of
+// this same logic.
+let storageProviders = {};
+
+async function loadStorageProviderChoices() {
+  try {
+    const data = await api('GET', '/api/storage/providers');
+    const sel = $('#config-form [name=storage_provider]');
+    storageProviders = {};
+    sel.innerHTML = (data.providers || []).map((p) => {
+      storageProviders[p.key] = p;
+      // display_name already carries its own "(coming soon)" where that
+      // applies (see storage_providers.cpp) — just disable the option.
+      return `<option value="${esc(p.key)}"${p.available ? '' : ' disabled'}>
+                ${esc(p.display_name)}
+              </option>`;
+    }).join('');
+  } catch (e) {
+    /* An older relay with no such endpoint yet. The raw fields still work. */
+  }
+}
+
+// Shows only the fields the selected provider actually needs — an account id
+// for R2, a region for AWS/Backblaze/Wasabi, both endpoint and region for
+// Custom — the same rule the OBS docks and the appliance apply to the
+// identical dropdown.
+function updateProviderFields() {
+  const key = $('#config-form [name=storage_provider]').value;
+  const info = storageProviders[key];
+  if (!info) return;
+  $('#field-account').hidden  = !info.needs_account_id;
+  $('#field-endpoint').hidden = !info.needs_endpoint;
+  $('#field-region').hidden   = !info.needs_region;
+}
+$('#config-form [name=storage_provider]').addEventListener('change', updateProviderFields);
+
 async function loadConfig() {
   const c = await api('GET', '/api/config');
   const form = $('#config-form');
   ['room_id', 'r2_account_id', 'endpoint_host', 'bucket', 'access_key_id',
-   'region'].forEach((k) => { if (form[k]) form[k].value = c[k] || ''; });
+   'region', 'lan_host', 'lan_port'].forEach((k) => {
+    if (form[k]) form[k].value = c[k] || '';
+  });
   form.use_https.checked = c.use_https !== false;
   if (c.has_secret) form.secret_access_key.placeholder = 'unchanged';
+  if (c.has_lan_auth_token) form.lan_auth_token.placeholder = 'unchanged';
+  await loadStorageProviderChoices();
+  form.storage_provider.value = c.storage_provider || 'custom';
+  updateProviderFields();
 }
 
 $('#config-form').onsubmit = async (e) => {
@@ -325,6 +373,7 @@ $('#config-form').onsubmit = async (e) => {
   try {
     await api('PUT', '/api/config', {
       room_id: f.get('room_id'),
+      storage_provider: f.get('storage_provider'),
       r2_account_id: f.get('r2_account_id'),
       endpoint_host: f.get('endpoint_host'),
       bucket: f.get('bucket'),
@@ -332,10 +381,14 @@ $('#config-form').onsubmit = async (e) => {
       secret_access_key: f.get('secret_access_key'),
       region: f.get('region'),
       use_https: f.get('use_https') === 'on',
+      lan_host: f.get('lan_host'),
+      lan_port: Number(f.get('lan_port')) || 9080,
+      lan_auth_token: f.get('lan_auth_token'),
     });
     good.textContent = 'Saved.';
     good.hidden = false;
     e.target.secret_access_key.value = '';
+    e.target.lan_auth_token.value = '';
     refresh();
   } catch (ex) {
     err.textContent = ex.message;

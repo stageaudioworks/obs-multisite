@@ -61,6 +61,21 @@ int main() {
         s.use_https = false;
         cs.set_storage(s);
         CHECK(cs.storage_configured(), "storage is configured once it is set");
+
+        CHECK(!cs.lan_configured(), "and LAN is not configured yet");
+        CHECK(cs.configured(), "but the combined gate is already true from "
+                                "cloud alone");
+
+        cs.set_storage_provider("aws");
+        CHECK(cs.storage_provider() == "aws",
+              "the storage provider dropdown's choice is remembered");
+
+        ConfigStore::LanConfig lan;
+        lan.host = "192.168.1.50";
+        lan.port = 9081;
+        lan.auth_token = "shared-secret";
+        cs.set_lan(lan);
+        CHECK(cs.lan_configured(), "LAN is configured once a host is set");
     }
 
     // Everything must survive the process going away — that is the whole point
@@ -87,6 +102,15 @@ int main() {
         CHECK(s.use_https == false,
               "and the choice to use plain HTTP, which must not silently "
               "flip back on");
+        CHECK(cs.storage_provider() == "aws",
+              "the storage provider dropdown's choice survives a restart too");
+
+        const auto lan = cs.lan();
+        CHECK(lan.host == "192.168.1.50" && lan.port == 9081,
+              "and the LAN settings come back the same way");
+        CHECK(lan.auth_token == "shared-secret", "including the shared token");
+        CHECK(cs.lan_configured() && cs.configured(),
+              "so a restarted relay still knows both paths are set up");
 
         // Enabling is what Start does, and it has to outlive a restart or a
         // container replacement mid-event would come back doing nothing.

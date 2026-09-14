@@ -8,6 +8,7 @@
 #include "ffmpeg_process.h"
 #include "room_feeder.h"
 #include "log.h"
+#include "storage_providers.h"
 #include "stream_plan.h"
 
 #include "nlohmann/json.hpp"
@@ -21,6 +22,12 @@ using multisite::HttpHandler;
 using multisite::HttpRequest;
 using multisite::HttpResponse;
 using multisite::HttpServer;
+using multisite::StorageProvider;
+using multisite::all_providers;
+using multisite::provider_key;
+using multisite::provider_from_key;
+using multisite::detect_provider;
+using multisite::derive;
 
 namespace multisite_relay {
 
@@ -233,7 +240,9 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         json j;
         // What an operator reads off the page into a bug report.
         j["version"] = MULTISITE_RELAY_VERSION;
-        j["storage_configured"] = s.storage_configured;
+        j["configured"] = s.configured;
+        j["lan_configured"] = s.lan_configured;
+        if (s.lan_configured) j["lan_active"] = s.lan_active;
         j["room_id"] = s.room_id;
         j["room_state"] = s.room_state;
         j["room_state_text"] = s.room_state_text;
@@ -260,8 +269,17 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
     route("GET", "/api/config", [&service](const HttpRequest&,
                                                   HttpResponse& res) {
         const auto c = service.config().storage();
+        const auto lan = service.config().lan();
         const auto r = service.config().room();
         json j;
+        // Empty means this was saved before the dropdown existed (or the
+        // database was hand-edited): fall back to guessing from the raw
+        // fields, the same rule the Pi appliance applies to its identical
+        // dropdown, so an upgrade never misrepresents a working setup.
+        const StorageProvider provider = service.config().storage_provider().empty()
+            ? detect_provider(c.endpoint_host, c.r2_account_id)
+            : provider_from_key(service.config().storage_provider());
+        j["storage_provider"] = provider_key(provider);
         j["endpoint_host"] = c.endpoint_host;
         j["r2_account_id"] = c.r2_account_id;
         j["bucket"] = c.bucket;
@@ -270,6 +288,10 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         j["has_secret"] = !c.secret_access_key.empty();
         j["region"] = c.region;
         j["use_https"] = c.use_https;
+        j["lan_host"] = lan.host;
+        j["lan_port"] = lan.port;
+        // Same "never sent back" rule as the bucket secret above.
+        j["has_lan_auth_token"] = !lan.auth_token.empty();
         j["room_id"] = r.room_id;
         j["default_delay_s"] = r.default_delay_s;
         res.json(j.dump());
@@ -279,17 +301,55 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
                                                   HttpResponse& res) {
         const auto j = body_json(req);
         auto c = service.config().storage();
-        c.endpoint_host = str(j, "endpoint_host", c.endpoint_host);
-        c.r2_account_id = str(j, "r2_account_id", c.r2_account_id);
+
+        // The provider decides how the one field the operator actually typed
+        // becomes endpoint_host/r2_account_id/region — see
+        // storage_providers.h. Custom's fields already ARE that shape,
+        // unchanged. Applied only when the browser sent a provider; an older
+        // or hand-built client that only sends the raw fields leaves the
+        // stored provider untouched and edits them directly, as before this
+        // dropdown existed.
+        auto provider_it = j.find("storage_provider");
+        if (provider_it != j.end() && provider_it->is_string()) {
+            const StorageProvider provider =
+                provider_from_key(provider_it->get<std::string>());
+            service.config().set_storage_provider(provider_key(provider));
+            if (provider == StorageProvider::Custom) {
+                c.endpoint_host = str(j, "endpoint_host", c.endpoint_host);
+                c.region = str(j, "region", c.region);
+                c.r2_account_id.clear();
+            } else {
+                std::string input;
+                if (provider == StorageProvider::CloudflareR2)
+                    input = str(j, "r2_account_id");
+                else
+                    input = str(j, "region");
+                const auto derived = derive(provider, input);
+                c.endpoint_host = derived.endpoint_host;
+                c.r2_account_id = derived.r2_account_id;
+                c.region        = derived.region;
+            }
+        } else {
+            c.endpoint_host = str(j, "endpoint_host", c.endpoint_host);
+            c.r2_account_id = str(j, "r2_account_id", c.r2_account_id);
+            c.region = str(j, "region", c.region);
+        }
         c.bucket = str(j, "bucket", c.bucket);
         c.access_key_id = str(j, "access_key_id", c.access_key_id);
         // An empty secret means "leave it alone", so saving the form without
         // retyping the key does not wipe it.
         const std::string secret = str(j, "secret_access_key");
         if (!secret.empty()) c.secret_access_key = secret;
-        c.region = str(j, "region", c.region);
         if (c.region.empty()) c.region = "auto";
         c.use_https = flag(j, "use_https", c.use_https);
+
+        auto lan = service.config().lan();
+        lan.host = str(j, "lan_host", lan.host);
+        lan.port = num(j, "lan_port", lan.port);
+        if (lan.port < 1 || lan.port > 65535) lan.port = 9080;
+        // Same "empty means unchanged" rule as the bucket secret.
+        const std::string lan_token = str(j, "lan_auth_token");
+        if (!lan_token.empty()) lan.auth_token = lan_token;
 
         auto r = service.config().room();
         r.room_id = str(j, "room_id", r.room_id);
@@ -301,9 +361,24 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
             return fail(res, 400, "Enter the feed name used at the main site.");
 
         service.config().set_storage(c);
+        service.config().set_lan(lan);
         service.config().set_room(r);
         service.reload();
         ok(res);
+    });
+
+    route("GET", "/api/storage/providers", [](const HttpRequest&,
+                                                     HttpResponse& res) {
+        json list = json::array();
+        for (const auto& info : all_providers()) {
+            list.push_back(json{{"key", info.key},
+                                {"display_name", info.display_name},
+                                {"needs_account_id", info.needs_account_id},
+                                {"needs_region", info.needs_region},
+                                {"needs_endpoint", info.needs_endpoint},
+                                {"available", info.available}});
+        }
+        res.json(json{{"providers", list}}.dump());
     });
 
     route("POST", "/api/storage/test", [&service](const HttpRequest&,
@@ -398,7 +473,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         // that cannot work says why immediately instead of failing quietly a
         // second later.
         const auto s = service.status();
-        if (s.storage_configured && !s.can_send && !s.cannot_send_reason.empty())
+        if (s.configured && !s.can_send && !s.cannot_send_reason.empty())
             return fail(res, 409, s.cannot_send_reason);
         service.set_enabled(id, true);
         rlog_info("[%s] started by the operator", d->name.c_str());
