@@ -161,7 +161,9 @@
       <p><strong>The invariant that makes it reliable:</strong> a segment is
       listed in the manifest only <em>after</em> the bucket has confirmed it
       stored. If a campus can see an entry, the object exists. Retries, crash
-      resume and deep buffering all build on that one rule.</p>
+      resume and deep buffering all build on that one rule. Every one of those
+      JSON documents also carries a protocol version, so a decoder refuses a
+      bucket it doesn't understand and says so, rather than half-reading it.</p>
     </div>
 
     <h3 style="margin-top:34px">What it asks of your network</h3>
@@ -173,6 +175,14 @@
       connections that would defeat a direct stream: mobile data, LEO satellite,
       consumer fibre, and networks behind carrier-grade NAT. If a laptop at the
       site can load a web page, it can usually send or receive a service.
+    </p>
+    <p style="color:var(--text-2);max-width:66ch">
+      A satellite that happens to share a network with the main site &mdash; or
+      reaches it over a VPN the church already runs &mdash; can skip the bucket
+      entirely: it downloads straight from the encoder, automatically, and
+      falls back to cloud per segment the instant it can't. Cloud storage is
+      still what every other satellite and the archive depend on, but for a
+      single building it can be switched off altogether.
     </p>
   </div>
 </section>
@@ -192,7 +202,20 @@
         <h3>Survives the outage</h3>
         <p>Durable store-and-forward upload. Nothing is lost through a dropped
         link, a crash, or a mid-service restart &mdash; the encoder keeps
-        recording to disk and sends the backlog when the connection returns.</p>
+        recording to disk and sends the backlog when the connection returns.
+        A capped local queue and a plain healthy/low/almost-full readout mean
+        a filling disk is noticed before it costs a segment.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/></svg></div>
+        <h3>Skip the cloud, on one network</h3>
+        <p>A satellite on the same network as the main site, or reachable over
+        a VPN the church already runs, downloads straight from the encoder
+        instead of the bucket &mdash; preferred automatically, with cloud as
+        the fallback the instant it isn't reachable. Cloud storage can be
+        switched off entirely too, for a single building that wants no
+        off-site copy at all.</p>
       </div>
 
       <div class="card">
@@ -279,11 +302,31 @@
       </div>
 
       <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="8" height="8" rx="1.2"/><rect x="13" y="3" width="8" height="8" rx="1.2"/><rect x="3" y="13" width="8" height="8" rx="1.2"/><rect x="13" y="13" width="8" height="8" rx="1.2"/></svg></div>
+        <h3>One feed, several pictures</h3>
+        <p>Composite two or four cameras into one feed and say how at
+        <strong>Settings → Media → Pictures in this feed</strong> &mdash; side
+        by side, stacked, or a 2&times;2 grid. Each region arrives at the
+        satellite already cropped, as its own source, decoded once no matter
+        how many you pull out of it.</p>
+      </div>
+
+      <div class="card">
         <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
         <h3>Any OBS encoder</h3>
         <p>CMAF segments from x264, NVENC, QuickSync or AMF, in H.264 or HEVC.
         Whatever your main site already encodes with, on whatever GPU it already
         has.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 4 6-4M4 6h16v12H4z" stroke-linejoin="round"/></svg></div>
+        <h3>A dropdown, not a manual</h3>
+        <p>Pick a storage provider &mdash; Cloudflare R2, AWS S3, Backblaze B2,
+        Wasabi, or a custom endpoint &mdash; and only the fields it actually
+        needs appear, instead of six blank fields and a hostname convention to
+        look up. The same picker is on both OBS docks, the Pi appliance and the
+        simulcast relay.</p>
       </div>
 
       <div class="card">
@@ -341,6 +384,20 @@
         per room is cheap enough to leave installed and simple enough that
         nobody needs to operate it &mdash; it boots to an idle screen and picks
         the service up on its own.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>One building, zero cloud</h3>
+          <div class="who">For sites that never want a byte leaving the network</div>
+        </div>
+        <p>A second room on the same network, or on a VPN the church already
+        runs, pulls straight from the encoder &mdash; no bucket in the path,
+        if you choose. Cloud upload can be switched off completely for an
+        event, and every satellite that can reach the encoder still gets the
+        full service; the moment a satellite elsewhere needs it back, turning
+        cloud back on needs no confirmation, since that's always the safe
+        direction.</p>
       </div>
 
       <div class="case">
@@ -424,8 +481,8 @@
     </ul>
     <p style="margin-top:22px">
       The full picture &mdash; everything not yet proven, and the roadmap
-      through storage redundancy, SDI output tiers and a headless encoder
-      appliance &mdash; is kept in the repository under
+      through storage redundancy, keeping installations current and paired
+      storage credentials &mdash; is kept in the repository under
       <a href="https://github.com/stageaudioworks/obs-multisite#known-gaps">Known gaps</a>
       and <a href="https://github.com/stageaudioworks/obs-multisite#roadmap">Roadmap</a>.
     </p>
@@ -471,6 +528,7 @@
         <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion module</a>
         <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">Design &amp; protocol</a>
         <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/CONTRIBUTING.md">Contributing</a>
       </div>
       <div>
         <h4>Project</h4>

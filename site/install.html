@@ -162,6 +162,9 @@
         <p>Open the <strong>Multisite Encoder</strong> dock →
         <strong>Settings…</strong></p>
         <ul class="clean">
+          <li>Pick your <strong>storage provider</strong> from the dropdown
+          &mdash; Cloudflare R2, AWS S3, Backblaze B2, Wasabi, or Custom &mdash;
+          and only the fields it actually needs appear.</li>
           <li>Enter the bucket details and pick a video encoder.</li>
           <li>Choose a <strong>feed name</strong>. Every campus will type the
           same one &mdash; it is how they find you.</li>
@@ -188,9 +191,9 @@
         <h3>Set up each satellite campus</h3>
         <ul class="clean">
           <li>Open the <strong>Multisite Decoder</strong> dock →
-          <strong>Settings…</strong> and enter the same bucket details. These
-          are stored per machine, so any source you add later is already
-          configured.</li>
+          <strong>Settings…</strong>, pick the same storage provider, and enter
+          the same bucket details. These are stored per machine, so any source
+          you add later is already configured.</li>
           <li>Add a <strong>Multisite Source (Decoder)</strong> to a scene and
           enter the same feed name.</li>
           <li>Press <strong>Load event</strong>, let the buffer fill, then
@@ -211,6 +214,41 @@
         in the same segment.</p>
       </li>
     </ol>
+  </div>
+</section>
+
+<!-- ======================= LAN ======================= -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">If a satellite is on your network</p>
+    <h2>Skip the cloud for that one.</h2>
+    <p class="section-lede">
+      A satellite that shares a network with the main site &mdash; or reaches
+      it over a VPN the church already runs &mdash; doesn't have to go through
+      the bucket at all. It can pull straight from the encoder instead.
+    </p>
+    <ul class="clean">
+      <li>On the <strong>Multisite Encoder</strong> dock, open
+      <strong>Settings → Storage</strong> and turn on <strong>LAN
+      delivery</strong>. The encoder starts serving segments directly over
+      plain HTTP on the network.</li>
+      <li>On each satellite that can reach it &mdash; the OBS decoder or the
+      Pi appliance &mdash; enter the encoder's LAN host, port and token in its
+      own storage settings. It prefers that path automatically the moment it
+      answers, and falls back to cloud per segment, not per session, the
+      instant it doesn't.</li>
+      <li>Cloud upload stays on by default throughout, since every other
+      satellite and the archival recording still depend on it. A checkbox
+      appears once LAN delivery is on to turn it off entirely for an
+      event &mdash; with a confirmation prompt, since that direction isn't
+      easily undone mid-service. Turning it back on needs no confirmation.</li>
+    </ul>
+    <div class="callout">
+      <p>With cloud switched off, <strong>nothing for that event reaches the
+      bucket at all</strong>. Every satellite still gets the full service,
+      provided it can reach the encoder directly &mdash; a satellite that
+      can't, or one joining from elsewhere, needs cloud back on.</p>
+    </div>
   </div>
 </section>
 
@@ -304,6 +342,13 @@
         MP4 with every audio track intact &mdash; including services whose
         encoder crashed part-way through.</p>
       </div>
+      <div class="card">
+        <h3>Split one feed into several pictures</h3>
+        <p style="margin-top:8px">Composite two or four cameras before you go
+        live, at <strong>Settings → Media → Pictures in this feed</strong>.
+        Each satellite gets every region as its own source, already cropped,
+        for the cost of downloading one feed.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -377,6 +422,7 @@
         <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion module</a>
         <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">Design &amp; protocol</a>
         <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/CONTRIBUTING.md">Contributing</a>
       </div>
       <div>
         <h4>Project</h4>
