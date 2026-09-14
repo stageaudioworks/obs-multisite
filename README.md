@@ -392,11 +392,12 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 14, from storage redundancy and
+<summary>What is planned next: phases 6 to 15, from storage redundancy and
 satellite output routing to keeping installations current, an easier way to
-connect a bucket, choosing a storage provider from a list, and a satellite
-receiving directly from the encoder on the same network — plus three things
-that are no longer part of this project, and why.</summary>
+connect a bucket, choosing a storage provider from a list, a satellite
+receiving directly from the encoder on the same network, and a lossless
+high-quality mode for players only — plus three things that are no longer
+part of this project, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -475,6 +476,19 @@ that are no longer part of this project, and why.</summary>
   bucket, which the encoder's LAN server was never built to serve.)
   Designed and built in
   [PROJECT-SCOPE.md §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery).
+- **Phase 15 — Lossless high-quality mode.** FLAC instead of AAC on every
+  audio track, alongside roughly 10 Mbps HEVC video — an opt-in, whole-event
+  mode for when bandwidth genuinely isn't the constraint, not a per-track
+  option. Researched, not yet built: OBS already ships a FLAC encoder
+  through the same machinery as its AAC one, and the mux/decode core here is
+  already codec-agnostic, so this is a plugin-layer change. The Pi appliance
+  needs nothing at all — it decodes through the same core path regardless of
+  codec. The catch is downstream rather than technical: FLAC has no home on
+  the public web, and HEVC at that bitrate already needs SRT rather than
+  RTMP, so this mode is a dead end for the simulcast relay and anything
+  reached through it — only the OBS decoder plugin and the Pi appliance can
+  ever play it back. Designed in
+  [PROJECT-SCOPE.md §10, Phase 15](PROJECT-SCOPE.md#10-delivery-phases).
 
 Phases 11, 12 and 13 are, between them, most of the distance between
 something a technician can deploy and something an ordinary church can —

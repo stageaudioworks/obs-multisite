@@ -1401,6 +1401,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
+| Lossless high-quality mode: FLAC audio + ~10 Mbps HEVC, players only, no relay/web path | planned (§10 Phase 15) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -1420,7 +1421,7 @@ Phase 7 is built but has not yet carried an event. Phase 8 is built — the vend
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
 event. Phase 13 is built. Phase 14 is built.
-Phases 9, 10 and 12 have not been started.
+Phases 9, 10, 12 and 15 have not been started.
 
 **Phases 11, 12 and 13 carry weight together.** Between them they are most
 of the distance between a project a technician can deploy and one an
@@ -1668,6 +1669,47 @@ than deleted.
   meant to eventually match §8.5's device-code flow, but does not require
   §8.5 or Phase 12 to be built first — the plain pre-shared-token exchange
   already built is enough on its own until brokered pairing exists to share.
+
+- **Phase 15 — Lossless high-quality mode.** ⬜ FLAC in place of AAC on every
+  audio track, alongside roughly 10 Mbps HEVC video, as an opt-in mode for an
+  event where bandwidth genuinely is not the constraint — a from-the-source
+  archival/monitoring copy rather than the bandwidth-tuned broadcast one this
+  project is otherwise built around. Switched per event, not per track: an
+  event runs either the normal delivery or this ceiling, not a mix.
+
+  **Researched, not yet built** (2026-09-14). OBS already ships what this
+  needs: `obs-ffmpeg` registers a FLAC encoder (`ffmpeg_flac`) through the
+  identical machinery its AAC encoder uses — same lossless-aware creation
+  path, same packet shape — and the mux/decode core here is already
+  codec-agnostic: `CmafMuxer`/`CmafDecoder` (`src/core/cmaf_muxer.*`,
+  `cmaf_decoder.cpp`) carry whatever `AVCodecID` and extradata they are
+  given, which is why this is a plugin-layer change and not a core one. What
+  would actually move: `BroadcastController`'s hardcoded
+  `obs_audio_encoder_create("ffmpeg_aac", …)`, `multisite_output.cpp`'s
+  hardcoded `AV_CODEC_ID_AAC`/`"aac"` track metadata (and its `frame_size`,
+  which is never read off the real encoder today and silently defaults to
+  AAC's 1024), and the `encoded_audio_codecs` compatibility string OBS
+  checks (semicolon-separated — `"aac;flac"`). The Raspberry Pi appliance
+  needs no changes at all: it decodes through this same `CmafDecoder`, and
+  `pcm_convert.h` already works from however many samples a decoded frame
+  actually carries rather than assuming AAC's frame size — FLAC decode is
+  also native ffmpeg, no extra dependency, and lighter than the video decode
+  the Pi already does.
+
+  **The real constraint is downstream, not technical feasibility.** FLAC
+  audio has no home on the public web at all — no streaming site's ingest or
+  browser player takes it — and 10 Mbps HEVC already needs SRT rather than
+  RTMP (§8.2). So high-quality mode is a dead end for the simulcast relay and
+  anything reached through it: choosing it is choosing "campuses and
+  archival only", not "also simulcast this to YouTube/Facebook or watch it
+  in a browser". Only the two purpose-built players (the OBS decoder plugin,
+  the Pi appliance) decode through `CmafDecoder` and can play it; nothing
+  else in this project plays media back at all — the plugin's own web pages
+  and the relay's own web page are control/status surfaces, never an
+  in-browser player. Whatever UI this gets has to say so up front, before an
+  operator discovers it by the relay quietly refusing the event instead.
+
+  Depends on nothing else here.
 
 
 ### Three things that were on this list
