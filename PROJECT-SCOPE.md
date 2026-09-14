@@ -1421,18 +1421,30 @@ needs hand-writing. What it would actually buy: HDR/HEVC to YouTube, a
 higher bitrate ceiling than RTMP, and a path in for a venue network that
 blocks RTMP but allows HTTPS.
 
-The catch is real, not incidental: YouTube requires ≤4 s segments in a
-5-segment rolling window, and the relay copy-remuxes only — no decode, no
-encode, by design, which is what lets it run on a $5 VPS (relay/README.md).
-ffmpeg's HLS muxer cannot cut a segment shorter than the source's actual
-keyframe interval without re-encoding, and that interval is tied to the
-encoder's segment duration, 6 s by default (§4.2) precisely *because* longer
-segments mean fewer requests and better compression on unreliable venue
-internet — this project's central bet. Fitting under YouTube's 4 s ceiling
-means running the whole event at 4 s segments or shorter, a global setting
-that trims the margin that default buys everywhere else, not something the
-relay could quietly opt into for one destination alone. Worth deciding
-deliberately, not backing into.
+The catch is smaller than it first looked, but still real. Checked against
+YouTube's own HLS ingestion docs directly (not just a summary of them):
+**1–4 s is only "recommended,"** for lower latency and better encoding
+efficiency — the actual hard limit, stated as "must not," is that **a Media
+Segment must not be longer than 5 seconds**, and a Media Playlist must not
+carry more than five outstanding (unacknowledged) segments. Neither page
+states what happens if a stream violates either rule — no "will be
+rejected" language anywhere near the duration text — so whether YouTube
+hard-fails an over-length segment or just serves it worse (or serves it
+fine) is itself unconfirmed and worth testing before assuming the worst.
+
+Either way, the relay's 6 s default (§4.2) sits on the wrong side of the
+hard 5 s ceiling, if that ceiling is actually enforced — by only a second,
+not the 2+ seconds it would take to get into the merely-"recommended" 1–4 s
+band. The relay copy-remuxes only — no decode, no encode, by design, which
+is what lets it run on a $5 VPS (relay/README.md) — so ffmpeg's HLS muxer
+still can't cut a segment shorter than the source's actual keyframe
+interval without re-encoding. But landing at, say, 4.5–5 s instead of 6 s is
+a much smaller ask of the encoder's global segment-duration setting (already
+configurable 2–15 s, §4.2) than dropping all the way to 4 s would have been,
+and costs correspondingly less of the reliability margin that default buys
+everywhere else. Worth an actual test against YouTube's ingest — does it
+reject a 6 s segment outright, or just complain — before deciding whether
+this needs any tradeoff at all.
 
 ---
 
