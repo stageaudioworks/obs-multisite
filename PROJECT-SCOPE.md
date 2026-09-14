@@ -1410,6 +1410,30 @@ shape for it), and local insertion windows for campus announcements.
 Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 (§10).
 
+**HLS push as a third relay destination, alongside RTMP and SRT** (raised
+2026-09-14, not yet a phase — still being thought through). YouTube's HLS
+ingest is real and documented: encoders `PUT`/`POST` a rolling MPEG-TS
+playlist and segments to a YouTube-issued URL, which is architecturally
+closer to what the relay already does than it first sounds — the relay
+already remuxes to MPEG-TS for SRT (§8.2), and ffmpeg's own `hls` muxer can
+do the PUT publishing itself with `-method PUT`, so no playlist/upload logic
+needs hand-writing. What it would actually buy: HDR/HEVC to YouTube, a
+higher bitrate ceiling than RTMP, and a path in for a venue network that
+blocks RTMP but allows HTTPS.
+
+The catch is real, not incidental: YouTube requires ≤4 s segments in a
+5-segment rolling window, and the relay copy-remuxes only — no decode, no
+encode, by design, which is what lets it run on a $5 VPS (relay/README.md).
+ffmpeg's HLS muxer cannot cut a segment shorter than the source's actual
+keyframe interval without re-encoding, and that interval is tied to the
+encoder's segment duration, 6 s by default (§4.2) precisely *because* longer
+segments mean fewer requests and better compression on unreliable venue
+internet — this project's central bet. Fitting under YouTube's 4 s ceiling
+means running the whole event at 4 s segments or shorter, a global setting
+that trims the margin that default buys everywhere else, not something the
+relay could quietly opt into for one destination alone. Worth deciding
+deliberately, not backing into.
+
 ---
 
 ## 10. Delivery phases
