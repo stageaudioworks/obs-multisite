@@ -88,11 +88,23 @@ around the 60-second status log.
 
 ---
 
-### 1. AES67 audio: works on the bench, unproven over an event
+### 1. AES67 audio: proven over an event, PTP lock accuracy at a receiver is not
 
-**Status: working on a bench Pi — eight channels of clean AES67 audio, on a card
-with a normal buffer. What still needs a real event is lip sync over a full
-service, and the PTP accuracy a Pi's network interface can reach.**
+**Status: eight channels of clean AES67 audio, proven on a bench Pi and since
+run through a multi-hour test — picture and sound watched and listened to
+together the whole way through, no drift found. Still unmeasured: the PTP
+lock accuracy a Pi's network interface can actually hold, checked at a
+receiver over that same length of time.**
+
+The lip-sync half of this is not really an AES67 question: audio and video
+are scheduled off the same delivery-queue clock and the same first-frame
+anchor (`Player::anchor_pts()`, `src/appliance/player.cpp`) regardless of
+which card the sound goes out on, so the two cannot drift apart from each
+other whether the output is AES67, HDMI or USB. What the multi-hour run
+actually proves is that this holds under sustained real load, not that
+playback is slaved to the AES67 card's own PTP-disciplined sample clock —
+that clock is the RAVENNA driver's doing, real and relevant to a *receiving*
+console's own sync to the network, but external to this project entirely.
 
 `scripts/player/merging-aes67.sh` installs an open AES67 stack: Merging's
 `ravenna-alsa-lkm` kernel module, which registers a virtual ALSA card, plus the
@@ -124,11 +136,12 @@ is for the rest of what the daemon can do.
    — it never reports "locked" and no audio flows. This is the most likely
    reason for silence after a clean install, and it is a network question rather
    than a fault in the install.
-2. **Watch it over a full event**, on the picture and the sound together — the
-   one thing a bench cannot stand in for. That settles lip sync, and it settles
-   how well PTP holds: AES67 wants both ends within a millisecond, and a Pi's
-   network interface does no hardware timestamping, so the achievable accuracy
-   is whatever the software manages. Measure it at the receiver, not on the Pi.
+2. **PTP lock accuracy, measured at the receiver, not the Pi.** Lip sync over
+   a multi-hour run is now settled (see the status line above). What is not:
+   how well PTP itself holds — AES67 wants both ends within a millisecond,
+   and a Pi's network interface does no hardware timestamping, so the
+   achievable accuracy is whatever the software manages. That needs a
+   receiving console's own read on it, over the same length of time.
 3. **Dante routing is by hand.** A source shows up in Dante Controller, but
    connecting it to a receiver is a manual step in that application.
 4. **A kernel upgrade means rerunning the installer.** The module is built from
@@ -538,8 +551,10 @@ which is point 2 above.
 
   Left open, deliberately: the Pi playback stall (still needs a live thread
   dump to diagnose — the status line now at least says so unmistakably when
-  it happens, see entry 0 above) and AES67 lip-sync/PTP accuracy (needs an
-  actual multi-hour event, not something fixable in code).
+  it happens, see entry 0 above) and PTP lock accuracy at a receiver (AES67
+  lip-sync itself is now settled — see entry 1 above — but this needs a
+  receiving console's own read over a multi-hour event, not something
+  fixable in code).
 
 - **The silence that the idle keep-alive writes was not silence, and Stop stopped
   nothing.** Both found on `rpi5-nathan` within a minute of playing an event, and
@@ -674,9 +689,9 @@ which is point 2 above.
   itself. Confirmed on the bench: clean eight-channel audio out of the network, no
   under-runs, destination selectable. Following it needed no change to the
   player's audio path — it is an ordinary ALSA card — though the controls for the
-  stream itself came later, in the entry above. **Still open: lip sync over a
-  full event**, and the PTP accuracy a Pi's network interface reaches. Full
-  account in point 3 above.
+  stream itself came later, in the entry above. Lip sync over a full event is
+  now settled too (a multi-hour run, no drift); PTP accuracy at a receiver is
+  still open. Full account in entry 1 above.
 
 - **Decoder seek accuracy and the timeline readout** — released in
   `v0.1.13-alpha`. Two parts are operator-visible. **Seeking now lands on the moment asked for and says

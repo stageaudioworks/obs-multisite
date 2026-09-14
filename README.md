@@ -166,7 +166,23 @@ recording when the broadcast stopped.
 
 Audio and video stayed in sync across the whole run, checked by eye and ear as
 well as by the reported A/V offset, which held between 0.005 s and 0.021 s
-through several decoder restarts.
+through several decoder restarts. That run is not a one-off: it has been
+repeated several times since, at the same length, with the same shape of
+result each time — the project holds up under sustained real-world load
+rather than having gotten lucky once.
+
+The Raspberry Pi appliance's AES67 output has separately been run through its
+own multi-hour test, picture and sound watched and listened to together the
+whole way through: no drift, checked by eye and ear rather than measured, and
+none found. Worth being precise about why: audio and video are scheduled off
+the exact same delivery-queue clock and the same first-frame anchor
+(`Player::anchor_pts()`, `src/appliance/player.cpp`), so the two cannot drift
+apart from each other regardless of what the output device is — that is what
+this test confirms held over hours, not that playback is somehow slaved to
+the AES67 card's own PTP-disciplined sample clock. (That clock is real, and
+matters for a receiving console's own sync to the network — but it is the
+RAVENNA driver's doing, external to this project entirely.) Still
+unmeasured: PTP lock accuracy at a receiving console over that same stretch.
 
 It has still **not carried a real congregation's event** — a soak test on
 looping media is not a Sunday morning with people in the room.

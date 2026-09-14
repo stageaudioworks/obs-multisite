@@ -5,10 +5,11 @@ The main site uploads once; each campus pulls the same files back down and
 plays them out — no subscription, no dedicated encoder or decoder hardware, no
 inbound ports at any site.
 
-> **This is alpha software.** A six-hour soak test has run end to end, and the
-> Raspberry Pi campus player is working on real hardware, but **it has not yet
-> carried a real congregation's event.** If you put it in front of one, do it
-> with a tested fallback and a technical person on hand. See
+> **This is alpha software.** A six-hour soak test has run end to end several
+> times, with consistent results each time, and the Raspberry Pi campus
+> player is working on real hardware, but **it has not yet carried a real
+> congregation's event.** If you put it in front of one, do it with a tested
+> fallback and a technical person on hand. See
 > [Known gaps](README.md#known-gaps) before you plan around it.
 
 ## What you need

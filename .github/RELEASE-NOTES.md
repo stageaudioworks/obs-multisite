@@ -1,11 +1,12 @@
 ## ⚠️ Alpha — read this first
 
 This is pre-release software. A six-hour continuous soak test has been run end
-to end — 3,661 segments, over 15 GB, zero retries and zero upload failures, 10
-lagged frames in 658,837 — but it has still not carried a real congregation's
-event. Interfaces, settings and the storage protocol may change without a
-migration path. There is no warranty, no support contract and no uptime
-guarantee.
+to end several times, with consistent results each time — the first run's own
+numbers were 3,661 segments, over 15 GB, zero retries and zero upload
+failures, 10 lagged frames in 658,837 — but it has still not carried a real
+congregation's event. Interfaces, settings and the storage protocol may
+change without a migration path. There is no warranty, no support contract
+and no uptime guarantee.
 
 If you put this in front of a congregation, do it with a tested fallback in
 place, a technical person on hand, and the assumption that any given event may
