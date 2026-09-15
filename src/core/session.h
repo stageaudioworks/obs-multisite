@@ -130,7 +130,14 @@ public:
     // digits of seconds per the encoder's own logs) a real chance to clear
     // the queue, without turning a routine Stop into a UI freeze indistinct
     // from a hang — see BUGS.md for the bug that made this bound matter.
-    void end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(8000));
+    //
+    // Returns false when the event could not actually be marked ended in the
+    // store — manifest.json or live.json did not land. That distinction is
+    // the difference between a satellite finishing cleanly and one polling a
+    // room nobody is broadcasting to until it declares the encoder dead, so
+    // the caller is expected to say so rather than sign off with the tidy
+    // "stopped" line it prints either way. last_error() has the detail.
+    bool end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(8000));
 
     // Status for the encoder UI.
     struct Status {

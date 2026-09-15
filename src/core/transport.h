@@ -124,6 +124,25 @@ public:
     // has nothing to cancel.
     virtual void cancel_pending() {}
 
+    // Clear the cancel flag, so this transport can be used again.
+    //
+    // Cancelling is STICKY — S3Transport refuses every subsequent request
+    // until this is called, which is what makes it safe to cancel a thread
+    // you are about to join. That stickiness is also a trap, and it caught
+    // the encoder: RetryUploader::stop() cancels to unblock its join, and
+    // Session::end() calls stop() and then keeps using the same transport to
+    // drain the spool and publish the final manifest.json and live.json. For
+    // six days every clean End Broadcast therefore uploaded nothing further
+    // and never marked the event ended, because the transport had been
+    // switched off one line earlier. So: anything that cancels a transport it
+    // intends to go on using has to resume it, and this is on the interface
+    // rather than only on S3Transport so that a caller holding a Transport&
+    // can actually reach it.
+    //
+    // Never call it while a request is in flight: one already running would
+    // quietly lose its ability to be cancelled.
+    virtual void resume_pending() {}
+
     // Whether the last get() actually reached this transport's server at
     // all — true even for a 404, false only for a connection-level failure
     // (refused, timed out, unreachable host). Lets a caller distinguish "this

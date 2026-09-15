@@ -985,7 +985,7 @@ static void out_stop(void* data, uint64_t) {
             mlog_info("draining %zu queued segment(s) before stopping",
                       before.pending);
 
-        ctx->session->end();                    // drains spool, marks ended
+        const bool marked_ended = ctx->session->end();   // drains spool, marks ended
 
         // Reported AFTER the drain. The old order printed the queue depth as
         // it stood before end() ran, so a clean shutdown that uploaded its
@@ -1000,6 +1000,16 @@ static void out_stop(void* data, uint64_t) {
             mlog_warn("%zu segment(s) were still unsent when the drain "
                       "deadline passed — they remain in the spool and will be "
                       "uploaded if this event is resumed", st.pending);
+        // Worth its own line, and a loud one: the segments are recoverable,
+        // this is not. A satellite learns an event is over by reading
+        // live.json, so an event that stopped without being marked ended
+        // leaves every campus polling a room nobody is broadcasting to until
+        // it gives up and calls the encoder dead.
+        if (!marked_ended)
+            mlog_error("the event was NOT marked ended in storage (%s) — "
+                       "campuses will keep polling this room and eventually "
+                       "report it as interrupted rather than finished",
+                       ctx->session->last_error().c_str());
         if (ctx->segments_muxed == 0)
             mlog_warn("no segments were produced — check that the video "
                       "encoder's keyframe interval is <= the segment duration");

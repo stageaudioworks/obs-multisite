@@ -112,6 +112,14 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
                            const VideoInfo& video,
                            const std::vector<AudioTrack>& tracks) {
     m_last_error.clear();
+    // A Session cancels its transport when it stops using one (~Session and
+    // end(), both through RetryUploader::stop()), and that cancel is sticky.
+    // So a transport handed to a second Session — resuming a crashed event is
+    // exactly this — arrives switched off, and every publish below would fail
+    // for a reason no error message would ever explain. Re-arm it here, at
+    // the one point where a Session starts issuing requests, rather than
+    // relying on every caller to hand over a factory-fresh transport.
+    m_tx.resume_pending();
     // event.json — static descriptor
     EventInfo ev;
     ev.event_id           = m_event_id;
@@ -344,10 +352,31 @@ void Session::add_marker(const std::string& label, const std::string& type) {
     if (m_on_markers_published) m_on_markers_published(json);
 }
 
-void Session::end(std::chrono::milliseconds drain_deadline) {
-    // Drain whatever is still spooled so nothing is lost on a clean stop.
+bool Session::end(std::chrono::milliseconds drain_deadline) {
+    // stop() cancels the transport before joining its upload thread, so that
+    // a join does not wait out a request's full timeout. That cancel is
+    // sticky (see Transport::resume_pending()), and everything below this
+    // line — the drain, the final manifest, live.json — goes through that
+    // same transport. Without re-arming it here, ending a broadcast aborted
+    // every one of them: the last segment never uploaded, and the event was
+    // never marked ended, so satellites kept polling a room whose encoder
+    // had already gone and eventually called it interrupted instead.
+    //
+    // Safe at this point and only at this point: stop() has joined the
+    // upload thread, so nothing is in flight to lose its cancellation.
     m_uploader->stop();
+    m_tx.resume_pending();
+
+    // Drain whatever is still spooled so nothing is lost on a clean stop.
     m_uploader->drain_blocking(drain_deadline);
+
+    // These two writes are the whole of "this event is over" as far as any
+    // satellite is concerned, and until now they could both fail without
+    // anyone hearing about it: put_bytes() records the reason and returns,
+    // end() discarded it, and the operator's log signed off with a tidy
+    // "stopped: N confirmed". Clearing the error first makes the answer
+    // specific to this ending rather than to anything earlier in the event.
+    m_last_error.clear();
 
     std::string manifest_json;
     {
@@ -359,6 +388,7 @@ void Session::end(std::chrono::milliseconds drain_deadline) {
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
     m_spool->mark_ended();
+    return m_last_error.empty();
 }
 
 Session::Status Session::status() const {

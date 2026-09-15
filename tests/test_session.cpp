@@ -8,6 +8,7 @@
 #include "../src/core/session.h"
 #include "../src/core/null_transport.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
@@ -37,9 +38,20 @@ public:
     bool ordering_violation = false;
     std::string violation_detail;
 
+    // Cancellation is modelled because S3Transport's is STICKY, and a mock
+    // that ignored it hid a real bug for six days: Session::end() cancelled
+    // this transport (via RetryUploader::stop()) and then kept using it, so
+    // in production the final drain, manifest.json and live.json were all
+    // aborted while every test here sailed through. A mock that is more
+    // forgiving than the real thing proves nothing about the real thing.
+    std::atomic<bool> cancelled{false};
+    void cancel_pending() override { cancelled = true; }
+    void resume_pending() override { cancelled = false; }
+
     PutResult put(const std::string& key, const std::vector<uint8_t>& body,
                   const std::string&, const std::map<std::string,std::string>& tags) override {
         std::lock_guard<std::mutex> lk(mtx);
+        if (cancelled) return {false, 0, true, "cancelled (simulated)"};
         // Simulate an outage for SEGMENT uploads only (control files still fail
         // over separately in reality, but this isolates the invariant test).
         if (fail_all) return {false, 403, false, "AccessDenied (simulated)"};
@@ -666,6 +678,51 @@ int main() {
               "no false verify failures: object_size() echoes the size just put");
 
         ses.end();
+    }
+
+    std::printf("== 18. end() finishes the job through a transport its own "
+                "stop() just cancelled ==\n");
+    {
+        // The regression this exists for: RetryUploader::stop() cancels the
+        // transport so its join cannot wait out a request timeout, and that
+        // cancel is sticky. end() calls stop() and then does three more
+        // things through the same transport — drains the spool, publishes
+        // manifest.json as "ended", publishes live.json as "ended". All
+        // three silently aborted, so a real 5½-hour event ended with its last
+        // segment unsent and, far worse, never marked ended at all: every
+        // satellite went on polling a room nobody was broadcasting to and
+        // eventually classified it as interrupted.
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s18").string();
+        Session ses(cfg, store);
+
+        CHECK(ses.start_new(blob(0, 500), video, tracks), "event starts");
+
+        // Hold the segment in the spool so end() has real work to do: this is
+        // the last-segment-of-the-event case, muxed moments before Stop.
+        store.fail_budget = 1;
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        for (int i = 0; i < 100 && ses.status().pending == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        ses.end();
+
+        CHECK(ses.status().pending == 0,
+              "the segment still spooled at Stop is uploaded by the drain");
+        CHECK(store.has("events/" + ses.status().event_id + "/segments/00000000.m4s"),
+              "and is really in the store, not merely counted");
+
+        const std::string live = store.text(live_pointer_key(cfg.room_id));
+        CHECK(!live.empty() && LivePointer::from_json(live).status == "ended",
+              "live.json says ended, so satellites stop polling a dead room");
+
+        const std::string man =
+            store.text("events/" + ses.status().event_id + "/manifest.json");
+        CHECK(!man.empty() && Manifest::from_json(man).status == "ended",
+              "and the manifest agrees the event is over");
+        CHECK(!store.cancelled.load(),
+              "end() left the transport usable rather than switched off");
     }
 
     fs::remove_all(base);

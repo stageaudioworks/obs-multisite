@@ -5,7 +5,7 @@ each entry has enough context to act on without anyone having been in the
 room when it was written. Delete an entry once it's fixed and released;
 this file is not a changelog.
 
-Last updated: 2026-09-14.
+Last updated: 2026-09-15.
 
 ---
 
@@ -153,6 +153,71 @@ is for the rest of what the daemon can do.
 which is point 2 above.
 
 ## Recently landed (context, not action items)
+
+- **Ending a broadcast published nothing at all — the fix for the shutdown
+  hang switched the transport off one line before everything that still
+  needed it.** Reported from a real 5h38m event on 2026-09-14, whose log ends:
+
+  ```
+  22:49:10.254: draining 1 queued segment(s) before stopping
+  22:49:18.290: stopped: 5632 confirmed, 9 retries, 5633 segments muxed
+  22:49:18.290: 1 segment(s) were still unsent when the drain deadline passed
+  ```
+
+  Exactly 8.036s between those lines — the whole drain deadline — and nine
+  retries appearing only at the very end, after an event that logged `0
+  retries` throughout. That shape is not a slow link, it is a transport
+  refusing every request instantly and a retry loop backing off against it
+  until the clock ran out.
+
+  `9b75bfd` (2026-09-13, "Close three tracked bugs") gave
+  `RetryUploader::stop()` a `m_transport.cancel_pending()` so joining its
+  upload thread could not wait out a request timeout. Correct in itself. But
+  `Session::end()` is `stop()` followed by three things that all go through
+  that same transport — `drain_blocking()`, `manifest.json` as `ended`, and
+  `live.json` as `ended` — and S3Transport's cancel is **sticky**, by design
+  and by documented intent. So from 2026-09-13 every clean End Broadcast:
+  uploaded nothing further, took the full 8 seconds not to, and **never marked
+  the event ended in the bucket at all**. The lost segment is the small half.
+  The large half is that satellites kept polling a room whose encoder had
+  gone home, and would eventually classify a normal Sunday as `interrupted`.
+
+  Three things had to be true for this to survive six days, and all three are
+  now false:
+
+  1. **`resume_pending()` was not on the `Transport` interface**, only on
+     `S3Transport` and `LanTransport` as concrete methods — so `RetryUploader`
+     and `Session`, which both hold a `Transport&`, could not have re-armed it
+     even if they had known to. It is now a virtual on the interface, paired
+     with `cancel_pending()` and documented as the obligation that comes with
+     cancelling something you intend to keep using.
+  2. **Nothing re-armed it.** `Session::end()` now resumes immediately after
+     `stop()` has joined the thread (the one moment it is safe, with nothing
+     in flight to lose its cancellation), and `Session::begin_common()` —
+     the shared path behind `start_new()` and `resume()` — resumes before it
+     publishes anything, so a transport inherited from a previous Session
+     arrives usable. That second one was a live bug too: resuming a crashed
+     event on a reused transport failed outright, which `test_session`'s
+     tests 4 and 13 started failing to prove the moment the mock got honest.
+  3. **The failure was silent.** `put_bytes()` recorded the reason and
+     returned; `end()` discarded it and the operator's log signed off with a
+     tidy `stopped: 5632 confirmed`. `end()` now returns whether the event
+     was really marked ended, and `multisite_output.cpp` logs an ERROR naming
+     the consequence when it was not.
+
+  The test suite passed throughout all of this, which is the part worth
+  keeping: `MemStore`, the mock every session test runs against, inherited
+  the interface's no-op `cancel_pending()` and so was strictly more forgiving
+  than the real transport. It now models sticky cancellation the way
+  S3Transport actually behaves, and `test_session`'s new test 18 ends a
+  session with a segment still spooled and checks all four things that
+  matter: the segment lands, `live.json` says ended, the manifest agrees, and
+  the transport is left usable. Reverting either fix fails it.
+
+  **Not explained:** the same log shows a further ~7.8s between the last
+  `stopped:` line and the dock's next message. It may be nothing more than
+  the dock's own refresh timer, and nothing in the stop path accounts for it.
+  Worth watching on the next event rather than guessing at now.
 
 - **The OBS plugin's own remote-control pages (§8.4) now match the "standard"
   every other web surface in this project had already converged on** —

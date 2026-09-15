@@ -67,7 +67,7 @@ public:
     // (Stop cancels in-flight requests without tearing the source down; Play
     // re-arms them). Call before issuing new requests, never while one is in
     // flight.
-    void resume_pending() { m_cancel = false; }
+    void resume_pending() override { m_cancel = false; }
 
     // Whether the last get() actually reached the LAN endpoint (any HTTP
     // response at all, including a 404) rather than failing to connect —

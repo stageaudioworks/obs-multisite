@@ -97,7 +97,7 @@ public:
     // Clears the cancel flag so this transport can be used again. Call it
     // before issuing new requests, never while one is in flight: a request
     // already running would quietly lose its ability to be cancelled.
-    void resume_pending();
+    void resume_pending() override;
 
     // Where the last response came from, and how fast the link has been.
     // Populated by ordinary traffic, so during an event these reflect the
