@@ -4,6 +4,16 @@ name: Site
 # release tag and its download links. Rebuild it whenever those two inputs
 # change — a page edit, or a new release — so the site never advertises a
 # version that is no longer the latest.
+#
+# The `release` trigger below looks like it covers a new release, and it
+# would — except obs-plugin.yml cuts every release with the default
+# GITHUB_TOKEN, and GitHub deliberately does not chain workflow triggers from
+# that token (its own anti-recursion rule). So `release: published` fires for
+# a release made by hand and silently never fires for the ones CI makes,
+# which is every real one. The `workflow_run` trigger is the actual fix: it
+# watches "obs plugin build" (the release job's own name, from
+# obs-plugin.yml) finish, rather than watching for the release event that
+# job's own token can't raise.
 on:
   push:
     branches: [main]
@@ -13,6 +23,9 @@ on:
       - '.github/workflows/site.yml'
   release:
     types: [published, released, edited, deleted]
+  workflow_run:
+    workflows: ["obs plugin build"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +40,10 @@ concurrency:
 
 jobs:
   build:
+    # A workflow_run fires on every conclusion, including a failed build —
+    # only rebuild the site if the release job actually succeeded, so a
+    # broken CI run doesn't spend a deploy pointing at nothing new.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
