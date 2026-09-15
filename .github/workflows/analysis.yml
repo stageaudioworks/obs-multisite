@@ -1,0 +1,94 @@
+name: sanitizers and static analysis
+
+# The suite could always tell you a test failed. It could not tell you that a
+# passing test had raced, scribbled past an allocation, or quietly ignored a
+# return value — and this project ships threads: thirteen files spawn one.
+# These jobs run the SAME 41 tests everyone already runs, under tools that
+# watch what the tests do rather than only what they assert.
+#
+# Linux only, and deliberately: sanitizers are a property of the code, not of
+# the platform, and running three of them would triple the wall clock to
+# re-prove the same thing. The cross-platform question is answered by the
+# core-tests workflow next door.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two jobs because ThreadSanitizer and AddressSanitizer cannot be
+        # combined in one binary — they both want the same shadow memory.
+        include:
+          - name: thread
+            flags: thread
+          - name: address+undefined
+            flags: address,undefined
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -o Acquire::Retries=3 || true
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
+            libswresample-dev libswscale-dev libcurl4-openssl-dev \
+            libdrm-dev libasound2-dev libqrencode-dev libfreetype-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+                   -DMULTISITE_SANITIZE=${{ matrix.flags }}
+
+      - name: Build
+        run: cmake --build build -j
+
+      # halt_on_error=0 so one finding does not hide the rest: the first run
+      # of a tool like this is a survey, and a survey that stops at the first
+      # result is worth far less than the whole list.
+      - name: Test
+        env:
+          TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1
+          UBSAN_OPTIONS: print_stacktrace=1 halt_on_error=0
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -o Acquire::Retries=3 || true
+          sudo apt-get install -y --no-install-recommends clang-tidy \
+            ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
+            libswresample-dev libswscale-dev libcurl4-openssl-dev \
+            libdrm-dev libasound2-dev libqrencode-dev libfreetype-dev
+
+      # The compile database is what tells clang-tidy each file's real flags.
+      # Without it every include would have to be guessed at on the command
+      # line, and a check that cannot parse a file reports nothing rather than
+      # reporting that it could not parse it.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+                   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      # Advisory for now (see .clang-tidy): this prints what it finds and does
+      # not fail the build. Promoting checks to errors is a decision to make
+      # against a real list, once that list has been read and acted on.
+      - name: Run clang-tidy
+        run: |
+          # The portable core first — every other target depends on it, so a
+          # fault here is a fault everywhere.
+          find src/core src/appliance -name '*.cpp' \
+            | xargs clang-tidy -p build --quiet 2>&1 \
+            | tee tidy.log || true
+          echo "--- summary ---"
+          grep -oE '\[[a-z0-9-]+\]$' tidy.log | sort | uniq -c | sort -rn | head -30

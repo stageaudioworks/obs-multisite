@@ -403,11 +403,13 @@ void HttpServer::stop() {
     if (!m_running.exchange(false)) return;
     // Shutting the listening socket down releases accept() immediately, which
     // is what lets a stop finish promptly rather than after a timeout.
-    if (m_listen_fd != -1) {
-        const sock_t fd = to_sock(m_listen_fd);
+    // Cleared before the close, so an accept_loop that wakes and looks again
+    // sees -1 and leaves rather than racing the descriptor's next owner.
+    const long long listen_fd = m_listen_fd.exchange(-1);
+    if (listen_fd != -1) {
+        const sock_t fd = to_sock(listen_fd);
         ::shutdown(fd, kShutBoth);
         close_socket(fd);
-        m_listen_fd = -1;
     }
     if (m_accept_thread.joinable()) m_accept_thread.join();
     // Then the connections that are still open, and not merely asked to go
@@ -437,7 +439,14 @@ void HttpServer::accept_loop() {
     while (m_running.load()) {
         sockaddr_in peer{};
         socklen_t len = sizeof(peer);
-        const sock_t fd = ::accept(to_sock(m_listen_fd), (sockaddr*)&peer, &len);
+        // Read the handle once. stop() clears it, and re-reading it mid-loop
+        // is how this could have called accept() on a descriptor that had
+        // already been closed and handed to something else — this process
+        // runs a second HttpServer (the LAN object server) whose sockets are
+        // exactly what that number would be reused for.
+        const long long listen_fd = m_listen_fd.load();
+        if (listen_fd == -1) break;
+        const sock_t fd = ::accept(to_sock(listen_fd), (sockaddr*)&peer, &len);
         if (fd == kBadSocket) {
             if (!m_running.load()) break;
             if (interrupted(last_socket_error())) continue;

@@ -6,6 +6,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_OBS_PLUGIN "Build the OBS plugin module (needs libobs)" OFF)
 
+# ── Sanitizers ───────────────────────────────────────────────────────────────
+# Off by default; a CI job turns them on over the same test suite everyone
+# already runs. This exists because thirteen files in this tree spawn threads
+# and the suite had no way at all to notice a data race or a use-after-free —
+# the class of fault that shows up as "it worked on the bench and broke on a
+# Sunday". Note that thread and address cannot be combined in one build, so
+# CI runs two.
+#
+#   -DMULTISITE_SANITIZE=thread             races, lock-order inversions
+#   -DMULTISITE_SANITIZE=address,undefined  overflows, use-after-free, UB
+set(MULTISITE_SANITIZE "" CACHE STRING
+    "Comma-separated sanitizers to build the tests with (thread | address,undefined)")
+if(MULTISITE_SANITIZE)
+    if(MSVC)
+        message(FATAL_ERROR "MULTISITE_SANITIZE needs clang or gcc")
+    endif()
+    # -g and a frame pointer, or a report names addresses instead of lines and
+    # is worth markedly less than the run that produced it.
+    add_compile_options(-fsanitize=${MULTISITE_SANITIZE}
+                        -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${MULTISITE_SANITIZE})
+    message(STATUS "Sanitizers on: ${MULTISITE_SANITIZE}")
+endif()
+
 # ── macOS build settings ─────────────────────────────────────────────────────
 # Apple Silicon only, by decision rather than by omission: an Intel slice would
 # double the build and the download for machines this project is unlikely to

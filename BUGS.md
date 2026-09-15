@@ -154,6 +154,33 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The suite now runs under sanitizers, and the first run found a real data
+  race in the HTTP server.** Nothing in this tree had ever been checked by a
+  tool rather than by a test, while thirteen files here spawn threads — so a
+  passing test that had raced, or scribbled past an allocation, read exactly
+  like a passing test that had not. `MULTISITE_SANITIZE=thread` and
+  `=address,undefined` build the same 41 tests under TSan and ASan/UBSan, and
+  `.github/workflows/analysis.yml` runs both on every push, plus clang-tidy
+  against a curated check list (`.clang-tidy`).
+
+  **What it found:** `HttpServer::m_listen_fd` was a plain `long long`,
+  written by `stop()` on the caller's thread while `accept_loop()` read it on
+  its own — reported in three separate tests (`http_server`,
+  `lan_object_server`, `lan_transport`), one root cause each time. Beyond the
+  race itself, re-reading the handle mid-loop meant `accept()` could be called
+  on a descriptor that had already been closed and reissued — and this process
+  runs a *second* HttpServer (the encoder's LAN object server), whose sockets
+  are exactly what that number would be reused for. Now atomic, cleared with
+  an `exchange(-1)` before the close, and loaded once per iteration with a
+  `break` when it has gone. The wake mechanism is untouched on purpose:
+  whether `shutdown()` alone releases a blocked `accept()` differs between
+  macOS and Linux, and that is not a thing to change without both in front of
+  you.
+
+  ASan and UBSan came back clean across all 41 tests — no leaks, no
+  use-after-free, no undefined behaviour on any covered path.
+
+
 - **Ending a broadcast published nothing at all — the fix for the shutdown
   hang switched the transport off one line before everything that still
   needed it.** Reported from a real 5h38m event on 2026-09-14, whose log ends:

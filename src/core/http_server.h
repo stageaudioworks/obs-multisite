@@ -141,7 +141,13 @@ private:
 
     std::string m_bind;
     int         m_port;
-    long long   m_listen_fd = -1;
+    // Atomic because stop() closes and clears this from the caller's thread
+    // while accept_loop() is reading it on its own — a race ThreadSanitizer
+    // reports in three separate tests. Closing the socket is what releases a
+    // blocked accept(), and that differs enough between macOS and Linux that
+    // it is not worth restructuring; making the handle itself atomic removes
+    // the race without touching the wake mechanism.
+    std::atomic<long long> m_listen_fd{-1};
     std::string m_static_root;
 
     std::map<std::string, HttpHandler> m_routes;   // "GET /api/status"
