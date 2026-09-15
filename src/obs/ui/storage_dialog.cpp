@@ -15,12 +15,16 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPointer>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <QTimer>
+
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -129,6 +133,121 @@ void StorageDialog::runAsync(std::function<void()> work, std::function<void()> d
                     done();
                 }, Qt::QueuedConnection);
     }).detach();
+}
+
+namespace {
+
+// Written by the worker as it deletes, read by a timer on the UI thread.
+//
+// Polled rather than signalled per object: a bulk cleanup reports progress
+// tens of thousands of times, and posting that many events at the UI thread
+// makes the progress window itself the slowest part of the operation.
+struct ProgressCell {
+    std::mutex                 mtx;
+    multisite::DeleteProgress  p;
+    std::atomic<bool>          cancel{false};
+    std::atomic<bool>          seen{false};
+};
+
+} // namespace
+
+void StorageDialog::runDelete(
+    const QString& title,
+    std::function<multisite::DeleteReport(const multisite::DeleteProgressFn&)> work,
+    std::function<void(const multisite::DeleteReport&)> done) {
+
+    auto cell = std::make_shared<ProgressCell>();
+    auto rep  = std::make_shared<multisite::DeleteReport>();
+
+    auto* box = new QProgressDialog(title, tr_("Storage.Stop"), 0, 100, this);
+    box->setWindowTitle(tr_("Storage.Title"));
+    box->setWindowModality(Qt::WindowModal);
+    box->setAutoClose(false);
+    box->setAutoReset(false);
+    box->setMinimumDuration(0);     // a delete is never so quick it needs hiding
+    box->setValue(0);
+
+    auto* timer = new QTimer(this);
+    QPointer<QProgressDialog> boxGuard(box);
+    // QProgressDialog::setValue() pumps the event loop while the dialog is
+    // modal, so an update can re-enter this handler before the previous one
+    // has returned. Harmless here, but only by luck; the flag makes it so by
+    // design.
+    auto updating = std::make_shared<bool>(false);
+    QObject::connect(timer, &QTimer::timeout, this, [cell, boxGuard, updating]() {
+        if (!boxGuard || *updating) return;
+        if (boxGuard->wasCanceled()) cell->cancel = true;
+        if (!cell->seen.load()) return;
+        *updating = true;
+        struct Clear { std::shared_ptr<bool> f; ~Clear() { *f = false; } } clear{updating};
+
+        multisite::DeleteProgress p;
+        { std::lock_guard<std::mutex> lk(cell->mtx); p = cell->p; }
+
+        // One bar across the whole run: events already finished, plus how far
+        // into the current one. Per-event bars restart at zero over and over
+        // and read as no progress at all.
+        const double per = p.event_count > 0 ? 100.0 / (double)p.event_count : 100.0;
+        const double within = p.objects_total > 0
+                                  ? (double)p.objects_done / (double)p.objects_total
+                                  : 0.0;
+        boxGuard->setValue((int)((double)p.event_index * per + within * per));
+
+        const QString label = p.event_name.empty()
+                                  ? QString::fromStdString(p.event_id)
+                                  : QString::fromStdString(p.event_name);
+        boxGuard->setLabelText(tr_("Storage.Deleting")
+                                   .arg(label)
+                                   .arg((qulonglong)(p.event_index + 1))
+                                   .arg((qulonglong)p.event_count)
+                                   .arg((qulonglong)p.objects_done)
+                                   .arg((qulonglong)p.objects_total));
+    });
+    timer->start(100);
+
+    runAsync([cell, rep, work = std::move(work)]() {
+        *rep = work([cell](const multisite::DeleteProgress& p) {
+            { std::lock_guard<std::mutex> lk(cell->mtx); cell->p = p; }
+            cell->seen = true;
+            return !cell->cancel.load();
+        });
+    },
+             [this, rep, box, timer, done = std::move(done)]() {
+                 timer->stop();
+                 timer->deleteLater();
+                 box->close();
+                 box->deleteLater();
+                 done(*rep);
+             });
+}
+
+QString StorageDialog::describe(const multisite::DeleteReport& rep,
+                                int older_than_days) const {
+    // "Deleted 0 objects" was the whole of what this window used to say when a
+    // run removed nothing, which is indistinguishable from a button that does
+    // not work — and that is exactly how it was reported. Say which of the
+    // reasons it was.
+    if (rep.events_deleted == 0 && rep.error.empty()) {
+        if (rep.events_considered == 0)
+            return tr_("Storage.NothingStored");
+        if (rep.events_undated > 0 && rep.events_matched == 0)
+            return tr_("Storage.NoneDatable")
+                .arg((qulonglong)rep.events_undated);
+        return tr_("Storage.NoneOldEnough")
+            .arg(older_than_days)
+            .arg((qulonglong)rep.events_considered);
+    }
+
+    QString msg = tr_("Storage.DeletedEvents")
+                      .arg((qulonglong)rep.events_deleted)
+                      .arg((qulonglong)rep.objects_deleted)
+                      .arg(friendlyBytes(rep.bytes_freed));
+    if (rep.cancelled)   msg += " " + tr_("Storage.Stopped");
+    else if (!rep.confirmed) msg += " " + tr_("Storage.NotConfirmed");
+    if (rep.events_undated > 0)
+        msg += "\n\n" + tr_("Storage.SomeUndated")
+                              .arg((qulonglong)rep.events_undated);
+    return msg;
 }
 
 void StorageDialog::setBusy(bool busy) {
@@ -384,31 +503,57 @@ void StorageDialog::onDeleteSelected() {
                               QMessageBox::No) != QMessageBox::Yes)
         return;
 
-    auto rep = std::make_shared<multisite::DeleteReport>();
     auto s3 = m_s3;
     const std::string room = m_room_id;
-    runAsync([s3, room, id, rep]() {
-        // Its own transport: the listing's may have been cancelled (a refresh,
-        // or the window closing), and cancelling a transport is one-way — it
-        // would abort this delete's first request, which reads as the store
-        // refusing it.
-        multisite::S3Transport tx(s3);
-        multisite::StorageManager mgr(room, tx);
-        *rep = mgr.delete_event(id);
-    },
-             [this, rep]() {
-                 if (rep->ok) {
-                     QString done = tr_("Storage.Deleted")
-                                        .arg((qulonglong)rep->objects_deleted)
-                                        .arg(friendlyBytes(rep->bytes_freed));
-                     if (!rep->confirmed) done += " " + tr_("Storage.NotConfirmed");
-                     QMessageBox::information(this, tr_("Storage.Title"), done);
-                 } else {
-                     QMessageBox::warning(this, tr_("Storage.Title"),
-                                          QString::fromStdString(rep->error));
-                 }
-                 onRefresh();
-             });
+    mlog_info("storage: deleting event %s (requested from the manage window)",
+              id.c_str());
+    const int64_t t0 = (int64_t)QDateTime::currentMSecsSinceEpoch();
+
+    runDelete(
+        tr_("Storage.Preparing"),
+        [s3, room, id](const multisite::DeleteProgressFn& progress) {
+            // Its own transport: the listing's may have been cancelled (a
+            // refresh, or the window closing), and cancelling a transport is
+            // sticky — it would abort this delete's first request, which reads
+            // as the store refusing it.
+            multisite::S3Transport tx(s3);
+            multisite::StorageManager mgr(room, tx);
+            return mgr.delete_event(id, progress);
+        },
+        [this, id, t0](const multisite::DeleteReport& rep) {
+            const long long ms =
+                (long long)QDateTime::currentMSecsSinceEpoch() - (long long)t0;
+            if (rep.cancelled) {
+                // The operator pressed Stop. That is a decision, not a fault,
+                // and reporting it as a failure would suggest the deletion had
+                // gone wrong rather than been stopped part-way.
+                mlog_warn("storage: deleting %s stopped by the operator after "
+                          "%llu object(s), %lld ms — the event is now partly "
+                          "deleted and should be deleted again to finish",
+                          id.c_str(),
+                          (unsigned long long)rep.objects_deleted, ms);
+                QMessageBox::information(this, tr_("Storage.Title"),
+                                         tr_("Storage.PartlyDeleted")
+                                             .arg((qulonglong)rep.objects_deleted));
+            } else if (!rep.ok) {
+                mlog_error("storage: deleting %s failed after %lld ms: %s",
+                           id.c_str(), ms, rep.error.c_str());
+                QMessageBox::warning(this, tr_("Storage.Title"),
+                                     QString::fromStdString(rep.error));
+            } else {
+                mlog_info("storage: deleted %s — %llu objects, %llu bytes, "
+                          "%lld ms%s%s",
+                          id.c_str(),
+                          (unsigned long long)rep.objects_deleted,
+                          (unsigned long long)rep.bytes_freed, ms,
+                          rep.confirmed ? ", re-listed empty"
+                                        : ", NOT confirmed by re-listing",
+                          rep.cancelled ? ", stopped by the operator" : "");
+                QMessageBox::information(this, tr_("Storage.Title"),
+                                         describe(rep, 0));
+            }
+            onRefresh();
+        });
 }
 
 void StorageDialog::onDeleteOlder() {
@@ -419,27 +564,60 @@ void StorageDialog::onDeleteOlder() {
                               QMessageBox::No) != QMessageBox::Yes)
         return;
 
-    auto rep = std::make_shared<multisite::DeleteReport>();
     auto s3 = m_s3;
     const std::string room = m_room_id;
     const int64_t now = (int64_t)QDateTime::currentMSecsSinceEpoch();
-    runAsync([s3, room, days, now, rep]() {
-        multisite::S3Transport tx(s3);          // see onDeleteSelected
-        multisite::StorageManager mgr(room, tx);
-        *rep = mgr.delete_older_than(days, now);
-    },
-             [this, rep]() {
-                 if (rep->ok) {
-                     QMessageBox::information(this, tr_("Storage.Title"),
-                                              tr_("Storage.Deleted")
-                                                  .arg((qulonglong)rep->objects_deleted)
-                                                  .arg(friendlyBytes(rep->bytes_freed)));
-                 } else {
-                     QMessageBox::warning(this, tr_("Storage.Title"),
-                                          QString::fromStdString(rep->error));
-                 }
-                 onRefresh();
-             });
+    mlog_info("storage: cleanup requested — every event older than %d days",
+              days);
+
+    runDelete(
+        tr_("Storage.Preparing"),
+        [s3, room, days, now](const multisite::DeleteProgressFn& progress) {
+            multisite::S3Transport tx(s3);          // see onDeleteSelected
+            multisite::StorageManager mgr(room, tx);
+            return mgr.delete_older_than(days, now, progress);
+        },
+        [this, days, now](const multisite::DeleteReport& rep) {
+            const long long ms =
+                (long long)QDateTime::currentMSecsSinceEpoch() - (long long)now;
+
+            if (!rep.ok) {
+                mlog_error("storage: cleanup failed after %lld ms: %s",
+                           ms, rep.error.c_str());
+                QMessageBox::warning(this, tr_("Storage.Title"),
+                                     QString::fromStdString(rep.error));
+                onRefresh();
+                return;
+            }
+
+            // The counts, always — including the run that deleted nothing,
+            // which is the one an operator is most likely to be asking about.
+            mlog_info("storage: cleanup older than %d days — %llu event(s) in "
+                      "the room, %llu matched, %llu deleted, %llu kept as "
+                      "undatable, %llu kept as live; %llu objects, %llu bytes, "
+                      "%lld ms%s",
+                      days,
+                      (unsigned long long)rep.events_considered,
+                      (unsigned long long)rep.events_matched,
+                      (unsigned long long)rep.events_deleted,
+                      (unsigned long long)rep.events_undated,
+                      (unsigned long long)rep.events_live_kept,
+                      (unsigned long long)rep.objects_deleted,
+                      (unsigned long long)rep.bytes_freed, ms,
+                      rep.cancelled ? ", stopped by the operator" : "");
+            for (const auto& id : rep.deleted_ids)
+                mlog_info("storage:   deleted %s", id.c_str());
+            if (rep.events_undated > 0)
+                mlog_warn("storage: %llu event(s) have no start time in their "
+                          "manifest and no usable time in their id, so an "
+                          "age cutoff cannot be applied to them — delete "
+                          "those individually if they are not wanted",
+                          (unsigned long long)rep.events_undated);
+
+            QMessageBox::information(this, tr_("Storage.Title"),
+                                     describe(rep, days));
+            onRefresh();
+        });
 }
 
 } // namespace multisite_obs

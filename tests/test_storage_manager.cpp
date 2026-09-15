@@ -123,6 +123,16 @@ static void make_event(MemStore& s, const std::string& room, const std::string& 
     }
 }
 
+// A real ULID-shaped id: ten characters of Crockford base32 milliseconds, then
+// filler. The short ids used elsewhere in this file ("01AAA") deliberately are
+// NOT ULIDs, so they exercise the "cannot be dated from the id" path.
+static std::string ulid_for(int64_t ms) {
+    static const char kA[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    std::string out(10, '0');
+    for (int i = 9; i >= 0; --i) { out[i] = kA[ms % 32]; ms /= 32; }
+    return out + "ZZZZZZZZZZZZZZZZ";
+}
+
 static void set_live(MemStore& s, const std::string& room, const std::string& id) {
     LivePointer lp;
     lp.room_id = room; lp.event_id = id; lp.status = "live"; lp.updated_at_ms = 0;
@@ -318,6 +328,107 @@ int main() {
         StorageManager mgr2(room, s2);
         CHECK(!mgr2.list_events(evs, err), "an endless room index fails");
         CHECK(err.find("did not finish") != std::string::npos, "and says why");
+    }
+
+    std::printf("== 9. A bulk delete reports confirmation when it verified ==\n");
+    {
+        // The report started its confirmed flag at false and ANDed into it, so
+        // a run that deleted anything could never come back confirmed — the
+        // window told the operator re-checking had failed after a run in which
+        // every re-check passed. Nothing asserted it, so nothing caught it.
+        MemStore s;
+        make_event(s, room, "01OLD1", NOW - 10 * DAY, "ended", 2, "Old one");
+        make_event(s, room, "01OLD2", NOW - 20 * DAY, "ended", 2, "Old two");
+
+        StorageManager mgr(room, s);
+        DeleteReport r = mgr.delete_older_than(7, NOW);
+        CHECK(r.ok, "the run succeeds");
+        CHECK(r.events_deleted == 2, "both old events went");
+        CHECK(r.confirmed, "and the run reports itself confirmed");
+        CHECK(r.deleted_ids.size() == 2, "the report names what it removed");
+    }
+
+    std::printf("== 10. An event with no start time is dated from its id ==\n");
+    {
+        // A manifest that never recorded a start time is exactly the debris an
+        // operator wants cleared, and requiring the field left those events
+        // undeletable from this window for ever.
+        MemStore s;
+        const std::string old_id = ulid_for(NOW - 30 * DAY);
+        make_event(s, room, old_id, NOW - 30 * DAY, "ended", 1, "Undated");
+        // Blank the manifest's start time, keeping the id's.
+        {
+            Manifest m; m.event_id = old_id; m.status = "ended"; m.name = "Undated";
+            m.started_at_ms = 0; m.updated_at_ms = NOW - 30 * DAY; m.latest_seq = 1;
+            ManifestSegment seg; seg.seq = 0; seg.duration_s = 6.0;
+            seg.at_ms = NOW - 30 * DAY;
+            m.segments.push_back(seg);
+            s.objects[event_prefix_for(old_id) + "manifest.json"] = m.to_json();
+        }
+
+        StorageManager mgr(room, s);
+        DeleteReport r = mgr.delete_older_than(7, NOW);
+        CHECK(r.ok, "the run succeeds");
+        CHECK(r.events_deleted == 1, "the undated-but-ULID event is deleted");
+        CHECK(r.events_undated == 0, "and is not counted as undatable");
+    }
+
+    std::printf("== 11. An event that cannot be dated at all is left alone ==\n");
+    {
+        // "01NODATE" is not a ULID and its manifest has no start time. A cutoff
+        // cannot be applied to an age nobody knows, so it stays — but the
+        // report has to SAY it stayed, or "deleted 0 objects" looks like a
+        // broken button.
+        MemStore s;
+        make_event(s, room, "01NODATE", 0, "ended", 1, "No date");
+        {
+            Manifest m; m.event_id = "01NODATE"; m.status = "ended";
+            m.started_at_ms = 0; m.updated_at_ms = 0; m.latest_seq = 1;
+            ManifestSegment seg; seg.seq = 0; seg.duration_s = 6.0; seg.at_ms = 0;
+            m.segments.push_back(seg);
+            s.objects[event_prefix_for("01NODATE") + "manifest.json"] = m.to_json();
+        }
+
+        StorageManager mgr(room, s);
+        DeleteReport r = mgr.delete_older_than(7, NOW);
+        CHECK(r.ok, "the run succeeds rather than erroring");
+        CHECK(r.events_deleted == 0, "nothing undatable is deleted");
+        CHECK(r.events_undated == 1, "and the report says one could not be dated");
+        CHECK(s.objects.find(std::string(event_prefix_for("01NODATE")) + "init.mp4")
+                  != s.objects.end(), "the event is still there");
+    }
+
+    std::printf("== 12. An id decodes to a time only when that time is sane ==\n");
+    {
+        CHECK(event_id_time_ms(ulid_for(NOW - DAY)) > 0, "a real ULID decodes");
+        CHECK(event_id_time_ms("01AAA") == 0, "something too short does not");
+        CHECK(event_id_time_ms("0000000000ZZZZZZ") == 0,
+              "and neither does one that decodes to 1970 — which would have "
+              "read as the oldest event in the bucket and been deleted first");
+        CHECK(event_id_time_ms("UUUUUUUUUUZZZZZZ") == 0,
+              "a string using letters the alphabet excludes is rejected");
+    }
+
+    std::printf("== 13. Progress is reported, and cancelling stops the run ==\n");
+    {
+        MemStore s;
+        make_event(s, room, "01OLDA", NOW - 10 * DAY, "ended", 2, "A");
+        make_event(s, room, "01OLDB", NOW - 11 * DAY, "ended", 2, "B");
+
+        StorageManager mgr(room, s);
+        int calls = 0;
+        uint64_t seen_count = 0;
+        DeleteReport r = mgr.delete_older_than(
+            7, NOW, [&](const DeleteProgress& p) {
+                ++calls;
+                seen_count = p.event_count;
+                return calls < 3;          // cancel partway through
+            });
+        CHECK(calls > 0, "progress is actually reported");
+        CHECK(seen_count == 2, "and it knows how many events the run covers");
+        CHECK(r.cancelled, "the report says it was cancelled");
+        CHECK(r.ok, "a cancel is the operator's decision, not a failure");
+        CHECK(r.events_deleted < 2, "and it stopped before finishing");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "ALL STORAGE MANAGER TESTS PASSED"

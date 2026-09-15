@@ -2,7 +2,9 @@
 #include "storage_manager.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstring>
 #include <utility>
 
 namespace multisite {
@@ -31,6 +33,34 @@ int64_t ms_since(const std::chrono::steady_clock::time_point& t0) {
 }
 
 } // namespace
+
+// Crockford base32, the ULID alphabet: no I, L, O or U, so the encoding cannot
+// produce a string that reads as a different one when written down by hand.
+int64_t event_id_time_ms(const std::string& event_id) {
+    static const char kAlphabet[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    if (event_id.size() < 10) return 0;
+
+    int64_t ms = 0;
+    for (int i = 0; i < 10; ++i) {
+        const unsigned char c = (unsigned char)event_id[i];
+        if (c == 0) return 0;
+        const char upper = (char)std::toupper(c);
+        const char* at = std::strchr(kAlphabet, upper);
+        if (!at) return 0;                    // not a ULID at all
+        ms = ms * 32 + (int64_t)(at - kAlphabet);
+    }
+
+    // Only a plausible date is worth anything here. This value decides what
+    // gets permanently deleted, and a mis-decode landing near zero would date
+    // the event to 1970 and make it the oldest thing in the bucket.
+    constexpr int64_t kY2020 = 1577836800000LL;   // 2020-01-01
+    const int64_t tomorrow =
+        (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count() + 24LL * 60 * 60 * 1000;
+    if (ms < kY2020 || ms > tomorrow) return 0;
+    return ms;
+}
 
 StorageManager::StorageManager(std::string room_id, Transport& transport)
     : m_room_id(std::move(room_id)), m_tx(transport),
@@ -183,14 +213,15 @@ bool StorageManager::remove_key(const std::string& key, std::string& error) {
     return false;
 }
 
-DeleteReport StorageManager::delete_event(
-    const std::string& event_id,
-    const std::function<bool(uint64_t, uint64_t)>& progress) {
+DeleteReport StorageManager::delete_event(const std::string& event_id,
+                                          const DeleteProgressFn& progress) {
     DeleteReport rep;
+    rep.events_considered = 1;
 
     const std::string live = live_event_id();
     if (!live.empty() && live == event_id) {
         rep.error = "That event is on air now and cannot be deleted.";
+        rep.events_live_kept = 1;
         return rep;
     }
 
@@ -207,10 +238,15 @@ DeleteReport StorageManager::delete_event(
     keys.push_back(room_event_key(m_room_id, event_id));
 
     const uint64_t total = keys.size();
+    DeleteProgress pr;
+    pr.event_id      = event_id;
+    pr.objects_total = total;
     for (uint64_t i = 0; i < keys.size(); ++i) {
-        if (progress && !progress(i, total)) {
+        pr.objects_done = i;
+        if (progress && !progress(pr)) {
             rep.objects_deleted = i;
             rep.bytes_freed = bytes;
+            rep.cancelled = true;
             rep.error = "cancelled";
             return rep;
         }
@@ -235,12 +271,14 @@ DeleteReport StorageManager::delete_event(
     rep.objects_deleted = total;
     rep.bytes_freed = bytes;
     rep.confirmed = confirmed;
+    rep.events_matched = 1;
+    rep.events_deleted = 1;
+    rep.deleted_ids.push_back(event_id);
     return rep;
 }
 
-DeleteReport StorageManager::delete_older_than(
-    int older_than_days, int64_t now_ms,
-    const std::function<bool(uint64_t, uint64_t)>& progress) {
+DeleteReport StorageManager::delete_older_than(int older_than_days, int64_t now_ms,
+                                               const DeleteProgressFn& progress) {
     DeleteReport rep;
 
     // No sizes needed here: the cutoff is the event's start time, and the bytes
@@ -252,27 +290,75 @@ DeleteReport StorageManager::delete_older_than(
         rep.error = err;
         return rep;
     }
+    rep.events_considered = events.size();
 
     const int64_t cutoff = now_ms - (int64_t)older_than_days * 24LL * 60 * 60 * 1000;
-    std::vector<std::string> targets;
-    for (const auto& e : events)
-        if (!e.is_live && e.started_at_ms > 0 && e.started_at_ms < cutoff)
-            targets.push_back(e.event_id);
 
-    bool any_confirmed = targets.empty();
-    for (const auto& id : targets) {
-        DeleteReport r = delete_event(id, progress);
+    struct Target { std::string id, name; };
+    std::vector<Target> targets;
+    for (const auto& e : events) {
+        if (e.is_live) { ++rep.events_live_kept; continue; }
+        // The manifest's start time, or failing that the one in the event's own
+        // id. An event whose manifest never recorded a start is precisely the
+        // debris this button exists to clear, and insisting on the field made
+        // those events undeletable from here for ever.
+        int64_t started = e.started_at_ms;
+        if (started <= 0) started = event_id_time_ms(e.event_id);
+        if (started <= 0) { ++rep.events_undated; continue; }
+        if (started < cutoff) targets.push_back({ e.event_id, e.name });
+    }
+    rep.events_matched = targets.size();
+
+    for (uint64_t i = 0; i < targets.size(); ++i) {
+        const Target& t = targets[i];
+
+        // Re-frame this event's own object progress as progress through the
+        // whole run, so a caller showing a bar does not see it restart from
+        // zero at every event.
+        DeleteProgressFn per_event;
+        if (progress) {
+            const uint64_t index = i;
+            const uint64_t count = targets.size();
+            const std::string name = t.name;
+            per_event = [&progress, index, count, name](const DeleteProgress& p) {
+                DeleteProgress q = p;
+                q.event_index = index;
+                q.event_count = count;
+                q.event_name  = name;
+                return progress(q);
+            };
+        }
+
+        DeleteReport r = delete_event(t.id, per_event);
         rep.objects_deleted += r.objects_deleted;
-        rep.bytes_freed += r.bytes_freed;
+        rep.bytes_freed     += r.bytes_freed;
+
         if (!r.ok) {
-            if (!r.error.empty() && r.error != "cancelled") rep.error = r.error;
+            rep.cancelled = r.cancelled;
+            // Cancelling is the operator's own decision, not a failure: report
+            // what was removed before they stopped it, and say it was stopped.
+            if (r.cancelled) {
+                rep.ok = true;
+                return rep;
+            }
+            rep.error = r.error;
             return rep;
         }
-        any_confirmed = any_confirmed && r.confirmed;
+
+        ++rep.events_deleted;
+        rep.deleted_ids.push_back(t.id);
+        // Every event deleted so far has re-listed empty. Starting this at
+        // false and ANDing meant a bulk run could never report confirmation at
+        // all, so the window said "removed, but re-checking failed" after a
+        // run in which every check had in fact passed.
+        rep.confirmed = (i == 0) ? r.confirmed : (rep.confirmed && r.confirmed);
     }
 
+    // Nothing matched is a legitimate outcome, and a confirmed one: there was
+    // nothing to verify.
+    if (targets.empty()) rep.confirmed = true;
+
     rep.ok = true;
-    rep.confirmed = any_confirmed;
     return rep;
 }
 

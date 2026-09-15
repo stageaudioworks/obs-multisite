@@ -65,6 +65,26 @@ private:
     // Run `work` on a worker thread (network I/O must not block the OBS UI
     // thread), then `done` back on the UI thread.
     void runAsync(std::function<void()> work, std::function<void()> done);
+
+    // Run a delete with a progress window in front of it.
+    //
+    // Deleting an event is thousands of DELETEs, and a three-hour event at
+    // six-second segments is around two thousand objects on its own; a bulk
+    // cleanup of a month is tens of thousands. Before this, all of that
+    // happened behind a window that greyed its buttons and said nothing — no
+    // count, no current event, no way to stop, and nothing in the log either,
+    // so an operator watching a still window had no way to tell working from
+    // wedged. `work` runs on a worker and is handed the progress callback to
+    // pass into StorageManager; `done` runs on the UI thread with the report.
+    void runDelete(const QString& title,
+                   std::function<multisite::DeleteReport(
+                       const multisite::DeleteProgressFn&)> work,
+                   std::function<void(const multisite::DeleteReport&)> done);
+
+    // The one place that turns a report into the sentence an operator reads.
+    // Shared so a single delete and a bulk run cannot drift apart in how they
+    // describe the same outcome.
+    QString describe(const multisite::DeleteReport& rep, int older_than_days) const;
     void setBusy(bool busy);
     std::string selectedEventId() const;
     QString friendlyBytes(uint64_t bytes) const;

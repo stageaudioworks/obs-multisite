@@ -47,13 +47,53 @@ struct ListStats {
     bool    cancelled = false;
 };
 
+// What a delete is doing right now — for a progress display, and for the log.
+// One shape covers both a single event and a bulk run, so the window does not
+// need two progress paths for what is, to an operator, one operation.
+struct DeleteProgress {
+    std::string event_id;
+    std::string event_name;
+    uint64_t    event_index = 0;    // 0-based, within a bulk run
+    uint64_t    event_count = 1;
+    uint64_t    objects_done = 0;
+    uint64_t    objects_total = 0;
+};
+
+// Return false to cancel. Cancelling stops before the next object, so what has
+// already gone stays gone — the report says how far it got.
+using DeleteProgressFn = std::function<bool(const DeleteProgress&)>;
+
 struct DeleteReport {
     bool        ok = false;
     uint64_t    objects_deleted = 0;
     uint64_t    bytes_freed = 0;
     bool        confirmed = false; // the event prefix re-listed empty afterwards
+    bool        cancelled = false;
     std::string error;
+
+    // Why a bulk run did what it did. Without these, "deleted 0 objects" is
+    // indistinguishable from a broken button: it could mean nothing was old
+    // enough, or that everything old was undatable, or that the room is empty.
+    // The operator is entitled to know which, and so is the log.
+    uint64_t    events_considered = 0;  // in the room at all
+    uint64_t    events_matched = 0;     // older than the cutoff, not live
+    uint64_t    events_deleted = 0;     // actually removed
+    uint64_t    events_undated = 0;     // no usable start time — never matched
+    uint64_t    events_live_kept = 0;   // on air, always kept
+
+    std::vector<std::string> deleted_ids;  // for the log, in the order removed
 };
+
+// The start time encoded in an event id, or 0 if it does not carry a usable
+// one. Event ids are ULID-style — ten characters of Crockford base32
+// milliseconds, then randomness — so an event whose manifest never recorded a
+// start time can still be dated from its own name.
+//
+// Deliberately strict: a decode that lands outside [2020, tomorrow] is
+// rejected rather than returned. This feeds a deletion cutoff, and a garbled
+// id that decoded to a small number would read as "very old indeed" and take
+// the event with it.
+int64_t event_id_time_ms(const std::string& event_id);
 
 class StorageManager {
 public:
@@ -87,15 +127,21 @@ public:
     // Permanently delete one event and its room-index entry. Refuses the event
     // live.json currently names. `progress(done, total)` runs as objects go;
     // returning false cancels. Verifies by re-listing the event prefix.
-    DeleteReport delete_event(
-        const std::string& event_id,
-        const std::function<bool(uint64_t, uint64_t)>& progress = {});
+    DeleteReport delete_event(const std::string& event_id,
+                              const DeleteProgressFn& progress = {});
 
     // Delete every event older than `older_than_days` (by start time). The
     // live event is always kept. Returns a combined report.
-    DeleteReport delete_older_than(
-        int older_than_days, int64_t now_ms,
-        const std::function<bool(uint64_t, uint64_t)>& progress = {});
+    //
+    // An event is dated by its manifest's start time, and failing that by the
+    // time in its own id (see event_id_time_ms) — because a manifest that
+    // never recorded one is exactly the sort of debris an operator is trying
+    // to clear, and requiring the field made those events permanently
+    // undeletable from here. One that can be dated neither way is counted in
+    // events_undated and left alone, since a cutoff cannot be applied to an
+    // event whose age is unknown.
+    DeleteReport delete_older_than(int older_than_days, int64_t now_ms,
+                                   const DeleteProgressFn& progress = {});
 
 private:
     std::string  m_room_id;
