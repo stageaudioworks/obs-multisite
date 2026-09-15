@@ -387,3 +387,18 @@ footer {
 
 .mini-flow { margin: 18px 0 22px; }
 .mini-flow svg { width: 100%; height: auto; display: block; }
+
+/* ---------- use-case imagery ---------- */
+
+.case { grid-template-columns: 240px 1.6fr; }
+.case-media {
+  width: 100%; aspect-ratio: 4/3; border-radius: 9px; overflow: hidden;
+  background: var(--ink-3); border: 1px solid var(--line);
+}
+.case-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.case-text { min-width: 0; }
+.case-text h3 { margin-top: 2px; }
+@media (max-width: 760px) {
+  .case { grid-template-columns: 1fr; }
+  .case-media { aspect-ratio: 16/9; max-width: 420px; }
+}

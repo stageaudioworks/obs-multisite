@@ -354,44 +354,47 @@
 
     <div class="cases">
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/satellite-campus.jpg" alt="Rows of pews facing a stage, a congregation gathered for a service" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>The satellite campus</h3>
           <div class="who">The job it was built for</div>
-        </div>
         <p>A congregation meets in a second building across town. The main
         campus preaches live; the satellite takes the feed on a screen, runs its
         own worship set before and after, and holds the picture while its own
         host welcomes the room. Timeslipping means the satellite's service order
         does not have to match the main site's minute for minute.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/bad-connection.jpg" alt="Rows of simple folding chairs in a modest community hall" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>The church plant on a bad connection</h3>
           <div class="who">Where commercial gear gives up</div>
-        </div>
         <p>A new site on mobile data or LEO satellite, behind carrier-grade NAT,
         with no static IP and no IT department. Because everything is outbound
         HTTPS and the campus buffers minutes ahead, a link that would make a
         direct stream unwatchable produces a picture the room never sees falter.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/overflow-room.jpg" alt="A small chapel with wooden pews and a narrow aisle" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>Overflow and second rooms</h3>
           <div class="who">Same building, different space</div>
-        </div>
         <p>A chapel, a youth room, a foyer screen. A Raspberry&nbsp;Pi appliance
         per room is cheap enough to leave installed and simple enough that
         nobody needs to operate it &mdash; it boots to an idle screen and picks
         the service up on its own.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/lan-network.jpg" alt="Network switch gear with patch cables" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>One building, zero cloud</h3>
           <div class="who">For sites that never want a byte leaving the network</div>
-        </div>
         <p>A second room on the same network, or on a VPN the church already
         runs, pulls straight from the encoder &mdash; no bucket in the path,
         if you choose. Cloud upload can be switched off completely for an
@@ -399,40 +402,44 @@
         full service; the moment a satellite elsewhere needs it back, turning
         cloud back on needs no confirmation, since that's always the safe
         direction.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/public-simulcast.jpg" alt="A video camera's screen framing a shot during a live recording" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>Public simulcast without a second upload</h3>
           <div class="who">YouTube, Facebook, or a broadcast partner</div>
-        </div>
         <p>The relay container reads the same segments already in the bucket and
         pushes them out to RTMP or SRT, a few minutes behind on purpose. The
         main site's uplink carries the service once, no matter how many places
         it ends up.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/sound-console.jpg" alt="An engineer at a live-sound mixing console during a service" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>Sound into the campus console</h3>
           <div class="who">Where the room has a real PA</div>
-        </div>
         <p>Several audio tracks arrive in the same download &mdash; a programme
         mix, mics on their own tracks, a click for the band, whatever the room
         needs. The campus engineer mixes them in the room rather than taking
         whatever the main site's stereo bus happened to be doing. From the Pi
         appliance they can leave as AES67 and land in a Dante network, so the
         console takes them over the same cable as everything else.</p>
+        </div>
       </div>
 
       <div class="case">
-        <div>
+        <div class="case-media"><img src="assets/photos/watch-again.jpg" alt="Someone watching a laptop screen in a warmly lit room" loading="lazy" width="400" height="300"></div>
+        <div class="case-text">
           <h3>Watch it again on Tuesday</h3>
           <div class="who">Archive, without an archive product</div>
-        </div>
         <p>Every service is already sitting in the bucket as playable media.
         A campus can replay a past one from the recordings list, and a finished
         service downloads as a single MP4 with every audio track intact.</p>
+        </div>
       </div>
     </div>
   </div>
