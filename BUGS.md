@@ -177,8 +177,38 @@ which is point 2 above.
   macOS and Linux, and that is not a thing to change without both in front of
   you.
 
-  ASan and UBSan came back clean across all 41 tests — no leaks, no
-  use-after-free, no undefined behaviour on any covered path.
+  **What it found second, and worse — only on Linux.** The same suite under
+  TSan on the Ubuntu runner reported thirteen more races across the same
+  three tests, all one root cause: `~HttpServer()` destroying
+  `m_conn_done` while a detached connection thread was still inside
+  `pthread_cond_broadcast` on it. The connection lambda did its erase from
+  `m_conn_fds` — the thing `drop_connections()` waits on, and therefore the
+  thing that releases the caller to destroy the server — and *then* went on
+  to close the socket, notify, and decrement `m_connections`, all against an
+  object that was by then free to disappear. Unloading the plugin, or
+  switching remote control off, while a phone still had the control page open
+  is exactly that shape.
+
+  Everything the thread touches now happens before the erase, with the erase
+  and the notify together under one lock, so `drop_connections()` cannot
+  return until the broadcast has finished. The socket close moved inside that
+  same lock rather than after it, which keeps the original invariant (a
+  handle `stop()` can still see is one that is still open) intact.
+
+  Worth noting that macOS TSan reported none of these — the Mac run was clean
+  both before and after. Two platforms in CI is doing real work here, not
+  duplicating one answer.
+
+  **Residual, deliberately:** connection threads are detached and
+  `drop_connections()` waits a bounded five seconds, so a thread genuinely
+  stuck past that still gets its object destroyed underneath it. Waiting
+  forever would trade that for hanging OBS on shutdown — the failure this
+  project has already chased once. The timeout now logs an error naming how
+  many connections it gave up on, so if it ever happens it says so rather
+  than being inferred later from a crash report.
+
+  ASan and UBSan came back clean across all 41 tests on both platforms — no
+  leaks, no use-after-free, no undefined behaviour on any covered path.
 
 
 - **Ending a broadcast published nothing at all — the fix for the shutdown

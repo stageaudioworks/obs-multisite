@@ -430,9 +430,22 @@ void HttpServer::drop_connections() {
     // A fresh lock for the wait, deliberately: a connection thread has to be
     // able to take this mutex to report that it has finished, so holding it
     // across the wait would be the very deadlock this exists to avoid.
+    //
+    // The bound is a trade, and worth stating plainly: connection threads are
+    // detached, so if this times out the caller destroys a server that some
+    // thread may still be inside. Waiting forever instead would trade that
+    // for hanging OBS on shutdown, which is the failure this project has
+    // already chased once and the reason the bound is here. Every connection
+    // has been shutdown() by the loop above before we get here, so reaching
+    // the timeout means a thread is stuck somewhere it should not be — worth
+    // a look if it is ever observed, rather than a longer sleep.
     std::unique_lock<std::mutex> lk(m_conn_mutex);
-    m_conn_done.wait_for(lk, std::chrono::seconds(5),
-                         [this] { return m_conn_fds.empty(); });
+    if (!m_conn_done.wait_for(lk, std::chrono::seconds(5),
+                              [this] { return m_conn_fds.empty(); })) {
+        http_log(HttpLogLevel::Error,
+                 "gave up waiting for " + std::to_string(m_conn_fds.size()) +
+                 " connection(s) to finish after 5s — shutting down anyway");
+    }
 }
 
 void HttpServer::accept_loop() {
@@ -471,17 +484,32 @@ void HttpServer::accept_loop() {
         }
         std::thread([this, handle] {
             serve_connection(handle);
-            {
-                // Erased BEFORE the socket is closed, and both under the mutex
-                // stop() takes: a handle stop() can still see is therefore one
-                // that is still open, so it can never shut down a handle the
-                // operating system has already handed to somebody else.
-                std::lock_guard<std::mutex> lk(m_conn_mutex);
-                m_conn_fds.erase(handle);
-            }
-            close_socket(to_sock(handle));
-            m_conn_done.notify_all();
+            // Everything this thread will ever touch on the server has to
+            // happen BEFORE the erase below, because the erase is what
+            // releases drop_connections() — and the caller destroys the
+            // server the moment that returns. This used to close the socket,
+            // notify and decrement AFTER the erase, so a detached thread went
+            // on using m_conn_done and m_connections while ~HttpServer() was
+            // destroying them: ThreadSanitizer reported it thirteen times
+            // across three tests, every one of them pthread_cond_broadcast
+            // racing pthread_cond_destroy. Unloading a plugin while a phone
+            // still had the control page open is that exact shape.
             m_connections--;
+            {
+                std::lock_guard<std::mutex> lk(m_conn_mutex);
+                // Closed under the same mutex stop() takes rather than after
+                // it, which keeps the original invariant intact: a handle
+                // stop() can still see is one that is still open, so it can
+                // never shut down a descriptor the operating system has
+                // already handed to somebody else.
+                close_socket(to_sock(handle));
+                m_conn_fds.erase(handle);
+                // Notified while the lock is still held, deliberately.
+                // drop_connections() cannot return until it reacquires this
+                // mutex, so the server cannot be destroyed out from under a
+                // broadcast that is still in progress.
+                m_conn_done.notify_all();
+            }
         }).detach();
     }
 }
