@@ -412,6 +412,16 @@ checking the same list again, so a box that is already clean is left alone.
   the build tree, and puts PulseAudio back. The legacy Digisynthetic stack is
   never touched here; that is
   [`purge-digisyn.sh`](../scripts/player/purge-digisyn.sh).
+- **Back to stock in one command, with the way in left intact.** `--stock` is
+  the whole job asked once: the player, the AES67 stack under it, and the
+  packages that existed only to build the two of them. ZeroTier is the
+  exception, deliberately — it is a remote-access tool rather than part of the
+  player, and a box that has just been cleared with nobody able to log into it is
+  worse than one that was never cleared. So a run that leaves it does not merely
+  abandon it: it checks the daemon is enabled and running, starts it if it is
+  not, and prints the address and the networks the box is on. Combining
+  `--stock` with `--purge-remote-access` is refused rather than obeyed, because
+  that pair means *clean this box and lock me out of it*.
 
 ## Remote control from a phone
 

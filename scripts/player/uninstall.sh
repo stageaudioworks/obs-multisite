@@ -28,6 +28,20 @@
 #   --purge-remote-access   remove ZeroTier and cloudflared as well
 #   --purge-aes67           remove Merging's kernel module and aes67-daemon as well
 #
+# --stock is the same question asked once, the way somebody actually asks it:
+# "take this box back to something Raspberry Pi OS recognises, but leave my way
+# in". It removes the player and the AES67 stack together — the sound stack is
+# part of the job the box was doing — and the packages that existed only to
+# build the two of them, and it leaves ZeroTier on purpose. Combining it with
+# --purge-remote-access is refused rather than silently obeyed, because that
+# pair means "clean this box and lock me out of it".
+#
+# ZeroTier is not merely left alone here: the run ends by checking it is
+# enabled, running and has its address, and starting it if something had stopped
+# it. A box that has just been cleared and has no way in is worse than one that
+# was never cleared at all, and the box being cleared is usually one somebody
+# has to reach afterwards.
+#
 # The legacy Digisynthetic stack is never touched here;
 # scripts/player/purge-digisyn.sh is the script for that, and was written as
 # the mirror of the vendor installer that put it there.
@@ -89,6 +103,15 @@ PLAYER_DEV_PACKAGES="
   libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev
   libdrm-dev libasound2-dev libqrencode-dev libfreetype-dev"
 
+# The AES67 daemon's own build-only dependencies, from merging-aes67.sh — the
+# four in its apt list that nothing else on a Raspberry Pi wants. The others in
+# that list (clang, alsa-utils, psmisc, libsystemd-dev and the kernel headers)
+# are deliberately not here: they are ordinary things to have on a Linux box,
+# and removing them to uninstall one program is the same trap. They are named in
+# the closing notes instead, so the choice stays with the operator.
+AES67_DEV_PACKAGES="
+  libboost-all-dev libavahi-client-dev libfaac-dev linuxptp"
+
 DRY_RUN=0
 CHECK_ONLY=0
 KEEP_CONFIG=0
@@ -96,6 +119,7 @@ KEEP_CACHE=0
 PURGE_REMOTE=0
 PURGE_AES67=0
 PURGE_PACKAGES=0
+STOCK=0
 ASSUME_YES="${ASSUME_YES:-0}"
 
 # ── Output ───────────────────────────────────────────────────────────────────
@@ -128,14 +152,19 @@ Options
   --keep-config        Keep /etc/multisite-player and the downloaded cache.
                        Do this when the box is going to be reinstalled.
   --keep-cache         Remove everything except the downloaded event cache.
+  --stock              Take the player AND the AES67 stack off, and the packages
+                       that existed only to build them, and leave ZeroTier on
+                       and up. The one-command answer to "put this box back to
+                       stock, but keep my way in".
   --purge-remote-access
-                       Also remove ZeroTier and cloudflared.
+                       Also remove ZeroTier and cloudflared. This takes the way
+                       into the box with it; refused alongside --stock.
   --purge-aes67        Also remove Merging's kernel module, aes67-daemon and
                        their configuration, and put PulseAudio back. This takes
-                       the sound off the network.
+                       the sound off the network. Implied by --stock.
   --purge-packages     Also remove the -dev packages installed only to build
                        the player. General tools such as build-essential are
-                       left alone.
+                       left alone. Implied by --stock.
   --check              Report what is on the box and change nothing.
   --dry-run            Print every change and make none of them.
   -y, --yes            Do not ask for confirmation.
@@ -261,6 +290,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --keep-config)         KEEP_CONFIG=1; shift ;;
         --keep-cache)          KEEP_CACHE=1; shift ;;
+        --stock)               STOCK=1; shift ;;
         --purge-remote-access) PURGE_REMOTE=1; shift ;;
         --purge-aes67)         PURGE_AES67=1; shift ;;
         --purge-packages)      PURGE_PACKAGES=1; shift ;;
@@ -271,6 +301,20 @@ while [ $# -gt 0 ]; do
         *) die "unknown option: $1 (try --help)" ;;
     esac
 done
+
+# --stock is the whole job asked in one word: the player, the AES67 stack under
+# it, and the packages that existed only to build the two of them. The one
+# combination it refuses is the one that would clean the box and lock somebody
+# out of it — a box being returned to stock is very often a box at the back of a
+# hall that nobody is standing next to, and the run is being watched from the
+# office over ZeroTier.
+if [ "$STOCK" -eq 1 ]; then
+    if [ "$PURGE_REMOTE" -eq 1 ]; then
+        die "--stock leaves ZeroTier on and up on purpose, and --purge-remote-access removes it — give one or the other, not both"
+    fi
+    PURGE_AES67=1
+    PURGE_PACKAGES=1
+fi
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 # Only for a run that is going to change something. --help and --check are read
@@ -307,17 +351,51 @@ report_item() {
     fi
 }
 
-service_known() {
+# One unit, by name, out of systemctl's list. The list is read into a variable
+# rather than piped into grep -q, and that is deliberate: with `pipefail` on,
+# `systemctl list-unit-files | grep -q …` can report failure for a unit that is
+# right there — grep exits at the match, systemctl takes SIGPIPE, and the
+# pipeline's status becomes 141 rather than 0. On a box with a long enough unit
+# list that would have this script decide the player's unit is already gone, or
+# skip putting a stopped ZeroTier back up, which is the one thing it must not do.
+unit_known() {
     have systemctl || return 1
-    systemctl list-unit-files 2>/dev/null | grep -q "^$SERVICE\.service"
+    local units
+    units="$(systemctl list-unit-files 2>/dev/null || true)"
+    grep -q "^$1\.service" <<<"$units"
 }
-aes_service_known() {
-    have systemctl || return 1
-    systemctl list-unit-files 2>/dev/null | grep -q "^$AES_SERVICE\.service"
-}
+service_known()     { unit_known "$SERVICE"; }
+aes_service_known() { unit_known "$AES_SERVICE"; }
+zt_service_known()  { unit_known "$ZT_SERVICE"; }
 aes_module_loaded() { lsmod 2>/dev/null | grep -qE "^$AES_MODULE\b"; }
 zt_installed()      { have zerotier-cli || present_file "$ZT_STATE"; }
 cf_installed()      { have cloudflared || present_file "$CF_DIR"; }
+
+# The address ZeroTier gives its own interface, read rather than asked for: the
+# interface is named after ZeroTier itself, and asking the daemon would want its
+# authtoken. This is the same read the player's identity screen does.
+zt_address() {
+    have ip || return 0
+    ip -4 -o addr show 2>/dev/null \
+        | awk '$2 ~ /^zt/ {split($4,a,"/"); print a[1]; exit}' || true
+}
+
+# One file per network the box has joined, under the daemon's state directory,
+# each named for the network's sixteen hex digits. The daemon also keeps
+# "<id>.local.conf" in there, which is why the name is checked and not just the
+# extension.
+zt_networks() {
+    local file name out=""
+    for file in "$ZT_STATE"/networks.d/*.conf; do
+        [ -e "$file" ] || continue
+        name="$(basename "$file")"
+        case "$name" in
+            *.local.conf) continue ;;
+        esac
+        out="$out ${name%.conf}"
+    done
+    printf '%s' "${out# }"
+}
 
 if service_known; then
     note "found:  the $SERVICE service"
@@ -388,6 +466,11 @@ else
 fi
 if [ "$KEEP_CACHE" -eq 1 ]; then
     note "the downloaded event cache is kept (--keep-cache)"
+fi
+if [ "$STOCK" -eq 1 ]; then
+    warn "--stock: back to stock. The open AES67 stack and the packages that only"
+    warn "existed to build these two go as well, and ZeroTier is the exception —"
+    warn "it stays installed, enabled and up, and is checked at the end."
 fi
 if [ "$PURGE_REMOTE" -eq 1 ]; then
     warn "--purge-remote-access: ZeroTier and cloudflared go as well."
@@ -671,10 +754,76 @@ fi
 
 # ── Build packages, only when asked ──────────────────────────────────────────
 if [ "$PURGE_PACKAGES" -eq 1 ]; then
-    say "Removing the packages installed only to build the player"
+    say "Removing the packages installed only to build"
     apt_purge "$PLAYER_DEV_PACKAGES"
+    if [ "$STOCK" -eq 1 ]; then
+        # --stock: the AES67 daemon's own build-only dependencies go with it.
+        apt_purge "$AES67_DEV_PACKAGES"
+    fi
     note "build-essential, cmake, pkg-config, git and ca-certificates are left"
     note "alone on purpose — they are not only the player's."
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The way back in
+# ═════════════════════════════════════════════════════════════════════════════
+# The player and the sound stack are gone; the box still has to be reachable.
+# ZeroTier is a remote-access tool rather than part of the player, and the box
+# being cleaned up is usually one somebody has to get back into — so it is not
+# merely left alone. It is checked, and put back up if something had stopped it,
+# because "I removed the player and now I cannot reach the box" is the one
+# outcome this script must never produce.
+ZT_UP=1
+say "ZeroTier, left on and up"
+if [ "$PURGE_REMOTE" -eq 1 ]; then
+    note "not applicable — --purge-remote-access removed it"
+elif ! zt_installed; then
+    note "ZeroTier is not on this box, so there was nothing here to leave"
+else
+    if zt_service_known; then
+        if systemctl is-enabled --quiet "$ZT_SERVICE" 2>/dev/null; then
+            note "enabled:     $ZT_SERVICE starts on power-up"
+        elif [ "$DRY_RUN" -eq 1 ]; then
+            note "would run:  systemctl enable $ZT_SERVICE"
+        elif systemctl enable "$ZT_SERVICE" >/dev/null 2>&1; then
+            note "enabled:     $ZT_SERVICE"
+        else
+            warn "could not enable $ZT_SERVICE — it will not come back on its own"
+            warn "after a power cut"
+            ZT_UP=0
+        fi
+
+        if systemctl is-active --quiet "$ZT_SERVICE" 2>/dev/null; then
+            note "running:     $ZT_SERVICE"
+        elif [ "$DRY_RUN" -eq 1 ]; then
+            note "would run:  systemctl start $ZT_SERVICE"
+        elif systemctl start "$ZT_SERVICE" >/dev/null 2>&1; then
+            note "started:     $ZT_SERVICE"
+        else
+            warn "$ZT_SERVICE would not start. What it says:"
+            warn "    journalctl -u $ZT_SERVICE -n 40"
+            ZT_UP=0
+        fi
+    fi
+
+    # The address only appears once the member has been authorised in ZeroTier
+    # Central, so its absence is reported as waiting rather than as a fault:
+    # nothing this run does changes that, and a box that is not authorised was
+    # not reachable before the player was removed either.
+    _zt_ip="$(zt_address)"
+    if [ -n "$_zt_ip" ]; then
+        note "address:     $_zt_ip"
+    else
+        note "address:     none yet — authorise this box in ZeroTier Central and it"
+        note "             turns up here. Nothing in this run changed that."
+    fi
+    _zt_nets="$(zt_networks)"
+    if [ -n "$_zt_nets" ]; then
+        note "joined:      $_zt_nets"
+    elif [ -n "$ZT_NETWORK_ID" ]; then
+        note "joined:      $ZT_NETWORK_ID (read from the settings just removed)"
+    fi
+    note "check it:    sudo zerotier-cli listnetworks"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -744,7 +893,14 @@ fi
 echo
 say "Left alone, on purpose"
 if [ "$PURGE_REMOTE" -eq 0 ]; then
-    if zt_installed; then note "ZeroTier — --purge-remote-access removes it"; fi
+    if zt_installed; then
+        if [ "$ZT_UP" -eq 1 ]; then
+            note "ZeroTier — installed, enabled and up, and the only way into this"
+            note "box from anywhere else (--purge-remote-access removes it)"
+        else
+            note "ZeroTier — still installed, but it is not up: see the warning above"
+        fi
+    fi
     if cf_installed; then note "cloudflared — --purge-remote-access removes it"; fi
 fi
 if [ "$PURGE_AES67" -eq 0 ] && { aes_service_known || present_file "$AES_DAEMON"; }; then
@@ -752,12 +908,23 @@ if [ "$PURGE_AES67" -eq 0 ] && { aes_service_known || present_file "$AES_DAEMON"
 fi
 note "snd and snd-pcm — the HDMI output needs them too"
 note "the legacy Digisynthetic stack — scripts/player/purge-digisyn.sh"
+if [ "$STOCK" -eq 1 ]; then
+    note "clang, alsa-utils, psmisc, libsystemd-dev and the kernel headers, which"
+    note "the AES67 build also wanted: ordinary things to have on a Linux box, and"
+    note "for that reason left to you. sudo apt-get autoremove --purge is how to"
+    note "discard whatever nothing uses any more."
+fi
 
 echo
 note "To put the player back: scripts/player/install.sh, documented in"
 note "docs/SATELLITE.md."
 echo
-if [ "$CLEAN" -eq 1 ]; then
+if [ "$CLEAN" -eq 1 ] && [ "$ZT_UP" -eq 1 ]; then
     exit 0
+fi
+if [ "$ZT_UP" -eq 0 ]; then
+    warn "ZeroTier is not up. That is the one thing this run must not take away"
+    warn "with the player: until it is running and has its address, nobody reaches"
+    warn "this box except somebody standing next to it."
 fi
 exit 1

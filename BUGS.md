@@ -154,6 +154,20 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **Back to stock in one command, and the way into the box left up.**
+  `scripts/player/uninstall.sh` takes the player off a box; this adds `--stock`,
+  which is the whole job asked once — the player, the AES67 stack under it, and
+  the packages that existed only to build the two of them — and makes the
+  ZeroTier guarantee explicit rather than implied. A box being returned to stock
+  is usually one at the back of a hall that nobody is standing next to, cleaned
+  up from the office *over ZeroTier*, so a run that keeps it now checks
+  `zerotier-one` is enabled and running, starts it if something had stopped it,
+  and prints the address and the joined networks the way the player's own
+  identity screen reads them. The one combination that would clean the box and
+  lock somebody out of it — `--stock` with `--purge-remote-access` — is refused
+  instead of obeyed, and a ZeroTier that will not come up makes the run exit
+  non-zero with that sentence rather than a quiet success.
+
 - **The suite now runs under sanitizers, and the first run found a real data
   race in the HTTP server.** Nothing in this tree had ever been checked by a
   tool rather than by a test, while thirteen files here spawn threads — so a

@@ -448,14 +448,19 @@
           <tr><td><code>--dry-run</code></td><td>prints every change, makes none</td></tr>
           <tr><td><code>--keep-config</code></td><td>removes the software, leaves settings and the downloaded event</td></tr>
           <tr><td><code>--keep-cache</code></td><td>keeps only the downloaded event</td></tr>
-          <tr><td><code>--purge-remote-access</code></td><td>also removes ZeroTier and cloudflared</td></tr>
+          <tr><td><code>--stock</code></td><td>the player <em>and</em> the AES67 stack, plus the packages that existed only to build them &mdash; one command back to stock, leaving ZeroTier on and up</td></tr>
+          <tr><td><code>--purge-remote-access</code></td><td>also removes ZeroTier and cloudflared (refused alongside <code>--stock</code>)</td></tr>
           <tr><td><code>--purge-aes67</code></td><td>also removes the RAVENNA module and <code>aes67-daemon</code>, and puts PulseAudio back</td></tr>
         </table>
       </div>
       <p style="color:var(--text-3)">Remote access and AES67 are decisions,
       not defaults, so neither is touched unless asked &mdash; the tunnel may
       still be how the box is reached, and the sound may still be on the
-      network.</p>
+      network. ZeroTier is not merely left alone when it is kept: the run
+      checks it is enabled and running, starts it if something had stopped it,
+      and prints the address and the networks the box is on, because a box that
+      has just been cleared with nobody able to log into it is worse than one
+      that was never cleared at all.</p>
     </section>
 
     <!-- ======================= AES67: INSTALL ======================= -->
