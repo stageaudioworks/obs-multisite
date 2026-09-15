@@ -27,6 +27,14 @@ if(MULTISITE_SANITIZE)
     add_compile_options(-fsanitize=${MULTISITE_SANITIZE}
                         -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=${MULTISITE_SANITIZE})
+    # A couple of places have to know they are being watched, because a
+    # prebuilt system library that spawns its own threads is invisible to
+    # ThreadSanitizer and reports its own correct handoffs as races. See
+    # cmaf_decoder.cpp for the one case that needs it and why suppressing
+    # the reports instead would have been worse.
+    if(MULTISITE_SANITIZE MATCHES "thread")
+        add_compile_definitions(MULTISITE_TSAN_BUILD=1)
+    endif()
     message(STATUS "Sanitizers on: ${MULTISITE_SANITIZE}")
 endif()
 

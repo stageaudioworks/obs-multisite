@@ -210,8 +210,30 @@ struct CmafDecoder::Impl {
             // video decode sets the pace for the whole playout clock: the
             // symptom is a few frames a second and a picture that constantly
             // falls behind. 0 means "pick a sensible number for this machine".
+#if defined(MULTISITE_TSAN_BUILD)
+            // Under ThreadSanitizer, decode on this thread alone.
+            //
+            // Not because the threading is wrong — it is FFmpeg's and it is
+            // correct — but because TSan cannot see that it is. The distro's
+            // libavcodec/libavutil are prebuilt without instrumentation, so
+            // the atomic refcount that hands a frame buffer from FFmpeg's
+            // worker to whoever unrefs it is invisible, and TSan reports the
+            // handoff as a race between av_mallocz on `av:h264:df2` and our
+            // av_frame_unref. It is a false positive every time.
+            //
+            // The alternative was a suppression for libavutil/libavcodec, and
+            // that is worse: TSan matches a suppression against ANY frame in
+            // either stack, so it would equally hide a real race between two
+            // of OUR threads over an AVFrame — a mistake this code could
+            // actually make. Removing their threads instead leaves ours fully
+            // checked and suppresses nothing. Only sanitizer builds take this
+            // path; shipping builds decode on every core as below.
+            c->thread_count = 1;
+            c->thread_type  = 0;
+#else
             c->thread_count = 0;
             c->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
+#endif
             if (avcodec_open2(c, dec, nullptr) < 0) { avcodec_free_context(&c); continue; }
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_codec.empty()) {
                 // Core has no logger of its own — it is shared with the OBS
