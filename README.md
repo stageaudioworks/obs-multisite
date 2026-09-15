@@ -39,6 +39,7 @@ far more than one that is two seconds behind and stutters.
 | You want to… | Start here |
 |---|---|
 | Read the readable introduction | [Project website](https://stageaudioworks.github.io/obs-multisite/) |
+| Read the full manual online | [Manual](https://stageaudioworks.github.io/obs-multisite/docs.html) |
 | Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |

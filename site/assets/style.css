@@ -317,3 +317,73 @@ footer {
   border-top: 1px solid var(--line); padding-top: 24px;
   display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between;
 }
+
+/* ---------- brand lockup (Stage Audio Works logo) ---------- */
+
+.saw-logo { height: 22px; width: auto; display: inline-block; vertical-align: middle; }
+.saw-logo-dark  { display: none; }
+.saw-logo-light { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .saw-logo-dark  { display: inline-block; }
+  :root:not([data-theme="light"]) .saw-logo-light { display: none; }
+}
+:root[data-theme="dark"] .saw-logo-dark  { display: inline-block; }
+:root[data-theme="dark"] .saw-logo-light { display: none; }
+
+.built-by {
+  display: inline-flex; align-items: center; gap: 9px;
+  color: var(--text-3); text-decoration: none;
+}
+.built-by:hover { text-decoration: none; }
+.built-by:hover .saw-logo { opacity: .82; }
+
+/* ---------- docs layout ---------- */
+
+.docs-wrap {
+  max-width: 1240px; margin: 0 auto; padding: 0 24px;
+  display: grid; grid-template-columns: 240px minmax(0,1fr); gap: 48px;
+  align-items: start;
+}
+.docs-nav {
+  position: sticky; top: 78px;
+  max-height: calc(100vh - 96px); overflow-y: auto;
+  padding-bottom: 40px; font-size: 14px;
+}
+.docs-nav h5 {
+  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-3); margin: 22px 0 8px;
+}
+.docs-nav h5:first-child { margin-top: 0; }
+.docs-nav a {
+  display: block; padding: 5px 0 5px 12px; color: var(--text-2);
+  border-left: 2px solid transparent; line-height: 1.35;
+}
+.docs-nav a:hover { color: var(--text); text-decoration: none; }
+.docs-nav a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 560; }
+
+.docs-content { min-width: 0; padding: 44px 0 90px; }
+.docs-content > section { padding: 0 0 56px; border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+.docs-content > section:last-child { border-bottom: 0; margin-bottom: 0; }
+.docs-content h2 { scroll-margin-top: 78px; }
+.docs-content h3 { scroll-margin-top: 78px; margin-top: 30px; }
+.docs-content h4 {
+  scroll-margin-top: 78px; font-size: 16px; font-weight: 640; margin: 22px 0 8px;
+  color: var(--text);
+}
+
+.docs-hero { padding: 56px 0 8px; }
+.docs-hero .wrap { max-width: 1240px; }
+
+@media (max-width: 860px) {
+  .docs-wrap { grid-template-columns: 1fr; gap: 8px; }
+  .docs-nav {
+    position: static; max-height: none; overflow: visible;
+    display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 14px 0 22px;
+    border-bottom: 1px solid var(--line); margin-bottom: 8px;
+  }
+  .docs-nav h5 { display: none; }
+  .docs-nav a { padding: 4px 0; border-left: 0; font-size: 13.5px; }
+}
+
+.mini-flow { margin: 18px 0 22px; }
+.mini-flow svg { width: 100%; height: auto; display: block; }

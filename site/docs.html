@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual — OBS Multisite</title>
+<meta name="description" content="The full operator's manual for OBS Multisite: storage and retention, the main site, receiving in OBS or on a Raspberry Pi appliance, AES67 network audio, LAN delivery, remote control, automation, public simulcast, and troubleshooting.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%234cc2ff'/></svg>">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="4.5" r="3" fill="currentColor"/>
+        <circle cx="4.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <circle cx="19.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <path d="M12 7.5v4m0 0L5.5 16M12 11.5L18.5 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      OBS Multisite
+    </a>
+    <nav>
+      <a href="./#features" class="hide-sm">Features</a>
+      <a href="./#cases" class="hide-sm">Use cases</a>
+      <a href="install.html">Install</a>
+      <a href="docs.html">Manual</a>
+      <a class="cta" href="https://github.com/stageaudioworks/obs-multisite">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="docs-hero">
+  <div class="wrap">
+    <span class="pill"><span class="dot"></span> {{TAG}}</span>
+    <h1 style="max-width:22ch">The manual.</h1>
+    <p class="lede" style="max-width:60ch">
+      Everything an operator needs, in one place: storage and retention, the
+      main site, receiving on a PC or a Raspberry&nbsp;Pi, network audio,
+      running cloud-free on one site, remote control, automation, public
+      simulcast, and what to check when something looks wrong.
+    </p>
+    <p style="color:var(--text-3);font-size:15px;max-width:60ch">
+      New here? <a href="install.html">The install guide</a> gets you
+      broadcasting in about twenty minutes; come back here for everything
+      past that. This page is written by hand rather than generated from the
+      repository, so if it and a doc under
+      <a href="https://github.com/stageaudioworks/obs-multisite/tree/main/docs">docs/</a>
+      ever disagree, the repository is the one that's current — and
+      <a href="https://github.com/stageaudioworks/obs-multisite/issues">an
+      issue</a> saying so is welcome.
+    </p>
+  </div>
+</div>
+
+<div class="docs-wrap">
+  <nav class="docs-nav" aria-label="Manual contents">
+    <h5>Getting started</h5>
+    <a href="#storage">Storage &amp; retention</a>
+    <a href="#main-site">The main site</a>
+    <a href="#satellite-obs">Receiving in OBS</a>
+    <a href="#choosing">OBS or the Pi appliance?</a>
+
+    <h5>The Pi appliance</h5>
+    <a href="#pi-install">Installing it</a>
+    <a href="#pi-display">Display, idle &amp; hold</a>
+    <a href="#pi-audio-hdmi">Audio &amp; the cache drive</a>
+    <a href="#pi-remote-access">Remote access</a>
+    <a href="#pi-uninstall">Uninstalling</a>
+
+    <h5>Network audio (AES67)</h5>
+    <a href="#aes67-install">Installing it</a>
+    <a href="#aes67-control">Switching it on</a>
+    <a href="#aes67-meters">Reading the meters</a>
+
+    <h5>Networking</h5>
+    <a href="#lan-delivery">Skip the cloud</a>
+    <a href="#remote-control">Control from a phone</a>
+    <a href="#automation">Stream Deck &amp; automation</a>
+
+    <h5>Going further</h5>
+    <a href="#simulcast">Public simulcast</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </nav>
+
+  <main class="docs-content">
+
+    <!-- ======================= STORAGE ======================= -->
+    <section id="storage">
+      <p class="eyebrow">Before you start</p>
+      <h2>Storage and retention</h2>
+      <p>Every install needs an S3-compatible bucket and a key that can read
+      and write it. Pick a <strong>storage provider</strong> from the dropdown
+      in any settings dialog &mdash; Cloudflare R2, AWS S3, Backblaze B2,
+      Wasabi, or Custom &mdash; and only the fields that provider actually
+      needs appear.</p>
+      <div class="callout">
+        <p>The decoder's event list also needs <code>s3:ListBucket</code> on
+        that key. Cloudflare's &ldquo;Object Read &amp; Write&rdquo; token
+        includes it; an object-scoped or read-only token often doesn't, and
+        the dock says so rather than showing an empty list.</p>
+      </div>
+
+      <h3>Set a retention rule before your first broadcast</h3>
+      <p><strong>Nothing in this project deletes anything on its own.</strong>
+      Automatic expiry is a bucket <strong>lifecycle rule</strong> you set up
+      once, in your provider's console. Without one, every service you ever
+      broadcast stays in the bucket and the bill grows without limit &mdash;
+      roughly <strong>2.7&nbsp;GB per hour</strong> at 6&nbsp;Mbps.</p>
+
+      <div class="tablewrap">
+        <table>
+          <tr><th style="width:24%">Prefix</th><th>What it holds</th></tr>
+          <tr><td><code>events/</code></td><td>the media &mdash; all of the volume</td></tr>
+          <tr><td><code>rooms/</code></td><td>the per-room event index &mdash; tiny, but if it outlives the media the event list fills with recordings that can't be played</td></tr>
+        </table>
+      </div>
+
+      <p>Both prefixes need the same age. <strong>Seven days is the design
+      default, and the rule is also your DVR depth</strong> &mdash; a
+      satellite can timeslip back only as far as retention allows.</p>
+
+      <p><strong>On Cloudflare R2:</strong> your bucket → Settings → Object
+      lifecycle rules → Add rule → prefix <code>events/</code>, delete objects
+      7 days after creation; then the same for <code>rooms/</code>.
+      (<code>rooms/{room}/live.json</code> is rewritten on every heartbeat, so
+      it stays fresh while a room is in use, and ageing out between services
+      is harmless &mdash; the next Go Live recreates it.) On <strong>AWS S3,
+      MinIO, Backblaze B2 or Wasabi</strong>: the equivalent lifecycle
+      configuration, an Expiration rule per prefix.</p>
+
+      <h3>Deleting by hand, without waiting for the rule</h3>
+      <p>The encoder's <strong>Manage storage…</strong> button lists the
+      room's events and lets you delete one &mdash; or everything older than a
+      chosen number of days &mdash; with a confirmation and a verification
+      pass afterwards. This needs a key that can <code>s3:ListBucket</code>
+      and <code>s3:DeleteObject</code>; the dialog says so plainly if it
+      can't.</p>
+      <ul class="clean">
+        <li>Built for a bucket holding months of events: events appear as soon
+        as their manifests are read, and each one's size fills in beside it
+        afterwards, six at a time.</li>
+        <li>A size that couldn't be measured is reported as
+        <strong>unknown</strong>, never as <code>0&nbsp;B</code> &mdash; a
+        zero against an event holding gigabytes is worse than no figure at all
+        in a window whose whole purpose is deleting things.</li>
+        <li>The event currently on air is never offered for deletion. Closing
+        the window stops the work rather than leaving it running unwatched.</li>
+      </ul>
+
+      <div class="callout info">
+        <p><strong>Want the storage itself self-hosted, not only
+        self-configured?</strong> The bucket only needs to speak the S3 API,
+        so a self-hosted object store works exactly like MinIO does above.
+        <a href="https://github.com/achtungsoftware/alarik">Alarik</a> is one
+        such project &mdash; S3-compatible with lifecycle rules included,
+        running on hardware you own. It's a separate project in beta that we
+        haven't run this pipeline against ourselves; nothing here depends on
+        it, the same as any other provider on this page.</p>
+      </div>
+    </section>
+
+    <!-- ======================= MAIN SITE ======================= -->
+    <section id="main-site">
+      <p class="eyebrow">Broadcasting</p>
+      <h2>The main site</h2>
+      <ol class="steps">
+        <li class="step">
+          <h3>Open the dock and go live</h3>
+          <p>Open the <strong>Multisite Encoder</strong> dock (View → Docks) →
+          <strong>Settings…</strong> Enter your bucket details, choose a video
+          encoder, and name your markers. Settings save as you type.</p>
+          <p>Press <strong>Go live</strong>. Watch the status readout: how much
+          of the service has been sent, how much is waiting, and the
+          <strong>Internet</strong> line (green / amber / red). That line is
+          live even before you go on air &mdash; the dock checks the bucket
+          every few seconds &mdash; so a broken connection is visible before
+          it costs you a service.</p>
+        </li>
+      </ol>
+
+      <h3 style="margin-top:8px">Production audio</h3>
+      <p>Set up in OBS itself, not in the dock. In <strong>Settings → Output →
+      Recording</strong>, enable the audio tracks you intend to send. In
+      <strong>Advanced Audio Properties</strong> (right-click the mixer),
+      assign each source to its tracks &mdash; a mix on track 1, mics on their
+      own tracks, a click on another. Name them under
+      <strong>Settings… → Track labels</strong> so satellites see
+      &ldquo;Click&rdquo; rather than &ldquo;Track 3&rdquo;. Every enabled
+      track travels in the same fragment, locked to the picture.</p>
+      <p style="color:var(--text-3)">Sending stereo only? Do nothing &mdash;
+      track 1 is the default at both ends.</p>
+
+      <h3>Splitting the picture into tiles</h3>
+      <p>A room sending two or four cameras can composite them into one canvas
+      and say how at <strong>Settings → Media → Pictures in this feed</strong>
+      &mdash; one picture, two side by side, two stacked, or a 2&times;2 grid.
+      Each satellite gets every region back as its own, already-cropped
+      source, for the cost of downloading one feed.</p>
+      <div class="callout">
+        <p><strong>Set this before you go live.</strong> The layout is written
+        down when the service starts, so changing it part way through does
+        nothing until the next one &mdash; and it can't be inferred from the
+        picture, since a wide frame is a plausible single camera as well as a
+        pair. Left alone, it stays on one picture.</p>
+      </div>
+
+      <h3>Managing storage</h3>
+      <p>See <a href="#storage">Storage &amp; retention</a> above &mdash; the
+      <strong>Manage storage…</strong> button lives on this dock.</p>
+    </section>
+
+    <!-- ======================= SATELLITE (OBS) ======================= -->
+    <section id="satellite-obs">
+      <p class="eyebrow">Receiving</p>
+      <h2>Receiving in OBS</h2>
+      <ol class="steps">
+        <li class="step">
+          <h3>Add the source</h3>
+          <p>Open the <strong>Multisite Decoder</strong> dock and enter the
+          same bucket details under <strong>Settings…</strong> &mdash; stored
+          per machine, so every source you add afterwards is already
+          configured. Add a <strong>Multisite Source (Decoder)</strong> to a
+          scene.</p>
+        </li>
+        <li class="step">
+          <h3>Load, buffer, play</h3>
+          <p>Press <strong>Load event</strong>, let the buffer fill, then
+          <strong>Play</strong> when ready. Use <strong>Lock</strong> during
+          the service so nothing gets clicked by accident.</p>
+          <p>The decoder holds playback until a whole minute of the event is
+          buffered (set in <strong>Settings… → Start after this much is
+          ready</strong>). The buffer fills first, then the picture starts
+          &mdash; so it doesn't chase the live edge and stall after one piece
+          on a slow or uneven connection.</p>
+        </li>
+      </ol>
+
+      <h3>Reading the status box</h3>
+      <p>The <strong>Internet</strong> line tells you whether the box can
+      reach the bucket, separately from whether anything is on air. If it
+      flips to red (&ldquo;no connection&rdquo;) mid-service, the
+      <strong>Could broadcast for</strong> figure is how long the picture will
+      keep going from what's already downloaded &mdash; enough notice to act,
+      rather than a surprise when the picture freezes.</p>
+
+      <h3>Recordings and timeslipping</h3>
+      <p>To play something other than the live event, use the
+      <strong>Recordings</strong> list: pick a past one and press
+      <strong>Load recording</strong>. Playback stays on it &mdash; if a new
+      event starts mid-watch, the dock offers the switch rather than taking
+      it, since being pulled out of a recording you're part-way through is
+      worse than being told. <strong>Back to live</strong> returns to
+      following the room.</p>
+      <p>Each satellite runs its own clock: <strong>hold</strong> the picture
+      for a local welcome, <strong>resume</strong>, then <strong>catch up to
+      now</strong> &mdash; or sit a set number of minutes behind live all
+      service. <strong>Jog</strong> and scrub move within what's buffered.
+      Hotkeys for all of it are in Settings → Hotkeys; see
+      <a href="#automation">Stream Deck &amp; automation</a>.</p>
+
+      <h3>Extra tracks and picture regions</h3>
+      <p>The Multisite Source carries the video plus one audio track (track 1
+      by default). To bring in another as well, add a <strong>Multisite Audio
+      Track (Decoder)</strong> source for the same room and pick the track
+      &mdash; it attaches to the decoder already running, so it costs no extra
+      download. If the main site is sending tiles, add a
+      <strong>Multisite Picture (Decoder)</strong> source per region instead
+      of cropping by hand.</p>
+    </section>
+
+    <!-- ======================= CHOOSING ======================= -->
+    <section id="choosing">
+      <p class="eyebrow">Deciding</p>
+      <h2>OBS or the Pi appliance?</h2>
+      <p class="section-lede" style="max-width:68ch">
+        A satellite can receive one of two ways, and they suit different
+        rooms. Neither has yet run a real service.
+      </p>
+
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <div class="card">
+          <h3>OBS on a PC</h3>
+          <p>The decoder is a <em>source in a scene</em>, so everything OBS
+          does applies to the relayed picture: lower thirds and campus
+          graphics keyed over it, cutting away to a local camera or worship
+          set and back (the decoder keeps downloading off-screen, so no
+          re-buffering on return), simulcasting the campus feed locally while
+          it plays in the room. DeckLink, AJA and NDI in and out; Dante or
+          AES67 audio out through OBS's own monitoring device. Choose this
+          where the campus produces around the relay, or needs existing SDI,
+          NDI or Dante infrastructure.</p>
+        </div>
+        <div class="card">
+          <h3>The Pi appliance</h3>
+          <p>A fixed-function box: no scene, no overlays, no local sources. It
+          plays the relayed event and nothing else, on hardware that costs
+          less than a monitor, boots into the event on power-up, and is
+          driven from a phone with no desktop to leave in the wrong state.
+          Choose this where a room needs the service on a screen and nothing
+          more &mdash; an overflow room, a chapel, a plant meeting in a
+          school hall.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:34px">More than one camera angle, in guaranteed sync</h3>
+      <p>The protocol carries exactly one video stream per event. A room that
+      needs several angles at a satellite &mdash; a wide shot and a
+      stage-left ISO, four SDI sources for a video wall &mdash; should
+      composite them into one canvas at the main site first (see
+      <a href="#main-site">tile layout</a> above) rather than send several
+      streams: every camera is then a region of the same decoded picture, so
+      there's no possibility of the angles drifting apart the way
+      independently-encoded streams could. The cost is bandwidth &mdash; a
+      composited 4K canvas costs roughly what a single 4K stream does,
+      whatever number of cameras are inside it.</p>
+
+      <div class="callout info">
+        <p><strong>Any machine running OBS can be the origin</strong>, not
+        just the usual main site &mdash; a guest speaker publishing from a
+        hotel, a conference venue for a week, a second campus hosting this
+        week's combined service. Adding one costs a room name and a key that
+        can write to it; nothing is licensed per location. Because segments
+        are written to disk and resent until storage confirms them, an
+        occasional origin on the worst connection in the chain survives a link
+        that would kill a direct stream. Keep rooms separate &mdash; a guest
+        publishes to <code>guest-speaker</code>, not to
+        <code>main-auditorium</code> &mdash; so it's never mistaken for the
+        main programme.</p>
+      </div>
+    </section>
+
+    <!-- ======================= PI: INSTALL ======================= -->
+    <section id="pi-install">
+      <p class="eyebrow">The Pi appliance</p>
+      <h2>Installing it</h2>
+      <p>On stock <strong>Raspberry Pi OS Lite (64-bit)</strong>:</p>
+<pre><code>curl -fsSL --retry 5 \
+  https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh \
+  | sudo bash</code></pre>
+      <p>That installs the dependencies, builds the player, installs it as a
+      service that starts on power-up, and puts a screen up on the HDMI
+      output showing the box's own address and a QR code of it &mdash; point
+      a phone at the screen and the control page opens, nothing to type.
+      Everything else is done from a phone or tablet on the same network:
+      storage credentials, which room to follow, output resolution and frame
+      rate, the sound device, the clock, and the transport controls during a
+      service.</p>
+
+      <ul class="clean">
+        <li><strong>It owns the display.</strong> The player sets the KMS mode
+        itself, so the output resolution and frame rate are exactly what was
+        asked for, with no desktop to be left in the wrong state.</li>
+        <li><strong>The cache belongs on a USB SSD.</strong> It writes roughly
+        3&nbsp;GB an hour, which will wear an SD card out. The installer looks
+        for a USB drive and uses it; if there's none, both it and the
+        interface say so.</li>
+      </ul>
+
+      <h3>Running it by hand</h3>
+      <p>To watch it directly instead of through the service:</p>
+<pre><code>sudo multisite-player --config /etc/multisite-player/config.json --verbose</code></pre>
+      <p><code>journalctl -u multisite-player -f</code> is the whole
+      diagnostic story; the last few hundred lines are also in the interface,
+      under <strong>Log</strong>, for an operator with a phone and no SSH.</p>
+    </section>
+
+    <!-- ======================= PI: DISPLAY ======================= -->
+    <section id="pi-display">
+      <h2>Display, idle screen and hold</h2>
+      <p><code>idle_mode</code> says what the box shows when there's nothing
+      to play: the box's own details, black, or a holding slide.</p>
+      <div class="callout">
+        <p><strong>Hold beats the idle screen.</strong> Pressing
+        <strong>Hold picture</strong> is an operator asking for the frame in
+        front of them to stay &mdash; so the held frame stays up whatever
+        <code>idle_mode</code> is set to, and changing the idle screen
+        mid-service can't replace a picture that was deliberately frozen.
+        <strong>Stop</strong> and waiting for the main site are the deliberate
+        acts the idle screen is for, and both still show it.</p>
+      </div>
+      <p>The web UI's preview is a copy, not a second output &mdash; watching
+      it doesn't change or interrupt what's on the screen in the room. With a
+      tile region selected the screen shows one region while the interface
+      offers both views: <em>what's going out</em> and <em>the whole
+      feed</em>, each with its own fallback frame so switching between them
+      never blanks the picture.</p>
+    </section>
+
+    <!-- ======================= PI: AUDIO ======================= -->
+    <section id="pi-audio-hdmi">
+      <h2>Audio over HDMI, and the cache drive</h2>
+      <p>Up to eight channels of LPCM leave over HDMI, recovered at the
+      campus with a de-embedder. If the device won't take every channel the
+      feed carries, the player says so loudly rather than silently dropping
+      the click &mdash; this is the one place <em>packed</em> multi-channel is
+      the better mode, since eight channels in one stream map straight onto
+      HDMI's eight, in order, with nothing to route. A box fed multi-track
+      instead plays one chosen track &mdash; the first by default, with a
+      picker in Settings.</p>
+      <p>To put the sound on the network instead of leaving it in the HDMI
+      picture, see <a href="#aes67-install">Network audio (AES67)</a> below.</p>
+    </section>
+
+    <!-- ======================= PI: REMOTE ACCESS ======================= -->
+    <section id="pi-remote-access">
+      <h2>Remote access, so the box doesn't need a visit</h2>
+      <p>What makes a wrong setting at a campus expensive is that fixing it
+      means driving there. The installer can bring up two optional tools, and
+      either can be turned on later from <strong>Settings → Remote
+      access</strong>:</p>
+      <ul class="clean">
+        <li><strong>ZeroTier</strong> puts the box on a private network that
+        follows it, reachable from the office wherever it's plugged in
+        &mdash; pass <code>ZT_NETWORK_ID=…</code> to the installer or type it
+        at its prompt.</li>
+        <li><strong>cloudflared</strong> publishes the control page on a
+        public hostname with no port-forward and no static address &mdash;
+        pass <code>CF_TUNNEL_TOKEN=…</code>.</li>
+      </ul>
+      <p>The box's ZeroTier address is shown on its own screen, labelled
+      <strong>REMOTE ACCESS IP</strong> and kept well apart from the in-room
+      addresses &mdash; those are typed into a phone standing in the building,
+      this one isn't. Neither tool is required to play a service; a box with
+      neither says nothing about remote access and behaves exactly as
+      before.</p>
+    </section>
+
+    <!-- ======================= PI: UNINSTALL ======================= -->
+    <section id="pi-uninstall">
+      <h2>Uninstalling</h2>
+      <p>The mirror of the installer:</p>
+<pre><code>sudo bash scripts/player/uninstall.sh</code></pre>
+      <p>Or, on a box with no checkout:</p>
+<pre><code>curl -fsSL \
+  https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/uninstall.sh \
+  | sudo bash</code></pre>
+      <p>It stops and disables the service and removes its unit, the program,
+      the web page, the checkout and build tree, the settings and the
+      downloaded event &mdash; including a cache on a USB SSD, not just under
+      the default path. Every step looks before it acts, and the run ends by
+      checking the same list again.</p>
+      <div class="tablewrap">
+        <table>
+          <tr><th style="width:32%">Flag</th><th>Effect</th></tr>
+          <tr><td><code>--check</code></td><td>reports what's on the box, changes nothing</td></tr>
+          <tr><td><code>--dry-run</code></td><td>prints every change, makes none</td></tr>
+          <tr><td><code>--keep-config</code></td><td>removes the software, leaves settings and the downloaded event</td></tr>
+          <tr><td><code>--keep-cache</code></td><td>keeps only the downloaded event</td></tr>
+          <tr><td><code>--purge-remote-access</code></td><td>also removes ZeroTier and cloudflared</td></tr>
+          <tr><td><code>--purge-aes67</code></td><td>also removes the RAVENNA module and <code>aes67-daemon</code>, and puts PulseAudio back</td></tr>
+        </table>
+      </div>
+      <p style="color:var(--text-3)">Remote access and AES67 are decisions,
+      not defaults, so neither is touched unless asked &mdash; the tunnel may
+      still be how the box is reached, and the sound may still be on the
+      network.</p>
+    </section>
+
+    <!-- ======================= AES67: INSTALL ======================= -->
+    <section id="aes67-install">
+      <p class="eyebrow">Network audio</p>
+      <h2>Installing AES67</h2>
+      <p>Out of the box the sound leaves on the HDMI socket with the picture.
+      A campus that wants it on its own console instead &mdash; a separate
+      feed, its own level control, working whether or not a screen is
+      attached &mdash; needs it on the network, and on a church network that
+      means AES67:</p>
+<pre><code>curl -fsSL \
+  https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/merging-aes67.sh \
+  | sudo bash</code></pre>
+      <p>This installs an open stack built on Merging's <code>ravenna-alsa-lkm</code>
+      kernel module (which registers an ordinary ALSA sound card) and the GPL
+      <code>aes67-daemon</code> that talks to it and does RTP, SDP/SAP and
+      PTP. It builds from source, so give it a few minutes. One run installs
+      the build dependencies, builds the module for the running kernel, builds
+      the daemon, installs both with a systemd unit, and arranges for the
+      module to load at boot &mdash; and it's safe to run again, reusing an
+      existing build tree.</p>
+      <ul class="clean">
+        <li><code>--check</code> reports what's already on the box and changes
+        nothing &mdash; the first thing to run on a machine you didn't
+        install yourself.</li>
+        <li><code>--rewrite-config</code> is needed to touch an existing
+        <code>/etc/daemon.conf</code>; otherwise it's left alone.</li>
+        <li>A <strong>kernel upgrade means rerunning this script</strong>
+        &mdash; the module is built from source against the running kernel
+        and deliberately isn't put through DKMS.</li>
+      </ul>
+
+      <div class="callout">
+        <p><strong>A PTP master has to exist on the network, or nothing
+        flows.</strong> The daemon slaves to a clock; it doesn't hand one out.
+        A Dante device, a console or an Anubis can be that master &mdash; with
+        none of them, the WebUI never says <code>locked</code> and there's
+        silence. This is the most likely reason for quiet after a clean
+        install, and it's a network question rather than a fault. The
+        daemon's own WebUI is at <code>http://&lt;pi&gt;:8081</code> &mdash;
+        8081, not the project's 8080, since the player's own interface already
+        uses 8080 on this box.</p>
+      </div>
+
+      <p>The installer creates one stream as part of the install &mdash; eight
+      channels, multicast, 1&nbsp;ms packets, the AES67 defaults &mdash; so a
+      box that's just been set up is already sending. The source appears in
+      <strong>Dante Controller</strong>, but the route from it to a receiver
+      is still made by hand in that application; test against the real Dante
+      hardware the site will use.</p>
+    </section>
+
+    <!-- ======================= AES67: CONTROL ======================= -->
+    <section id="aes67-control">
+      <h2>Switching it on, and reading it back</h2>
+      <p>Two places in the player's own page (port 8080):</p>
+      <ul class="clean">
+        <li><strong>Settings → Network audio output.</strong> The switch, the
+        multicast address, and the channel count. One button applies all
+        three, because they're one decision: switching it on starts the
+        daemon, sets it to come back after a power cut, and creates or
+        corrects the stream. Switching it off <em>stops</em> the stream rather
+        than deleting it, so the address and width are kept and turning it
+        back on is one click. It sits behind <strong>Lock</strong>, like other
+        settings that change what's on air.</li>
+        <li><strong>This box → Network audio output.</strong> What's actually
+        being sent, read back from the daemon rather than assumed: whether it's
+        running, whether the clock is locked and to which grandmaster, the
+        address and port on the wire, and the SDP it publishes &mdash; which
+        is what a console engineer will ask for.</li>
+      </ul>
+      <div class="callout">
+        <p><strong>The switch moves the sound.</strong> There's one output
+        device on this box, not two, and the daemon publishes whatever is
+        written to the AES67 card &mdash; so turning this on means the player
+        writes to that card instead of HDMI, and turning it off puts the sound
+        back. The output device picker under <strong>Sound</strong> is greyed
+        out while this is on, because letting the two disagree would produce a
+        stream that looks healthy and carries nothing.</p>
+      </div>
+      <p style="color:var(--text-3)">It can't lock the clock for you &mdash;
+      if the page says the clock isn't locked, the fault is on the network,
+      not on this box. And if the AES67 stack isn't installed, both places say
+      so rather than offering a switch that would only fail.</p>
+    </section>
+
+    <!-- ======================= AES67: METERS ======================= -->
+    <section id="aes67-meters">
+      <h2>Reading the meters</h2>
+      <p>The meters under the Play tab are taken from the one place that
+      decides everything: <strong>where the samples are handed to the sound
+      card</strong> &mdash; not from the decoded feed. A meter of the feed says
+      an event carries sound; it can't tell you whether the box is putting it
+      anywhere. Every real fault here &mdash; a card that won't open, a mute
+      somebody forgot, a stream that's off the air while the feed is perfectly
+      healthy &mdash; is invisible on a feed meter and obvious on an output
+      meter.</p>
+
+      <div class="tablewrap">
+        <table>
+          <tr><th style="width:20%">Reading</th><th>What it means</th><th>What to do</th></tr>
+          <tr><td><code>playing</code></td><td>Card open, sound on, frames arriving with signal</td><td>Nothing</td></tr>
+          <tr><td><code>feed-silent</code></td><td>Frames arriving, no signal in them</td><td>The event carries no sound &mdash; a muted mic upstream, or a track never in the feed</td></tr>
+          <tr><td><code>idle</code></td><td>Card open and fed, but nothing is being delivered</td><td>Nothing, if the box is stopped, held or between events</td></tr>
+          <tr><td><code>muted</code></td><td>Switched off in Settings</td><td>Switch it back on under Sound</td></tr>
+          <tr><td><code>card-closed</code></td><td>The card isn't open</td><td>A fault &mdash; the reason is beside it in the Sound readout</td></tr>
+        </table>
+      </div>
+
+      <p><strong>Muted</strong> and <strong>card-closed</strong> both show a
+      flat meter and are not the same thing &mdash; the first is a decision,
+      the second is a fault. Muting writes silence to a card that stays open
+      rather than closing it, because on a box whose sound leaves over the
+      network, closing the card takes the stream off air and receivers won't
+      get it back until they re-subscribe. The panel is drawn at the width of
+      the <strong>card</strong>, not the feed &mdash; a stereo card fed a
+      six-track feed shows two bars, because two is what's actually leaving
+      the box.</p>
+    </section>
+
+    <!-- ======================= LAN DELIVERY ======================= -->
+    <section id="lan-delivery">
+      <p class="eyebrow">Networking</p>
+      <h2>Skip the cloud, on one network</h2>
+      <p>A satellite that shares a network with the main site &mdash; or
+      reaches it over a VPN the church already runs &mdash; doesn't have to go
+      through the bucket at all. It can pull straight from the encoder
+      instead, with cloud storage as an automatic fallback.</p>
+
+      <div class="mini-flow">
+        <svg viewBox="0 0 760 190" role="img" aria-label="A satellite prefers a direct LAN connection to the encoder, and falls back to the cloud bucket per segment only when the LAN path can't answer.">
+          <defs>
+            <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+              <path d="M0 0 L9 4.5 L0 9 z" fill="var(--text-3)"/>
+            </marker>
+          </defs>
+          <style>
+            .bx  { fill: var(--ink-2); stroke: var(--line); stroke-width: 1.5; rx: 10; }
+            .bx-a{ fill: color-mix(in srgb, var(--accent) 12%, var(--ink-2)); stroke: var(--accent); }
+            .bx-g{ fill: color-mix(in srgb, var(--good) 12%, var(--ink-2)); stroke: var(--good); }
+            .t   { fill: var(--text); font: 600 14.5px var(--font); }
+            .s   { fill: var(--text-3); font: 400 12px var(--font); }
+            .ln  { stroke: var(--text-3); stroke-width: 1.5; fill: none; marker-end: url(#ar2); }
+            .ln-g{ stroke: var(--good); stroke-width: 2; fill: none; marker-end: url(#ar2); }
+            .lbl { fill: var(--text-3); font: 500 11px var(--font); letter-spacing: .03em; }
+            .lbl-g{ fill: var(--good); font: 700 11px var(--font); letter-spacing: .03em; }
+          </style>
+          <rect class="bx-g" x="8" y="65" width="188" height="60"/>
+          <text class="t" x="26" y="90">Main campus</text>
+          <text class="s" x="26" y="110">Encoder, on the LAN</text>
+
+          <rect class="bx-a" x="286" y="8" width="188" height="56"/>
+          <text class="t" x="304" y="32">Your S3 bucket</text>
+          <text class="s" x="304" y="50">Cloud, fallback path</text>
+
+          <rect class="bx" x="286" y="122" width="188" height="56"/>
+          <text class="t" x="304" y="146">Same network / VPN</text>
+          <text class="s" x="304" y="164">Plain HTTP, no bucket in the path</text>
+
+          <rect class="bx-g" x="564" y="65" width="188" height="60"/>
+          <text class="t" x="582" y="90">Satellite</text>
+          <text class="s" x="582" y="110">Prefers LAN automatically</text>
+
+          <path class="ln" d="M196 90 C240 90 240 36 286 36"/>
+          <text class="lbl" x="200" y="55">still uploads, in case</text>
+          <path class="ln-g" d="M196 96 C240 96 240 150 286 150"/>
+          <text class="lbl-g" x="200" y="140">preferred</text>
+
+          <path class="ln-g" d="M474 150 C520 150 520 96 564 96"/>
+          <text class="lbl-g" x="502" y="177">LAN, per segment</text>
+          <path class="ln" d="M474 36 C520 36 520 84 564 84"/>
+          <text class="lbl" x="512" y="20">fallback only</text>
+        </svg>
+      </div>
+
+      <ul class="clean">
+        <li>On the <strong>Multisite Encoder</strong> dock, open
+        <strong>Settings → Storage</strong> and turn on <strong>LAN
+        delivery</strong>. The encoder starts serving segments directly over
+        plain HTTP on the network.</li>
+        <li>On each satellite that can reach it &mdash; the OBS decoder or the
+        Pi appliance, both support this identically &mdash; enter the
+        encoder's LAN host, port and token in its own storage settings. It
+        prefers that path automatically the moment it answers, and falls back
+        to cloud <strong>per segment, not per session</strong> the instant it
+        doesn't &mdash; so one segment that happens to have aged out of the
+        LAN side's retention falls back for that segment alone, rather than
+        dropping the whole connection to cloud.</li>
+        <li>Cloud upload stays on by default throughout, since every other
+        satellite and the archival recording still depend on it. A checkbox
+        appears once LAN delivery is on to turn it off entirely for a service
+        &mdash; with a confirmation prompt, since that direction isn't easily
+        undone mid-service. Turning it back on needs no confirmation, since
+        that's always the safe direction.</li>
+      </ul>
+      <div class="callout">
+        <p>With cloud switched off, <strong>nothing for that event reaches the
+        bucket at all</strong>. Every satellite still gets the full service,
+        provided it can reach the encoder directly &mdash; a satellite that
+        can't, or one joining from elsewhere, needs cloud back on.</p>
+      </div>
+    </section>
+
+    <!-- ======================= REMOTE CONTROL ======================= -->
+    <section id="remote-control">
+      <h2>Control from a phone</h2>
+      <p>Both docks &mdash; and the Pi appliance &mdash; have a
+      <strong>Remote control</strong> group in their settings. It serves the
+      campus player's own operator interface on the church network: one page,
+      polled twice a second, in the plain language of a service, so a marker
+      can be pressed from the back of the room and the queue watched from the
+      foyer. The address to type into a phone is shown in that group, and is
+      selectable. It's on by default on <strong>port 8080</strong>, and binds
+      every interface &mdash; a page that only answered <code>localhost</code>
+      couldn't be reached from the tablet it exists for.</p>
+
+      <div class="callout">
+        <p><strong>There is no password and no TLS.</strong> The building's
+        own network is the guard. If that isn't the trust you want, switch it
+        off in the same group.</p>
+      </div>
+
+      <h3>What the encoder's page offers</h3>
+      <ul class="clean">
+        <li><strong>Go live</strong> and <strong>End the broadcast</strong>,
+        with the same editable event name the dock has.</li>
+        <li>The four <strong>marker</strong> buttons, named in Settings.</li>
+        <li>A live readout: confirmed pieces, what's waiting to send, retries,
+        bytes sent, the measured upload rate, the Cloudflare edge serving the
+        bucket, and the last error if there is one.</li>
+        <li><strong>Settings</strong> &mdash; the same fields as the dock, with
+        the secret key never shown; the field is left as dots to mean
+        &ldquo;unchanged&rdquo;.</li>
+        <li><strong>Log</strong> &mdash; the last few hundred
+        <code>[multisite]</code> lines, for somebody not sitting at the
+        machine.</li>
+      </ul>
+
+      <h3>What the decoder's / appliance's page offers</h3>
+      <p>Play, hold, catch up, jog, stay behind live, the recordings list, and
+      the readout that says how long this campus could keep playing through
+      an outage &mdash; reaching the same controls the hotkeys use, so a page
+      and a keypress can never disagree about what they did.</p>
+
+      <p><strong>Lock</strong>, in the top bar, refuses anything that would
+      change what's on air while it's on &mdash; deliberately not remembered
+      across a restart, since a lock that survived one would leave a campus
+      unable to broadcast with no obvious reason why. Which pages exist
+      follows the machine's role: a main site serves the encoder page only, a
+      satellite the decoder page only, a machine set to Both serves both and
+      links them.</p>
+      <p style="color:var(--text-3)">On Windows, the first start raises the
+      usual firewall prompt &mdash; allow it for private networks, or the page
+      won't answer from another device.</p>
+    </section>
+
+    <!-- ======================= AUTOMATION ======================= -->
+    <section id="automation">
+      <h2>Stream Deck and automation</h2>
+      <p>A volunteer running a service reaches for a physical button, not a
+      window. Two ways to give them one:</p>
+
+      <h3>Hotkeys, today</h3>
+      <p>Play, stop, hold, resume, catch-up, jog and markers are registered in
+      <strong>Settings → Hotkeys</strong>. Companion's OBS module can trigger a
+      hotkey by id, so they work on a Stream Deck now &mdash; but a hotkey
+      carries no parameters and shows no feedback, so the button can't light
+      up while an event is live.</p>
+
+      <h3>The obs-websocket API</h3>
+      <p>Every control the pages offer is also an obs-websocket
+      <strong>vendor request</strong>, so any obs-websocket client &mdash;
+      Companion's <em>Custom Vendor Request</em> action, a script, another
+      automation system &mdash; can call them, under the vendor
+      <code>obs-multisite</code>:</p>
+
+      <div class="tablewrap">
+        <table>
+          <tr><th style="width:44%">Request</th><th>What it does</th></tr>
+          <tr><td><code>encoder/status</code>, <code>decoder/status</code></td><td>the same document the page polls</td></tr>
+          <tr><td><code>encoder/go-live</code></td><td>go live, with an optional <code>event_name</code></td></tr>
+          <tr><td><code>encoder/end</code>, <code>encoder/marker</code></td><td>end the broadcast; drop a marker (<code>label</code>)</td></tr>
+          <tr><td><code>encoder/settings</code>, <code>decoder/settings</code></td><td>read, and apply a partial document</td></tr>
+          <tr><td><code>decoder/play</code>, <code>stop</code>, <code>hold</code>, <code>continue</code>, <code>catch-up</code></td><td>the transport controls</td></tr>
+          <tr><td><code>decoder/jog</code> (<code>seconds</code>), <code>decoder/seek</code> (<code>ms</code>), <code>decoder/delay</code> (<code>seconds</code>)</td><td>navigate</td></tr>
+          <tr><td><code>decoder/marker</code> (<code>id</code>), <code>decoder/load-event</code> (<code>event_id</code>), <code>decoder/return-to-live</code></td><td>markers and recordings</td></tr>
+          <tr><td><code>decoder/events</code>, <code>decoder/events/refresh</code></td><td>the recording list</td></tr>
+        </table>
+      </div>
+
+      <p>Each request answers with the new status, so a client never has to
+      guess what its own button did, and a refusal says why in an
+      <code>error</code> field. Alongside the requests, the plugin emits
+      <strong>events</strong> &mdash; <code>encoder/state</code> and
+      <code>decoder/state</code> &mdash; whenever something an operator cares
+      about changes, which is what lets a Companion module light a button or
+      show &ldquo;12&nbsp;s behind&rdquo;.</p>
+      <p style="color:var(--text-3)">Nothing changes for a church that hasn't
+      turned obs-websocket on &mdash; the plugin logs one line and carries on.
+      It ships with OBS 28+ and is enabled in Tools → WebSocket Server
+      Settings.</p>
+
+      <h3>The ready-made module</h3>
+      <p><a href="https://github.com/stageaudioworks/companion-module-obs-multisite">companion-module-obs-multisite</a>
+      is a Bitfocus Companion module carrying every action above, the
+      feedbacks that light a button while an event is live or a campus is
+      held, behind live or offline, the variables, and a preset bank for each
+      half. It also drives the Pi appliance directly, over its own HTTP API,
+      so a satellite needs no OBS at all.</p>
+    </section>
+
+    <!-- ======================= SIMULCAST ======================= -->
+    <section id="simulcast">
+      <p class="eyebrow">Going further</p>
+      <h2>Public simulcast</h2>
+      <p><code>relay/</code> is a small self-hosted service that reads the
+      same segments and pushes them out to YouTube, Facebook, any RTMP
+      destination, or over SRT to anywhere that prefers it &mdash; relaying
+      from the bucket rather than adding a second output to OBS, so the main
+      site uploads once whether the event is going to two campuses or to two
+      campuses and the internet.</p>
+
+<pre><code>docker run -d --name multisite-relay \
+  -p 8080:8080 \
+  -v multisite-relay-data:/data \
+  -e RELAY_ROOM=main-auditorium \
+  ghcr.io/stageaudioworks/multisite-relay:latest</code></pre>
+
+      <p>Then open it in a browser, put in the bucket details, and add a
+      destination. A $5/month VPS is the target rather than a stretch, since
+      nothing is being re-encoded.</p>
+
+      <ul class="clean">
+        <li><strong>It has a login, and binds to localhost by default.</strong>
+        Put HTTPS in front of it &mdash; <code>relay/Caddyfile.example</code>
+        or <code>relay/nginx.conf.example</code> is a working config.</li>
+        <li><strong>One chosen sound feed per destination</strong>, picked by
+        the name the main site gave it, never a track number.</li>
+        <li><strong>A delay you choose</strong>, three minutes by default
+        &mdash; how much of the event the relay holds in hand, and so how long
+        an outage at the main site can last before the public sees it.</li>
+        <li><strong>It reconnects and resumes by itself</strong>, riding out a
+        silence under 45 seconds without even dropping the connection, and
+        tells apart a failure receiving from the main site and a failure
+        sending to the destination.</li>
+        <li><strong>RTMP or SRT, decided by the address you paste</strong>
+        &mdash; <code>rtmp://</code> or <code>srt://</code>. SRT can also
+        <em>listen</em>, for a partner that pulls from you: leave the host out
+        of the address, <code>srt://:9000</code>.</li>
+        <li><strong>HEVC goes out over SRT</strong>, since MPEG-TS carries it
+        properly where FLV (what RTMP means) can't. It still can't reach
+        YouTube.</li>
+        <li><strong>It refuses rather than guesses</strong> &mdash; AV1, HEVC
+        to an RTMP destination, and packed multi-channel audio are all
+        declined with a plain explanation.</li>
+      </ul>
+
+      <p>For a finished event, it can <strong>download one as an MP4</strong>
+      streamed straight from storage (no disk cost, every audio track
+      included), or <strong>replay one to a destination</strong> as though it
+      were happening now &mdash; a proof of concept today, one at a time,
+      started by hand.</p>
+
+      <p>Full deployment notes, including bandwidth and disk sizing, are in
+      <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/relay/README.md">relay/README.md</a>.</p>
+    </section>
+
+    <!-- ======================= TROUBLESHOOTING ======================= -->
+    <section id="troubleshooting">
+      <h2>Troubleshooting</h2>
+
+      <ul class="clean">
+        <li><strong>Read the OBS log first.</strong> Help → Log Files → Show
+        Log Files. Both plugins log everything they do under
+        <code>[multisite]</code>, including why they refused something. On a
+        Pi, <code>journalctl -u multisite-player -f</code> is the same idea.</li>
+        <li><strong>An empty recordings list</strong> usually means the token
+        can't <code>ListBucket</code>. The dock says so rather than showing
+        you nothing &mdash; see <a href="#storage">Storage &amp;
+        retention</a>.</li>
+        <li><strong>The plugin doesn't appear in View → Docks</strong> on
+        macOS &mdash; the quarantine flag is still set:
+        <code>xattr -dr com.apple.quarantine …/obs-multisite.plugin</code>,
+        then restart OBS. See the <a href="install.html">install guide</a>
+        for the full command.</li>
+        <li><strong>A satellite is a long way behind and not catching up</strong>
+        &mdash; that's timeslipping working as designed. Press catch up to
+        now.</li>
+        <li><strong>AES67 is installed but silent</strong> &mdash; almost
+        always a missing PTP master on the network, not a fault in the
+        install. See <a href="#aes67-install">Installing AES67</a>.</li>
+        <li><strong>A Windows remote-control page won't answer from another
+        device</strong> &mdash; allow it through the firewall for private
+        networks on first launch.</li>
+      </ul>
+
+      <div class="callout info">
+        <p>A good bug report is a real contribution: much of what works well
+        here was fixed because somebody took the time to paste a log.
+        <a href="https://github.com/stageaudioworks/obs-multisite/issues">Open
+        an issue →</a></p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h4>OBS Multisite</h4>
+        <p style="color:var(--text-3);margin:0;max-width:34ch">
+          Multisite church streaming through storage you own. Released under the
+          GPL-3.0-or-later in support of local churches.
+        </p>
+      </div>
+      <div>
+        <h4>Start</h4>
+        <a href="install.html">Install guide</a>
+        <a href="docs.html">Manual</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/releases">Downloads</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/OPERATOR.md">Operator guide (repo)</a>
+      </div>
+      <div>
+        <h4>Go further</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing a campus box (repo)</a>
+        <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion module</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">Design &amp; protocol</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/CONTRIBUTING.md">Contributing</a>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite">Source on GitHub</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/issues">Report a bug</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/LICENSE">License</a>
+        <a href="https://www.stageaudioworks.com">Stage Audio Works</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <a class="built-by" href="https://www.stageaudioworks.com">
+        <span>Built by</span>
+        <img class="saw-logo saw-logo-light" src="assets/saw-logo-black.svg" alt="Stage Audio Works">
+        <img class="saw-logo saw-logo-dark"  src="assets/saw-logo-white.svg" alt="Stage Audio Works">
+      </a>
+      <span>&copy; 2026 Stage Audio Works &middot; GPL-3.0-or-later &middot; Site built from {{TAG}} &middot; {{BUILD_DATE}}</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Scrollspy: highlight the manual-nav link for whichever section is in view.
+(function () {
+  var sections = Array.prototype.slice.call(document.querySelectorAll('.docs-content > section[id]'));
+  var links = Array.prototype.slice.call(document.querySelectorAll('.docs-nav a'));
+  if (!sections.length || !links.length || !('IntersectionObserver' in window)) return;
+
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+
+  var current = null;
+  function setActive(id) {
+    if (id === current) return;
+    if (current && byId[current]) byId[current].classList.remove('active');
+    if (id && byId[id]) byId[id].classList.add('active');
+    current = id;
+  }
+
+  var io = new IntersectionObserver(function (entries) {
+    var visible = entries.filter(function (e) { return e.isIntersecting; });
+    if (visible.length) {
+      visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+      setActive(visible[0].target.id);
+    }
+  }, { rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+
+  sections.forEach(function (s) { io.observe(s); });
+})();
+</script>
+
+</body>
+</html>
