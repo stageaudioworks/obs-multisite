@@ -31,6 +31,103 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.19-alpha
+
+**If you are running v0.1.18-alpha, update before your next service.** That
+release could finish a broadcast without ever recording that it had finished.
+Everything looked right in OBS, and the campuses watching were left polling a
+room that never said it was done — eventually reporting a service that ended
+perfectly normally as *interrupted*. The cause, the fix, and the two data
+races found underneath it are below. The simulcast relay also catches up with
+the LAN delivery work the plugins got last release.
+
+### End Broadcast could publish nothing at all
+
+The shutdown hang fixed in v0.1.18-alpha was fixed by cancelling the upload
+transport before joining its thread, so a stuck request could not hold OBS
+hostage. That was right. What was missed is that cancelling is deliberately
+*sticky* — the transport refuses every request afterwards, which is exactly
+what makes it safe to cancel a thread you are about to join — and that
+`Session::end()` calls the cancel and then keeps using the same transport for
+everything that still has to happen: draining whatever is left in the spool,
+writing the final `manifest.json`, and writing the `live.json` that marks the
+event ended.
+
+So from v0.1.18-alpha, every clean End Broadcast switched the transport off
+one line before the work that needed it. The spool drain uploaded nothing and
+spent its full deadline failing, and neither closing file was ever written.
+
+The lost segment was the visible symptom and the smaller problem: it stays in
+the local spool and goes up on the next resume, exactly as designed. The
+event never being marked ended is the real one, because nothing downstream
+can tell that apart from a main site that went off the air mid-service.
+
+The transport is now resumed the moment the upload thread has been joined,
+and again whenever a session begins, so a transport inherited from a previous
+session cannot start life switched off. `Session::end()` now returns whether
+it actually managed to mark the event ended, and the OBS layer logs a plain
+error naming the consequence when it did not, instead of reporting a clean
+stop regardless.
+
+Worth saying why 41 passing tests did not catch this: the test double
+inherited the interface's do-nothing `cancel_pending()`, so it was more
+forgiving than the real transport and the bug was invisible to it. The mock
+now models the stickiness, and the new test fails against the old code.
+
+### The suite now runs under sanitizers, and found two more races
+
+Nothing in this tree had ever been checked by a tool rather than by a test,
+while thirteen files here spawn threads — so a passing test that had raced
+read exactly like a passing test that had not. The same 41 tests now build
+and run under ThreadSanitizer and under ASan/UBSan on every push, plus
+clang-tidy against a curated check list.
+
+It found two genuine races in the HTTP server that serves the remote-control
+pages, both about shutdown. One was the listening socket handle being written
+by `stop()` on one thread while the accept loop read it on another — which
+also meant `accept()` could be called on a handle already closed and reissued
+to something else, and this process runs a second HTTP server whose sockets
+are precisely what that number gets reused for. The other, reported only on
+Linux, was connection threads still touching the server after releasing the
+shutdown that was waiting to destroy it: in practice, unloading the plugin or
+switching remote control off while a phone still had the control page open.
+
+ASan and UBSan came back clean across all 41 tests on both platforms.
+
+### The simulcast relay catches up on LAN delivery
+
+The relay read its live feed through cloud storage only, so a relay sitting
+on the same network as the encoder still round-tripped every segment through
+the bucket, and an encoder running LAN-only with cloud storage disabled could
+not be relayed from at all. It now uses the same direct-then-fallback
+arrangement the OBS decoder and the Pi appliance already do, keyed off
+whichever of cloud or LAN is configured.
+
+Browsing, downloading and rebroadcasting past events stay cloud-only, by
+nature rather than by omission: they list the bucket, and an encoder's LAN
+side only ever holds the event currently in progress.
+
+The relay's settings page also gains the storage provider dropdown
+(Cloudflare R2 / AWS S3 / Backblaze B2 / Wasabi / Custom) the two OBS docks
+and the appliance page have had for several releases.
+
+### The plugin's own web remotes match everything else now
+
+The encoder and decoder remote-control pages — the ones you open on a phone
+rather than in OBS — were the last surface still on the original flat
+settings layout with six raw storage fields. They now have the same
+collapsible sections, the same provider dropdown, and the LAN and
+cloud-disable settings they had been missing entirely, including the same
+confirmation prompt and the same refusal to leave an event with no delivery
+path at all.
+
+### Also
+
+A lossless high-quality mode is on the roadmap as Phase 15 — FLAC audio on
+every track with around 10 Mbps HEVC video, for venues with bandwidth to
+spare. It would not be usable through the web relay, only with the player
+applications. Nothing is built yet.
+
 ## What's new in v0.1.18-alpha
 
 A campus on the same network as the main site, or reachable over a VPN the

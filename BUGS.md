@@ -210,6 +210,41 @@ which is point 2 above.
   ASan and UBSan came back clean across all 41 tests on both platforms — no
   leaks, no use-after-free, no undefined behaviour on any covered path.
 
+  **One false positive, and why it is handled the way it is.** `cmaf_decode`
+  failed under TSan with a race between `av_mallocz` on FFmpeg's own
+  `av:h264:df2` worker and our `av_frame_unref`. That handoff is FFmpeg's and
+  it is correct — but it goes through an atomic refcount inside libavutil,
+  and CI links the distro's prebuilt libavutil, which carries no sanitizer
+  instrumentation. TSan therefore cannot see the refcount and reports every
+  handoff as a race. The decoder now asks for one thread when, and only when,
+  `MULTISITE_TSAN_BUILD` is set; shipping builds still decode on every core,
+  which the Pi needs. A suppression for libavutil/libavcodec was the obvious
+  alternative and is worse: TSan matches a suppression against *any* frame in
+  either stack, so it would equally have hidden a genuine race between two of
+  our own threads over an AVFrame — a mistake this code could actually make.
+
+  **clang-tidy found no correctness bugs**, and that is worth writing down so
+  nobody re-litigates it from the raw count. 88 findings, all read. The two
+  families that looked most dangerous were false in every instance: the five
+  `unchecked-optional-access` are one properly-guarded variable whose check
+  sits ~60 lines above its use, past where the analysis gives up, and the
+  five `implicit-widening-of-multiplication` are all compile-time constants
+  (`256*1024`, `30*60*1000`) orders of magnitude below `INT_MAX`. The 14
+  `empty-catch` are all the same deliberate pattern — parse something that
+  may be garbage, fall back to a default — and notably *not* the family the
+  End Broadcast bug belonged to, which was a discarded return value;
+  `bugprone-unused-return-value` reported nothing. The 16 `concurrency-
+  mt-unsafe` are all `strerror`, whose worst case is one thread printing
+  another's error text, never wrong behaviour.
+
+  So the check list stays advisory (`WarningsAsErrors: ''`). A 0-for-10 hit
+  rate on the two checks most worth betting on is the argument for leaving it
+  that way, not for turning it up. Known remaining nits, none urgent: the
+  `HeaderFilterRegex` lets `src/appliance/../vendor/nlohmann/json.hpp`
+  through on the unnormalised path, `strerror` wants a portable wrapper, and
+  `http_server.cpp` turns a malformed `Content-Length` into 0 in silence
+  where a 400 would be more honest.
+
 
 - **Ending a broadcast published nothing at all — the fix for the shutdown
   hang switched the transport off one line before everything that still
