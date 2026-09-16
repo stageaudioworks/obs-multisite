@@ -1,24 +1,32 @@
-# obs-multisite
+<h1 align="center">obs-multisite</h1>
 
-Distribute a live church event from a main campus to any number of satellite
-campuses, reliably, over ordinary venue internet — using nothing but an
-S3-compatible bucket you control.
+<p align="center">
+  <strong>Multisite church streaming, through storage you own.</strong><br>
+  Send a live service from a main campus to any number of satellite campuses
+  over ordinary venue internet, using nothing but an <strong>S3-compatible
+  bucket you control</strong>. No subscription, no central server, no inbound
+  ports at any site.
+</p>
 
-**New here?** The [project website](https://stageaudioworks.github.io/obs-multisite/)
-is the readable introduction, and [QUICKSTART.md](QUICKSTART.md) gets you
-broadcasting in twenty minutes. This README is the technical overview: what
-this is, how far along it is, and where it falls short. The long-form material
-lives under [Where to go next](#where-to-go-next).
+<p align="center">
+  <a href="https://github.com/stageaudioworks/obs-multisite/releases"><img src="https://img.shields.io/github/v/release/stageaudioworks/obs-multisite?include_prereleases&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha">
+  <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-blue" alt="Licence: GPL-3.0-or-later">
+  <img src="https://img.shields.io/badge/OBS%20Studio-32.2.2%2B-302e31" alt="OBS Studio 32.2.2 or newer">
+  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-4cc2ff" alt="Windows, macOS and Linux">
+</p>
 
-Two OBS Studio plugins in one module: an **encoder** at the main site that
-publishes the programme as CMAF segments, and a **decoder** at each satellite
-that receives, buffers deeply, and plays it out with per-campus timeslipping.
-There is no central server, no database and no vendor. The bucket is a dumb file
-store; all the intelligence is at the edges.
+<p align="center">
+  <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/obs-plugin.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/obs-plugin.yml/badge.svg" alt="obs plugin build"></a>
+  <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/core-tests.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/core-tests.yml/badge.svg" alt="core reliability tests"></a>
+  <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/analysis.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/analysis.yml/badge.svg" alt="sanitizers and static analysis"></a>
+  <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/relay-container.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/relay-container.yml/badge.svg" alt="relay container"></a>
+  <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/dco.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/dco.yml/badge.svg" alt="DCO"></a>
+</p>
 
-Design priority, in order: **reliability**, then quality, then simplicity, and
-**latency last** — a satellite that is a minute behind but never drops is worth
-far more than one that is two seconds behind and stutters.
+<p align="center">
+  <img src="site/assets/photos/satellite-campus.jpg" alt="A congregation gathered for a service, seen from the balcony of a church sanctuary" width="820">
+</p>
 
 > **⚠️ Alpha — development build.** This is pre-release software under active
 > development. A six-hour continuous soak has been run end to end (see
@@ -34,13 +42,105 @@ far more than one that is two seconds behind and stutters.
 
 ---
 
+## What it is
+
+Two OBS Studio plugins in one module: an **encoder** at the main site that
+publishes the programme as CMAF segments, and a **decoder** at each satellite
+that receives, buffers deeply, and plays it out with per-campus timeslipping.
+There is no central server, no database and no vendor — the bucket is a dumb
+file store, and all the intelligence is at the edges.
+
+```text
+     MAIN CAMPUS                       YOUR BUCKET                       EACH CAMPUS
+┌────────────────────┐            ┌────────────────────┐            ┌────────────────────┐
+│ OBS + Multisite    │upload ────→│ S3-compatible      │            │ OBS + Multisite    │
+│ Encoder            │            │ bucket you own     │            │ Decoder            │
+│                    │  ←── poll  │                    │            │     or             │
+│ capture -> encode  │            │ rooms/{room}/...   │            │ Raspberry Pi 5     │
+│ -> CMAF -> queue   │            │ events/{ulid}/...  │            │ campus player      │
+│ -> upload, retry   │            │ no server, no DB   │            │ deep buffer        │
+└────────────────────┘            └────────────────────┘            └────────────────────┘
+                             every campus polls the same objects
+```
+
+| Piece | Runs on | What it does |
+|---|---|---|
+| **Multisite Encoder** | OBS at the main site | Muxes OBS's own encoded frames into CMAF segments, writes each one to a durable local queue before it goes anywhere, then uploads with retry. A dropped link fills the queue rather than the gap. |
+| **Multisite Decoder** | OBS at each campus | Finds what is live, downloads ahead of playout, verifies every segment, and exposes the feed as sources — the picture, plus each audio track separately, for local mixing and in-ears. |
+| **Campus player** | A Raspberry Pi 5, no PC | The same receive core, headless: HDMI out, a browser control page, timeslipping, and AES67 onto the network if the room wants it. |
+| **Simulcast relay** | Any Docker host | Reads the same files and pushes them to YouTube, Facebook or any RTMP/SRT destination. Optional, and never in the path between the sites. |
+| **Companion module** | Bitfocus Companion | [Its own repository](https://github.com/stageaudioworks/companion-module-obs-multisite): buttons and feedback on a Stream Deck, driving OBS or an appliance. |
+
+Design priority, in order: **reliability**, then quality, then simplicity, and
+**latency last** — a satellite that is a minute behind but never drops is worth
+far more than one that is two seconds behind and stutters.
+
+---
+
+## At a glance
+
+- **Latency — minutes, on purpose.** A campus can hold the picture for its own
+  welcome and then resume exactly where it paused, or stay a set number of
+  minutes behind live all event. Latency is what this project spends to buy
+  reliability, and it spends it willingly.
+- **Bandwidth — about 2.7 GB an hour** of event at 6 Mbps. Every campus reads
+  the same objects from the same bucket, so what it costs is your provider's
+  egress policy — Cloudflare R2 charges none.
+- **Audio — up to all 6 OBS tracks**: the programme mix, mics on their own
+  tracks, a click for the band. They travel in the same fragment as the picture,
+  so they cannot drift from it or from each other.
+- **Video — whatever OBS already encodes**, H.264 or HEVC, through x264, NVENC,
+  QuickSync or AMF.
+- **Network — outbound HTTPS only.** No inbound ports, no port forwarding, no
+  static IP, no VPN, and no firewall rules to negotiate with a building's IT.
+- **Retention — yours to set**, in your provider's own console, and it doubles as
+  your DVR depth: a campus can rewind as far back as it allows. Seven days is the
+  design default, and nothing here deletes anything by itself.
+- **Platforms — Windows, macOS (Apple Silicon) and Linux** at both ends, plus an
+  ARM64 Raspberry Pi 5 tier for campuses that would rather not run a PC at all.
+
+---
+
+## Quick start
+
+**A campus with no PC** — one command on a fresh Raspberry Pi 5 running
+Raspberry Pi OS:
+
+```sh
+curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
+```
+
+**Both ends running OBS** — install the plugin from
+[Releases](https://github.com/stageaudioworks/obs-multisite/releases), then:
+
+1. **Set retention on the bucket first.** Nothing in this project deletes
+   anything by itself: add a lifecycle rule for `events/` and another for
+   `rooms/`.
+2. **Main site.** Open the **Multisite Encoder** dock, enter the bucket details,
+   pick a feed name, press **Go live**.
+3. **Each campus.** Open the **Multisite Decoder** dock, enter the same bucket,
+   add a **Multisite Source (Decoder)** for the same feed name, then **Load
+   event** and **Play**.
+4. **Lock the event** so nothing gets clicked by accident mid-service.
+
+About twenty minutes, bucket included. The full walkthrough is
+[QUICKSTART.md](QUICKSTART.md), and the readable introduction is the
+[project website](https://stageaudioworks.github.io/obs-multisite/).
+
+---
+
 ## Where to go next
+
+This README is the technical overview: what this is, how far along it is, and
+where it falls short. What works, what does not yet, and what is planned next is
+in [Status](#status), [Known gaps](#known-gaps) and [Roadmap](#roadmap) below.
 
 | You want to… | Start here |
 |---|---|
 | Read the readable introduction | [Project website](https://stageaudioworks.github.io/obs-multisite/) |
 | Read the full manual online | [Manual](https://stageaudioworks.github.io/obs-multisite/docs.html) |
 | Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
+| See what changed in the latest build | [Releases](https://github.com/stageaudioworks/obs-multisite/releases) |
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
 | Put the appliance's sound on the network (AES67) | [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network) |
@@ -49,9 +149,6 @@ far more than one that is two seconds behind and stutters.
 | Build and test | [Developer guide](docs/DEVELOPER.md) |
 | Send a change, or report a bug well | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Read the design and storage protocol | [PROJECT-SCOPE.md](PROJECT-SCOPE.md) |
-
-What works, what does not yet, and what is planned next is in
-[Status](#status), [Known gaps](#known-gaps) and [Roadmap](#roadmap) below.
 
 ---
 
@@ -571,3 +668,17 @@ be withdrawn: anyone who has those versions keeps their MIT rights to them.
 This is compatible with OBS, which is **GPL-2.0-or-later** — the "or later" is
 what makes a GPLv3 plugin lawful in a GPLv2 host. Vendored `nlohmann/json`
 stays MIT, which is GPL-compatible and not ours to relicense.
+
+---
+
+<p align="center">
+  <a href="https://www.stageaudioworks.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/saw-logo-white.svg">
+      <img alt="Stage Audio Works" src="site/assets/saw-logo-black.svg" width="190">
+    </picture>
+  </a><br>
+  <sub>Built by the projects team at
+  <a href="https://www.stageaudioworks.com">Stage Audio Works</a>, a worship AVL
+  integrator working across Africa.</sub>
+</p>
