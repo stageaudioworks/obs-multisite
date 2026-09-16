@@ -53,8 +53,12 @@ FROM debian:trixie-slim
 # refuses outright; trixie ships 7.1, which writes the Enhanced RTMP
 # extended video tag. Everything else in the relay is a copy remux and does not
 # care which of the two it runs on.
+#
+# libcurl4t64 rather than libcurl4: the 64-bit time_t transition renamed it, and
+# trixie has no package by the old name. The SONAME is unchanged, so the binary
+# links the same way. Do not "tidy" this back.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates libcurl4 libsqlite3-0 \
+        ffmpeg ca-certificates libcurl4t64 libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/relay/multisite-relay /app/multisite-relay
