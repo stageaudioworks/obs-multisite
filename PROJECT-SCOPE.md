@@ -802,13 +802,19 @@ tier is the target rather than a stretch. What cannot be sent that way is
 refused rather than adapted, in the two cases where adapting it silently would
 put the wrong thing on air:
 
-- **AV1.** Refused on both protocols. ffmpeg can put AV1 in either container —
-  FLV since 6.1, MPEG-TS with a mapping — so this is no longer a statement
-  about what we *can* send. It is about what the far end *takes*: YouTube
-  documents AV1 ingest, nothing else obviously does, and a well-formed stream
-  that is dropped on arrival is the failure this rule exists to prevent. It
-  stays refused until a real push to a real destination says otherwise, rather
-  than on the strength of somebody's specification.
+- **AV1.** Refused on both protocols, and — measured rather than assumed, which
+  is how this section started — for two different reasons, one per protocol.
+  Over RTMP ffmpeg carries it: FLV since 6.1, through Enhanced RTMP, the same
+  mechanism HEVC now uses (verified: the tag comes out with the extended header
+  set and a FourCC of `av01`, and reads back as AV1). So there the only question
+  is what the far end *takes* — YouTube documents AV1 ingest, nothing else
+  obviously does. Over SRT it is not a policy question at all: **ffmpeg cannot
+  put AV1 into MPEG-TS.** Its muxer has no AV1 stream type, falls back to
+  private data and says so ("codec av1, is muxed as a private data stream and
+  may not be recognized upon reading"); its own demuxer then reads the result
+  back as `bin_data`. There is an AOMedia mapping for AV1 in MPEG-2 TS; ffmpeg
+  implements it in neither direction. Carrying AV1 over SRT would mean patching
+  ffmpeg *and* finding a receiver that understands the result.
 
   This one used to have HEVC in it, on the grounds that FLV cannot carry HEVC.
   That was wrong twice over, and worth writing down because of how it was

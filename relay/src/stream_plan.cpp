@@ -199,10 +199,13 @@ StreamPlan plan_stream(const Manifest& manifest,
     // What is NOT yet verified is a real push to a real destination — see the
     // note in stream_plan.h.
     //
-    // AV1 is refused on both, and the destination is the unknown rather than
-    // ffmpeg — YouTube documents AV1 ingest, nothing else obviously does, and
-    // silently pushing something the far end drops is the failure this gate
-    // exists to prevent.
+    // AV1 is refused on both, for a different reason on each. Over RTMP ffmpeg
+    // can carry it (FLV since 6.1, Enhanced RTMP, FourCC av01 — verified), so
+    // the unknown is the destination: YouTube documents AV1 ingest and nothing
+    // else obviously does. Over MPEG-TS ffmpeg cannot carry it at all — no AV1
+    // stream type in the muxer, private data on the wire, `bin_data` on the way
+    // back in — so an SRT destination is not a question of what the far end
+    // takes but of whether there is anything to send.
     std::string vc = manifest.video.codec;
     std::transform(vc.begin(), vc.end(), vc.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
