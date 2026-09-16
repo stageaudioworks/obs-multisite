@@ -24,10 +24,6 @@
   <a href="https://github.com/stageaudioworks/obs-multisite/actions/workflows/dco.yml"><img src="https://github.com/stageaudioworks/obs-multisite/actions/workflows/dco.yml/badge.svg" alt="DCO"></a>
 </p>
 
-<p align="center">
-  <img src="site/assets/photos/satellite-campus.jpg" alt="A congregation gathered for a service, seen from the balcony of a church sanctuary" width="820">
-</p>
-
 > **⚠️ Alpha — development build.** This is pre-release software under active
 > development. A six-hour continuous soak has been run end to end (see
 > [Status](#status)), but it has not yet carried a real congregation's event.
