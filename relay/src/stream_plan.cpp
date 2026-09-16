@@ -218,14 +218,20 @@ StreamPlan plan_stream(const Manifest& manifest,
     }
     const bool video_ok = vc == "h264" || vc == "hevc";
     if (!video_ok) {
+        // Neither protocol can carry this one, so the remedy must not offer a
+        // protocol as an escape. It used to: an AV1 event sent to an RTMP
+        // destination was told to try SRT, which cannot carry AV1 either —
+        // ffmpeg has no AV1 in MPEG-TS, in either direction. Sending somebody
+        // from one refusal to the next is worse than the first refusal.
         p.problem = "This event is being recorded as " + vc + " video, and " +
                     (proto == Protocol::Srt
                        ? "this kind of connection cannot carry it."
-                       : "streaming sites do not take it.");
-        p.remedy  = "Re-encoding on the way out is not built, so the main "
-                    "site's encoder has to send H.264 or HEVC for events you "
-                    "want to stream publicly — both go out unchanged — or this "
-                    "can go to an SRT destination instead.";
+                       : "there is no way to send it on from here.");
+        p.remedy  = "Set the main site's encoder to H.264 or HEVC for events "
+                    "you want to stream publicly: both go out unchanged, to a "
+                    "streaming site or over SRT. For this codec there is "
+                    "nothing here that can carry it — SRT included — and "
+                    "re-encoding on the way out is not built.";
         return p;
     }
     if (dest.allow_transcode) {

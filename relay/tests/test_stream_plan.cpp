@@ -122,7 +122,7 @@ int main() {
         Manifest m = ordinary();
         m.video.codec = "av1";
         auto p = plan_stream(m, dest("Main Mix"), "/tmp/f.fifo");
-        CHECK(!p.ok, "AV1 still is, on both protocols");
+        CHECK(!p.ok, "AV1 is refused, on both protocols");
         CHECK(p.problem.find("av1") != std::string::npos,
               "and the refusal names what the event actually is");
         CHECK(p.problem.find("codec") == std::string::npos,
@@ -131,7 +131,9 @@ int main() {
               p.remedy.find("HEVC") != std::string::npos,
               "and the way out named is both codecs a destination takes");
         CHECK(p.remedy.find("SRT") != std::string::npos,
-              "and it still points at SRT as the other way to send it on");
+              "which mentions SRT only to say it will not help");
+        CHECK(p.remedy.find("nothing here that can carry it") != std::string::npos,
+              "rather than offering it as the escape it used to be told to try");
     }
     {
         // Packed multi-channel: mix, ISOs and click in one 8-channel stream.
