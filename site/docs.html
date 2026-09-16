@@ -824,8 +824,12 @@
         YouTube documents alongside H.264, and recommends over RTMP(S) for HDR.
         Somewhere that has never implemented it will drop the stream, which is
         worth knowing before it surprises you.</li>
-        <li><strong>It refuses rather than guesses</strong> &mdash; AV1 and
-        packed multi-channel audio are declined with a plain explanation.</li>
+        <li><strong>It refuses rather than guesses</strong> &mdash; packed
+        multi-channel audio is declined with a plain explanation. HEVC and AV1
+        both go out over RTMP as Enhanced RTMP, so what matters there is whether
+        the destination takes them, and the page says so before you start. AV1
+        over SRT is still refused: MPEG-TS has no AV1 stream type to put it
+        in.</li>
       </ul>
 
       <p>For a finished event, it can <strong>download one as an MP4</strong>

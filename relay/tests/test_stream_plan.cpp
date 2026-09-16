@@ -119,21 +119,43 @@ int main() {
               "and the summary says HEVC rather than H.264");
     }
     {
+        // AV1 over RTMP: allowed, because the only thing standing in the way was
+        // what a destination takes, and that is the operator's to weigh rather
+        // than ours to refuse. The status line must name AV1 — it once said
+        // H.264 for anything that was not HEVC, which was a harmless default
+        // until AV1 could actually be sent.
         Manifest m = ordinary();
         m.video.codec = "av1";
         auto p = plan_stream(m, dest("Main Mix"), "/tmp/f.fifo");
-        CHECK(!p.ok, "AV1 is refused, on both protocols");
+        CHECK(p.ok, "AV1 goes to an RTMP destination");
+        CHECK(has_pair(p.args, "-f", "flv"),
+              "in FLV, which Enhanced RTMP extends");
+        CHECK(has_pair(p.args, "-c", "copy"), "as a copy, like the rest");
+        CHECK(p.summary.find("AV1") != std::string::npos,
+              "and the status line says AV1 rather than defaulting to H.264");
+    }
+    {
+        // ...and not over SRT, where the block is ffmpeg rather than a
+        // destination: no AV1 stream type in the MPEG-TS muxer, in either
+        // direction. A refusal here is a fact, not a policy.
+        Manifest m = ordinary();
+        m.video.codec = "av1";
+        auto p = plan_stream(m, srt_dest(), "pipe:0");
+        CHECK(!p.ok, "AV1 is refused over SRT");
         CHECK(p.problem.find("av1") != std::string::npos,
-              "and the refusal names what the event actually is");
-        CHECK(p.problem.find("codec") == std::string::npos,
-              "without using the word codec at a volunteer");
+              "naming what the event actually is");
         CHECK(p.remedy.find("H.264") != std::string::npos &&
               p.remedy.find("HEVC") != std::string::npos,
               "and the way out named is both codecs a destination takes");
-        CHECK(p.remedy.find("SRT") != std::string::npos,
-              "which mentions SRT only to say it will not help");
         CHECK(p.remedy.find("nothing here that can carry it") != std::string::npos,
-              "rather than offering it as the escape it used to be told to try");
+              "and it does not offer a second protocol as an escape, "
+              "because neither can carry AV1");
+    }
+    {
+        Manifest m = ordinary();
+        m.video.codec = "vp9";   // nothing in this pipeline produces it
+        auto p = plan_stream(m, dest("Main Mix"), "/tmp/f.fifo");
+        CHECK(!p.ok, "an unknown codec is still refused rather than guessed at");
     }
     {
         // Packed multi-channel: mix, ISOs and click in one 8-channel stream.
@@ -223,14 +245,9 @@ int main() {
               "and the summary says so rather than claiming H.264");
     }
     {
-        Manifest m = ordinary();
-        m.video.codec = "av1";
-        CHECK(!plan_stream(m, srt_dest(), "pipe:0").ok,
-              "AV1 is still refused, on SRT as much as on RTMP");
-    }
-    {
-        // Everything that is about the content rather than the transport has
-        // to refuse on both, or SRT becomes a way round the safeguards.
+        // The SRT half of AV1 is covered above, next to the RTMP half it used to
+        // share a refusal with. What is left here is the content-vs-transport
+        // rule, which is why this block moved on.
         Manifest m;
         m.video.codec = "h264";
         AudioTrack packed = track(0, "Production", 8);
@@ -392,14 +409,23 @@ int main() {
               "and SRT is not offered as a way out, because none is needed");
     }
     {
-        // Refused everywhere: the banner goes back to being an obstacle.
+        // Sendable somewhere, and impossible somewhere else. AV1 is allowed to a
+        // streaming site — where the destination question is the operator's to
+        // weigh — and refused over SRT, where there is nothing to send. So the
+        // banner is a caveat rather than an obstacle, and has to name both
+        // halves or it will read as one or the other.
         Manifest m = ordinary();
         m.video.codec = "av1";
         auto r = sendability(m);
-        CHECK(!r.any && !r.rtmp_ok && !r.srt_ok, "AV1 can go nowhere");
-        CHECK(!r.problem.empty(), "which is stated plainly");
-        CHECK(r.note.empty(),
-              "with no note suggesting somewhere it might work after all");
+        CHECK(r.any && r.rtmp_ok && !r.srt_ok,
+              "an AV1 event is sendable to a streaming site and not over SRT");
+        CHECK(r.problem.empty(),
+              "so the operator is not told the event cannot be streamed");
+        CHECK(!r.note.empty(), "but they are told what the RTMP half depends on");
+        CHECK(r.note.find("YouTube") != std::string::npos,
+              "named, because that is the destination known to take it");
+        CHECK(r.note.find("SRT") != std::string::npos,
+              "and the SRT half is stated too, as a fact rather than a choice");
     }
     {
         // A content problem, as opposed to a transport one, stops both.

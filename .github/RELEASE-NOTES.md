@@ -968,9 +968,10 @@ Either of these settles it, and both are one command:
   stream as it starts. SRT carries HEVC regardless, so there is still somewhere
   to send it. No HEVC event has yet gone out from a real encoder to a real
   destination, so rehearse it before relying on it.
-- **AV1 is refused by the relay on both protocols**, deliberately: ffmpeg can
-  carry it either way, but only YouTube obviously takes it, and a stream that
-  is dropped on arrival is the failure this rule exists to prevent.
+- **AV1 is sent over RTMP, but only a destination that documents AV1 ingest will
+  take it** — YouTube does, and nothing else obviously does, so the page warns
+  before you start. AV1 over SRT is refused because ffmpeg has no AV1 in
+  MPEG-TS to send.
 - **The relay does not terminate TLS.** It binds to localhost and expects a
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past event is a proof of concept** — one at a time, started

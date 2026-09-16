@@ -45,12 +45,13 @@ main site delays the public stream rather than breaking it.
 - **Re-encode.** Everything is a straight copy, which is why this runs on a
   tiny server. The video that arrives is the video that leaves, so the main
   site's choice of codec is the one that reaches the destination.
-- **AV1.** Refused on both protocols, and now for a narrower reason than
-  before: ffmpeg can put it in either container, but only YouTube obviously
-  takes it, and a stream that looks healthy here and is dropped at the far end
-  is the exact failure this whole design avoids. Turning it on should follow a
-  real push to a real destination rather than a reading of somebody's docs.
-  HEVC, which used to be refused alongside it, is not any more — see below.
+- **AV1 goes to a streaming site, and nowhere else.** Over RTMP it travels as
+  Enhanced RTMP, like HEVC — but only a destination that documents AV1 ingest
+  will take it, which today means YouTube and not obviously anyone else, so the
+  page warns before you press Start rather than letting the stream die at the
+  far end. SRT cannot carry it at all, and that half is not a policy: ffmpeg has
+  no AV1 stream type in MPEG-TS, so there is nothing to send. Send H.264 or HEVC
+  if a destination refuses it.
 - **Split up packed multi-channel audio.** If the main site sends its sound as
   one multi-channel track with the mix, the microphones and the click inside
   it, the relay refuses rather than guessing which channels are the programme.

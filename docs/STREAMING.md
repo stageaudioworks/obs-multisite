@@ -59,11 +59,14 @@ re-encoded.
   part of its public stream. A destination that has never implemented Enhanced
   RTMP will drop the stream rather than complain usefully, so an HEVC push
   somewhere new that dies immediately is worth trying over SRT instead.
-- **It refuses rather than guesses.** AV1 and packed multi-channel audio are
-  both declined with a plain explanation, because sending either onward means
-  a stream the destination drops, or a mic ISO going out to the public. HEVC
-  was in that list until the container's ffmpeg learned to write Enhanced RTMP
-  and a destination could be named that takes it.
+- **It refuses rather than guesses.** Packed multi-channel audio is declined
+  with a plain explanation, because sending it onward means a mic ISO going out
+  to the public. Two codecs used to be in that list and are now handled per
+  destination instead: HEVC and AV1 both travel over RTMP as Enhanced RTMP, so
+  what matters is whether the far end takes them — and the page says so before
+  the stream starts rather than after it dies. AV1 over SRT is still refused,
+  and that one is ffmpeg's doing rather than a policy: MPEG-TS has no AV1 stream
+  type to put it in.
 
 It also does two things with events that have already finished:
 

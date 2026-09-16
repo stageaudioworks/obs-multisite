@@ -154,6 +154,32 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **AV1 goes out over RTMP now, with the caveat that used to be the refusal —
+  and the old refusal had a bug in its advice.** An AV1 event aimed at an RTMP
+  destination was told to "send this to an SRT destination instead", and SRT
+  cannot carry AV1 either: ffmpeg has no AV1 stream type in MPEG-TS, in either
+  direction, so the guidance walked somebody from one dead end into the next.
+  The test asserted that advice — `p.remedy.find("SRT") != npos` — which is
+  precisely how it survived a review that was looking for typos.
+
+  Both halves are now what is true. **Over RTMP, AV1 travels as Enhanced RTMP**,
+  like HEVC, verified through the relay's own argument vector: byte 0 = `0x90`
+  (`isExVideoHeader`, KeyFrame, SequenceStart) with a FourCC of `av01`, reading
+  back as AV1. So what remains is a *destination* question, and refusing on it
+  was the same mistake as refusing HEVC on an assumption that had stopped being
+  true. `sendability` puts the caveat above every destination instead — only a
+  site that documents AV1 ingest will take it over RTMP (YouTube does), one that
+  refuses it will drop the stream as soon as it starts, and over SRT it cannot go
+  at all — and the relay's supervision reports that failure rather than hiding
+  it. **Over SRT the refusal stands**, because there is nothing to send.
+
+  Two smaller things fell out. The status line read
+  `(vc == "hevc") ? "HEVC" : "H.264"`, so an AV1 stream announced itself as
+  H.264 — harmless while AV1 could not be sent at all, and a lie the moment it
+  could. And an unknown codec is still refused outright on both protocols, which
+  is where the gate now draws its line: what we can name and carry, we carry;
+  what we cannot, we decline with a sentence rather than guessing.
+
 - **An event recorded with cloud upload off cannot be listed — and now says so
   rather than looking broken.** The report was an AV1 event that played live and
   was then nowhere in the recordings list. It turned out to be neither AV1 nor

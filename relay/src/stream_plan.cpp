@@ -174,6 +174,17 @@ RoomSendability sendability(const Manifest& manifest) {
                  "RTMP it needs somewhere that takes Enhanced RTMP, which "
                  "YouTube does. Somewhere that does not will drop the stream "
                  "as soon as it starts.";
+    } else if (vcodec == "av1") {
+        // The caveat is the whole reason AV1 is allowed to a streaming site
+        // rather than refused: it is a destination question, and this is the
+        // only place the operator can meet it before the stream starts rather
+        // than after it dies. SRT is stated separately because it is not a
+        // caveat — it is impossible, and must not read as an alternative.
+        r.note = "This event is AV1. Only a streaming site that documents AV1 "
+                 "ingest will take it over RTMP — YouTube does, and nothing "
+                 "else obviously does — so somewhere that refuses it will drop "
+                 "the stream as soon as it starts. Over SRT it cannot go at "
+                 "all: the picture format has no place in that stream.";
     }
     return r;
 }
@@ -199,13 +210,25 @@ StreamPlan plan_stream(const Manifest& manifest,
     // What is NOT yet verified is a real push to a real destination — see the
     // note in stream_plan.h.
     //
-    // AV1 is refused on both, for a different reason on each. Over RTMP ffmpeg
-    // can carry it (FLV since 6.1, Enhanced RTMP, FourCC av01 — verified), so
-    // the unknown is the destination: YouTube documents AV1 ingest and nothing
-    // else obviously does. Over MPEG-TS ffmpeg cannot carry it at all — no AV1
-    // stream type in the muxer, private data on the wire, `bin_data` on the way
-    // back in — so an SRT destination is not a question of what the far end
-    // takes but of whether there is anything to send.
+    // AV1 is refused over SRT and allowed over RTMP. The two halves have
+    // different reasons and only one of them is ours to decide.
+    //
+    // Over MPEG-TS there is nothing to send: ffmpeg has no AV1 stream type, so
+    // it goes out as private data and its own demuxer reads it back as opaque
+    // bytes. That is a fact about the toolchain, not a policy.
+    //
+    // Over RTMP ffmpeg carries it — FLV since 6.1, Enhanced RTMP, FourCC
+    // `av01`, verified at the byte level like HEVC's — so the only question is
+    // what the destination takes. YouTube documents AV1 ingest; nothing else
+    // obviously does. That is a *destination* question, and refusing on it was
+    // the same mistake as refusing HEVC on an assumption that had stopped being
+    // true: the operator gets a caveat they can weigh (`sendability` puts one
+    // above every destination) instead of a wall, and the relay's supervision
+    // reports a destination that drops the stream rather than hiding it.
+    //
+    // The codec gate. HEVC now passes on both protocols: over MPEG-TS it always
+    // did, and over RTMP it is carried by Enhanced RTMP, which ffmpeg writes
+    // from 6.1 on and which YouTube takes.
     std::string vc = manifest.video.codec;
     std::transform(vc.begin(), vc.end(), vc.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
@@ -216,7 +239,9 @@ StreamPlan plan_stream(const Manifest& manifest,
                     "the encoder.";
         return p;
     }
-    const bool video_ok = vc == "h264" || vc == "hevc";
+    const bool video_ok =
+        vc == "h264" || vc == "hevc" ||
+        (vc == "av1" && proto == Protocol::Rtmp);
     if (!video_ok) {
         // Neither protocol can carry this one, so the remedy must not offer a
         // protocol as an escape. It used to: an AV1 event sent to an RTMP
@@ -365,7 +390,11 @@ StreamPlan plan_stream(const Manifest& manifest,
         res = std::to_string(manifest.video.width) + "x" +
               std::to_string(manifest.video.height) + " ";
     }
-    const std::string codec_word = (vc == "hevc") ? "HEVC" : "H.264";
+    // Named rather than defaulted. This read `(vc == "hevc") ? "HEVC" : "H.264"`,
+    // so an AV1 event's own status line claimed H.264 — harmless while AV1
+    // could not be sent at all, and a lie the moment it could.
+    const std::string codec_word =
+        vc == "hevc" ? "HEVC" : (vc == "av1" ? "AV1" : "H.264");
     p.summary = "sending " + res + codec_word + " video with the \"" + label +
                 "\" sound feed (" + channels_word(chosen.channels) + ")";
     if (proto == Protocol::Srt)

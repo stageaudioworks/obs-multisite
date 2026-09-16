@@ -462,14 +462,13 @@ out of scope, and the relay cannot re-encode.</summary>
   cheap. The encoder docks still label AV1 encoders experimental for that
   reason.
 - **Seeking is accurate to about a second**, not to a frame.
-- **The relay sends HEVC to a streaming site only if that site speaks Enhanced
-  RTMP.** YouTube documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, so an
-  HEVC site reaches it unchanged; a destination that has never implemented the
-  extension drops the stream the moment it starts, and re-encoding on the way
-  out is not built. SRT carries HEVC regardless, so where the RTMP half fails
-  there is still somewhere to send it. H.264 remains the default: it decodes
-  fine everywhere, Raspberry Pi campuses included, and it needs nothing of the
-  far end.
+- **AV1 reaches a streaming site only where that site documents AV1 ingest.**
+  YouTube does and nothing else obviously does, so the relay warns above every
+  destination before you start rather than refusing the event outright — and
+  reports it honestly if the far end drops the stream. AV1 over SRT is refused
+  and always will be until ffmpeg can put it in MPEG-TS, which it cannot today.
+  HEVC, which used to carry the same caveat, now reaches anywhere that speaks
+  Enhanced RTMP, unchanged.
 - **No HEVC event has yet gone out from a real encoder to a real
   destination.** The remux is verified at the byte level — over MPEG-TS it
   reads back as HEVC, and over Enhanced RTMP the tag comes out with the
