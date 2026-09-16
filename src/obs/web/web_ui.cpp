@@ -71,16 +71,10 @@ bool read_module_file(const std::string& rel, std::string& out) {
     return !out.empty();
 }
 
-const char* content_type_of(const std::string& path) {
-    auto ends = [&](const char* ext) {
-        const size_t n = std::strlen(ext);
-        return path.size() >= n && path.compare(path.size() - n, n, ext) == 0;
-    };
-    if (ends(".html")) return "text/html; charset=utf-8";
-    if (ends(".js"))   return "application/javascript; charset=utf-8";
-    if (ends(".css"))  return "text/css; charset=utf-8";
-    return "application/octet-stream";
-}
+// The content type now comes from the core's single table. The local copy kept
+// here had three entries and forgot `.svg`, so the mark in these pages' footer
+// went out as application/octet-stream — which a browser is entitled to refuse
+// to draw, and which nothing would have reported.
 
 // One exact path, one file. The shared server routes by exact path and has no
 // prefix matching, so every asset a page asks for is registered here — which is
@@ -95,7 +89,7 @@ void route_file(HttpServer& server, const std::string& path,
             return;
         }
         res.status = 200;
-        res.content_type = content_type_of(file);
+        res.content_type = multisite::content_type_for(file);
         res.body = std::move(body);
     });
 }

@@ -203,7 +203,7 @@ const char* status_text(int code) {
     return "OK";
 }
 
-const char* content_type_for(const std::string& path) {
+const char* content_type_for_impl(const std::string& path) {
     auto ends = [&](const char* ext) {
         const size_t n = std::strlen(ext);
         return path.size() >= n && path.compare(path.size() - n, n, ext) == 0;
@@ -709,9 +709,15 @@ bool HttpServer::serve_static(const HttpRequest& req, HttpResponse& res) {
     ss << in.rdbuf();
 
     res.status = 200;
-    res.content_type = content_type_for(path);
+    res.content_type = content_type_for_impl(path);
     res.body = ss.str();
     return true;
+}
+
+// The one table, published so the plugin's own web server stops keeping a
+// smaller second copy of it — the copy that had never learned `.svg`.
+const char* content_type_for(const std::string& path) {
+    return content_type_for_impl(path);
 }
 
 } // namespace multisite

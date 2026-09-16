@@ -190,6 +190,11 @@ std::filesystem::path make_web_root() {
       f << "<!doctype html><title>test page</title>"; }
     { std::ofstream f(dir / "style.css", std::ios::binary);
       f << "body { background: #12151a; }"; }
+    // A mark in a page footer, which is the one file here that is not text: if
+    // its type is wrong the browser is entitled to refuse to draw it, and it
+    // does so silently.
+    { std::ofstream f(dir / "saw-logo.svg", std::ios::binary);
+      f << "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\"/>"; }
     // One level up, where a traversal would land if the guard ever failed.
     { std::ofstream f(dir.parent_path() / "multisite-http-secret.txt",
                       std::ios::binary);
@@ -354,6 +359,14 @@ int main() {
             "GET /style.css HTTP/1.1\r\nConnection: close\r\n\r\n");
         CHECK(status_of(css) == 200 && contains(css, "text/css"),
               "and a stylesheet arrives as CSS, not as an octet stream");
+        // The mark in every page's footer. This assertion exists because the
+        // plugin's own web server kept a second copy of the type table that had
+        // never learned `.svg`: the picture was served as an octet stream, and
+        // a browser may simply not draw that, with nothing anywhere to say why.
+        const std::string svg = round_trip(port,
+            "GET /saw-logo.svg HTTP/1.1\r\nConnection: close\r\n\r\n");
+        CHECK(status_of(svg) == 200 && contains(svg, "image/svg+xml"),
+              "an SVG arrives as an SVG, so a browser will draw it");
         const std::string out = round_trip(port,
             "GET /../multisite-http-secret.txt HTTP/1.1\r\n"
             "Connection: close\r\n\r\n");

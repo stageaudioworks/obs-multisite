@@ -180,4 +180,13 @@ private:
 std::string url_decode(const std::string& in);
 std::map<std::string, std::string> parse_query(const std::string& in);
 
+// What a file is, from its name, for anything serving one over this HTTP layer.
+// Exposed for the same reason as the two above: there is more than one such
+// thing and they have to agree. The plugin's own web server kept a smaller copy
+// of this that had never learned `.svg`, so the mark in its pages' footer went
+// out as application/octet-stream — a picture the browser is entitled to refuse
+// to draw, from a table that looked complete because it mentioned html, js and
+// css.
+const char* content_type_for(const std::string& path);
+
 } // namespace multisite
