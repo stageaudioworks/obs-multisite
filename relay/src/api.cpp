@@ -499,6 +499,11 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         for (const auto& e : service.events(force)) {
             json j;
             j["event_id"] = e.event_id;
+            // What the main site called it. This was missing, and the page
+            // could only offer a date and time — the operator's own name for
+            // their service was fetched from the manifest and then dropped at
+            // this boundary, which is the one place it was needed.
+            j["name"] = e.name;
             j["started_at_ms"] = e.started_at_ms;
             j["duration_s"] = e.duration_s;
             j["state"] = multisite::to_string(e.state);

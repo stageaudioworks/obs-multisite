@@ -458,13 +458,18 @@ async function refreshEvents(force) {
     host.innerHTML = events.map((e) => {
       const options = dests.map((d) =>
         `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+      // The name the main site gave the service, with the date and time under
+      // it. Without a name — an older event, or one nobody labelled — the date
+      // and time are all there is, so they take the title.
+      const when = whenText(e.started_at_ms, e.duration_s);
       return `
       <div class="card event">
         <div class="dest-head">
-          <span class="dest-name">${esc(whenText(e.started_at_ms, e.duration_s))}</span>
+          <span class="dest-name">${esc(e.name || when)}</span>
           ${!e.finished ? '<span class="pill streaming">On air now</span>' : ''}
           ${e.interrupted ? '<span class="pill stalled">Cut short</span>' : ''}
         </div>
+        ${e.name ? `<div class="dest-detail">${esc(when)}</div>` : ''}
         ${!e.finished
           ? `<div class="dest-detail">Still going out. It can be downloaded or
                replayed once it finishes.</div>`

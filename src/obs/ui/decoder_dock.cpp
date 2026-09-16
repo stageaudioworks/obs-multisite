@@ -5,6 +5,7 @@
 #include "../decoder_settings.h"
 #include "../plugin_log.h"
 #include "role_selector.h"
+#include "status_text.h"
 #include "web_box.h"
 
 #include "../../core/position_interp.h"
@@ -254,18 +255,9 @@ void TimelineBar::leaveEvent(QEvent*) {
 }
 
 // ── DecoderDock ──────────────────────────────────────────────────────────────
-// Worded exactly as the encoder dock words it, and for the same reason: an
-// operator who has seen one should not have to learn the other. Only measured
-// figures appear — 0 Mbps would read as a dead link, not as no evidence yet.
-static QString link_summary(const QString& colo, const QString& host,
-                            double bytes_per_s, unsigned long long samples) {
-    QStringList bits;
-    if (!colo.isEmpty())      bits << colo;
-    else if (!host.isEmpty()) bits << host.section('.', 0, 0);
-    if (samples > 0 && bytes_per_s > 0.0)
-        bits << QString::number(bytes_per_s * 8.0 / 1e6, 'f', 1) + " Mbps";
-    return bits.isEmpty() ? QString("—") : bits.join(" · ");
-}
+// The status rows are worded by status_text.h, shared with the encoder dock and
+// for the same reason: an operator who has seen one should not have to learn the
+// other, and the two copies had already drifted once.
 
 DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
@@ -466,7 +458,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // Where the bucket answers from and what the download is managing. A
     // campus that cannot hold a buffer has no other way to tell a slow link
     // from a distant bucket.
-    addStat(2, 1, "Dock.Bucket",   m_storage);
+    addStat(2, 1, "Dock.Storage",  m_storage);
     m_error = new QLabel(QString(), box);
     m_error->setWordWrap(true);
     m_error->setStyleSheet("color: #e5484d;");
@@ -1174,7 +1166,7 @@ void DecoderDock::refresh() {
     }
 
     if (m_storage) {
-        QString text = link_summary(
+        QString text = multisite_ui::link_summary(
             QString::fromStdString(s.colo),
             QString::fromStdString(s.storage_host),
             s.download_bytes_per_s, s.download_samples);
@@ -1185,7 +1177,7 @@ void DecoderDock::refresh() {
         if (s.lan_configured)
             text += s.lan_active ? "  ·  " + tr_("Dock.ViaLan")
                                   : "  ·  " + tr_("Dock.ViaCloud");
-        m_storage->setText(text);
+        multisite_ui::set_value(m_storage, text);
     }
     m_buffered->setToolTip(tr_("Dock.BufferedHint"));
     // How far back the recording still exists in storage (not on this PC).

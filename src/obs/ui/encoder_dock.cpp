@@ -5,6 +5,7 @@
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
 #include "role_selector.h"
+#include "status_text.h"
 #include "web_box.h"
 #include "storage_dialog.h"
 
@@ -58,18 +59,8 @@ static QString friendly_duration(double seconds) {
     return QObject::tr("%1 min %2 sec").arg(mins).arg(secs);
 }
 
-// The link, in one line: where the bucket answers from and what the transfer
-// is managing. Only what has actually been measured — an unmeasured rate shown
-// as 0 Mbps reads as a dead link rather than as an absence of evidence.
-static QString link_summary(const QString& colo, const QString& host,
-                            double bytes_per_s, unsigned long long samples) {
-    QStringList bits;
-    if (!colo.isEmpty())      bits << colo;
-    else if (!host.isEmpty()) bits << host.section('.', 0, 0);
-    if (samples > 0 && bytes_per_s > 0.0)
-        bits << QString::number(bytes_per_s * 8.0 / 1e6, 'f', 1) + " Mbps";
-    return bits.isEmpty() ? QString("—") : bits.join(" · ");
-}
+// The link line and the elided status values live in status_text.h, included
+// above, so this dock and the decoder's cannot drift apart on wording.
 
 EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
@@ -101,10 +92,13 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     addStat(2, 0, "Dock.Retries",   m_retries);
     addStat(2, 1, "Dock.Uploaded",  m_data);
     addStat(3, 0, "Dock.Link",      m_link);
-    // Where the bucket is being served from and what the upload is managing.
+    // Where storage is being served from and what the upload is managing.
     // A main site whose queue will not drain has no other way to tell a slow
-    // link from a distant one.
-    addStat(3, 1, "Dock.Bucket",    m_storage);
+    // link from a distant one. Labelled "Storage" rather than "Bucket": it has
+    // never shown the bucket — it shows the endpoint's colo and host, and a
+    // Custom endpoint is a URL, which under a "Bucket" label read as the wrong
+    // value rather than as the wrong label.
+    addStat(3, 1, "Dock.Storage",   m_storage);
     // The disk the durable spool lives on. Checked whether idle or live, so
     // a nearly-full drive is visible before Go Live rather than discovered
     // mid-event when the cap starts dropping queued segments.
@@ -906,11 +900,10 @@ void EncoderDock::refresh() {
         showLan();
         // The idle probe's colo and host, so the operator can see where the
         // bucket answers from before they go live.
-        if (m_storage)
-            m_storage->setText(link_summary(
-                QString::fromStdString(st.colo),
-                QString::fromStdString(st.storage_host),
-                st.upload_bytes_per_s, st.upload_samples));
+        multisite_ui::set_value(m_storage, multisite_ui::link_summary(
+            QString::fromStdString(st.colo),
+            QString::fromStdString(st.storage_host),
+            st.upload_bytes_per_s, st.upload_samples));
         m_error->hide();
         m_resumedNote->hide();
         m_endAndFresh->hide();
@@ -918,7 +911,7 @@ void EncoderDock::refresh() {
     }
 
     if (m_storage)
-        m_storage->setText(link_summary(
+        multisite_ui::set_value(m_storage, multisite_ui::link_summary(
             QString::fromStdString(st.colo),
             QString::fromStdString(st.storage_host),
             st.upload_bytes_per_s, st.upload_samples));
