@@ -487,9 +487,10 @@
       two-way interview; for that, use SRT or WebRTC, both already in OBS.</li>
       <li><strong>Seeking is accurate to about a second</strong>, not to a
       frame.</li>
-      <li><strong>The relay does not re-encode.</strong> An HEVC feed cannot
-      reach YouTube or Facebook, which want H.264 over RTMP; an SRT destination
-      carries HEVC unchanged. H.264 is the default and decodes everywhere,
+      <li><strong>The relay does not re-encode.</strong> An HEVC feed reaches
+      YouTube unchanged, as Enhanced RTMP — but a destination that has never
+      implemented the extension drops it, and an SRT destination carries HEVC
+      regardless. H.264 is the default and decodes everywhere,
       Raspberry&nbsp;Pi campuses included.</li>
       <li><strong>This is alpha, and no congregation has watched a service
       through it yet.</strong> Run it with a fallback the first few times, and

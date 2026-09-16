@@ -11,24 +11,33 @@
 // the relay then refuses — so they share this code rather than each having
 // their own idea of what is possible.
 //
-// Why this refuses rather than adapts: ffmpeg will happily mux HEVC into FLV
-// and exit 0 (enhanced RTMP), producing a well-formed stream that the
-// destination then rejects. Measured, not assumed. So a codec that a
-// destination cannot take has to be caught HERE, before anything is spawned —
-// there is no error downstream to catch.
-//
 // What may be sent depends on the protocol, which is why the two live in one
-// function rather than two. RTMP means FLV, and FLV means H.264. SRT means
-// MPEG-TS, which carries HEVC properly — a standardised stream type that
-// decoders have handled for a decade, not FLV's after-the-fact extension that
-// half the receiving end has never heard of. So an HEVC feed that cannot go to
-// YouTube can go to an SRT destination, and the refusal is written per
-// protocol instead of once for everything.
+// function rather than two. SRT means MPEG-TS, which carries HEVC properly — a
+// standardised stream type decoders have handled for a decade.
 //
-// AV1 is still refused on both. MPEG-TS has a mapping for it, but ffmpeg's
-// support and the receiving end's support are each patchy enough that the
-// likely outcome is the same well-formed-but-rejected stream this whole file
-// exists to prevent.
+// HEVC over RTMP used to be refused here on the grounds that FLV cannot carry
+// it. That is no longer true, and was never quite the whole story: FLV *can*
+// carry it, through Enhanced RTMP — the ExVideoTagHeader, a FourCC of `hvc1`
+// and a VideoPacketType — which is a released specification (E-RTMP v2, whose
+// contributors include Google, Meta, Twitch, FFmpeg and OBS) and which ffmpeg
+// has written since 6.1 ("Support HEVC,VP9,AV1 codec in enhanced flv format").
+// YouTube documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, and recommends
+// H.265 over RTMP(S) for HDR.
+//
+// What made the old refusal look measured was the toolchain rather than the
+// destination: this image used to ship Debian bookworm's ffmpeg 5.1, whose FLV
+// muxer has no HEVC in its codec-tag table at all and errors out rather than
+// muxing anything. So a test of "HEVC to RTMP" from here could not have been
+// testing an Enhanced RTMP stream. The image is trixie now (ffmpeg 7.1), which
+// writes the extended tag, and the tag itself is verified at the byte level —
+// see the note on the codec gate in stream_plan.cpp.
+//
+// AV1 is still refused on both protocols, and now for a narrower reason than
+// before: the destination side is the unknown, not ffmpeg. YouTube documents
+// AV1 ingest; nobody else obviously does, and a stream that looks healthy here
+// and is dropped at the far end is the failure this file exists to prevent.
+// Turning it on should follow a real push to a real destination, not a reading
+// of somebody's documentation.
 //
 #include "destination.h"
 #include "model.h"
@@ -74,9 +83,11 @@ struct RoomSendability {
     bool srt_ok = false;
     // Why nothing can carry it. Empty when something can.
     std::string problem;
-    // Why some can and some cannot — an HEVC event, in practice. Empty when
-    // they agree, in either direction. Kept apart from `problem` because it is
-    // information rather than an obstacle: there IS somewhere to send this.
+    // Why some can and some cannot, or why "yes" comes with a caveat. Empty
+    // when there is nothing worth saying. Kept apart from `problem` because it
+    // is information rather than an obstacle: there IS somewhere to send this.
+    // Today that means an HEVC event, which both protocols carry but only a
+    // destination speaking Enhanced RTMP will accept over RTMP.
     std::string note;
 };
 

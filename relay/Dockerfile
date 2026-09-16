@@ -5,7 +5,8 @@
 # onto the cheapest VPS over a slow link, which is the deployment this is for.
 
 # ── build ────────────────────────────────────────────────────────────────────
-FROM debian:bookworm AS build
+# trixie rather than bookworm, for the runtime stage's ffmpeg: see below.
+FROM debian:trixie AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config \
@@ -41,11 +42,17 @@ RUN cmake --build build --target test_stream_plan test_relay_state \
         --output-on-failure
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # ffmpeg is the relay's one external tool. ca-certificates is what lets it
 # reach an HTTPS bucket at all — without it every request fails with a
 # certificate error that reads like a credentials problem.
+#
+# The Debian release is pinned by what ffmpeg does with HEVC, not by taste:
+# bookworm ships 5.1, whose FLV muxer has no HEVC in its codec-tag table and
+# refuses outright; trixie ships 7.1, which writes the Enhanced RTMP
+# extended video tag. Everything else in the relay is a copy remux and does not
+# care which of the two it runs on.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg ca-certificates libcurl4 libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*

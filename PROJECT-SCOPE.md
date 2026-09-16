@@ -749,17 +749,17 @@ become a glitch. There is no protocol setting and no radio button — `rtmp://`
 and `srt://` are unmistakable, and asking a volunteer to declare which one
 they pasted is asking them to get it wrong.
 
-The two differ in exactly one way that matters upward: RTMP means FLV, and FLV
-means H.264. SRT means MPEG-TS, which carries HEVC properly — a standardised
-stream type decoders have handled for years, not FLV's after-the-fact extension
-that half the receiving end has never heard of. So **the codec rule below is
-written per protocol**, and an HEVC feed that cannot go to YouTube can go to an
-SRT destination unchanged.
+The two used to differ in one way that mattered upward: RTMP meant FLV, and
+FLV meant H.264. That is no longer true of either half. FLV carries HEVC
+through **Enhanced RTMP** — a released specification (§8.2's refusal rule
+below has the detail) — so **the codec rule is no longer written per
+protocol**: HEVC goes out over both, unchanged, and SRT's advantage is its
+loss recovery rather than the codecs it can carry.
 
 That matters more than it sounds. Until SRT existed here, choosing HEVC for the
 campuses cost a church its public stream outright, which made a real bandwidth
-saving unusable for anyone who also streams. It now costs them the *RTMP*
-destinations only.
+saving unusable for anyone who also streams. It then cost them the *RTMP*
+destinations only, and now costs them nothing.
 
 **SRT settles for a longer latency than ffmpeg's own.** Its `latency` is the
 window in which a lost packet can be asked for again; ffmpeg's default of 120ms
@@ -802,18 +802,34 @@ tier is the target rather than a stretch. What cannot be sent that way is
 refused rather than adapted, in the two cases where adapting it silently would
 put the wrong thing on air:
 
-- **HEVC over RTMP, and AV1 over either.** RTMP wants H.264. ffmpeg will mux
-  either of the others into FLV and report success, producing a well-formed
-  stream the destination then rejects — measured, not assumed — so nothing
-  downstream can be relied on to notice. The relay refuses and says which
-  encoder setting to change, and now also points at the way there is to send
-  it on unchanged: an SRT destination, where MPEG-TS carries HEVC properly.
+- **AV1.** Refused on both protocols. ffmpeg can put AV1 in either container —
+  FLV since 6.1, MPEG-TS with a mapping — so this is no longer a statement
+  about what we *can* send. It is about what the far end *takes*: YouTube
+  documents AV1 ingest, nothing else obviously does, and a well-formed stream
+  that is dropped on arrival is the failure this rule exists to prevent. It
+  stays refused until a real push to a real destination says otherwise, rather
+  than on the strength of somebody's specification.
 
-  AV1 is refused on both. MPEG-TS has a mapping for it, but ffmpeg's support
-  and the receiving end's support are each patchy enough that the likely
-  outcome is the same well-formed-but-rejected stream this rule exists to
-  prevent — so it is refused until that stops being true, rather than allowed
-  on the strength of the specification.
+  This one used to have HEVC in it, on the grounds that FLV cannot carry HEVC.
+  That was wrong twice over, and worth writing down because of how it was
+  arrived at. **Enhanced RTMP** is a released specification — E-RTMP v2, whose
+  contributors include Adobe, Google, Meta, Twitch, FFmpeg and OBS — which
+  extends the FLV video tag with `isExVideoHeader`, a `VideoPacketType` and a
+  FourCC (`avc1`, `hvc1`, `av01`). ffmpeg has written it since **6.1**
+  ("Support HEVC,VP9,AV1 codec in enhanced flv format"), and YouTube documents
+  H.264, H.265 and AV1 for RTMP/RTMPS ingest, recommending H.265 over RTMP(S)
+  for HDR. So the destination was never refusing HEVC as such.
+
+  What was actually happening is that the relay's container ran Debian
+  bookworm's **ffmpeg 5.1**, whose FLV muxer has no HEVC in its codec-tag table
+  at all and fails outright — so a test of "HEVC to RTMP" from that image
+  could not have produced an Enhanced RTMP stream to be accepted or rejected.
+  The constraint was measured, and measured on the wrong artefact: a toolchain
+  limit and a destination limit look identical when only one of them is in
+  front of you. The container is trixie now (ffmpeg 7.1), and the extended tag
+  is verified at the byte level — a copy remux through the relay's own argument
+  vector emits `0x90` (isExVideoHeader set, KeyFrame, SequenceStart) with a
+  FourCC of `hvc1`, where H.264 emits the legacy `0x17`.
 
   H.264 remains the default and the roadmap's first codec precisely because it
   decodes everywhere, a Pi 5 included (§8.1: software decode handles 1080p
@@ -1384,9 +1400,9 @@ is the better answer for a given church, section 12 says so plainly.
 | Dedicated receive appliance (Raspberry Pi) | built and proven on a Pi 5; not yet run through an event (§10 Phase 6) |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
-| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
+| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 and HEVC over either protocol — HEVC to RTMP needs a destination speaking Enhanced RTMP — and neither has yet been carried from real encoder output (§8.2) |
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
-| HEVC out over SRT | built, and the remux verified against ffmpeg — but not yet carried from a real HEVC encoder (§8.2) |
+| HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination (§8.2) |
 | Download a finished event as an MP4, all audio tracks | built (§8.2) |
 | Replay a finished event to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
@@ -1522,9 +1538,11 @@ than deleted.
   separate container in `relay/` — copy remux to one or more RTMP **or SRT**
   destinations, per-destination audio selection, a delay buffer, and
   supervised reconnection, with its own browser UI. Like the appliance it has
-  not yet carried an event. HEVC now has a route out, over SRT, where RTMP
-  can carry only H.264; that remux is verified against ffmpeg but has not yet
-  carried real encoder output. Not started: re-encoding, web/mobile simulcast
+  not yet carried an event. HEVC goes out over both protocols now — over SRT
+  as MPEG-TS, over RTMP as Enhanced RTMP, which this container's ffmpeg could
+  not write until it moved off Debian bookworm's 5.1. Both remuxes are
+  verified; neither has yet carried real encoder output to a real destination.
+  Not started: re-encoding, web/mobile simulcast
   served from the bucket, scheduling and auto-go-live, redundancy, and local
   insertion.
 
@@ -1747,9 +1765,12 @@ than deleted.
 
   **The real constraint is downstream, not technical feasibility.** FLAC
   audio has no home on the public web at all — no streaming site's ingest or
-  browser player takes it — and 10 Mbps HEVC already needs SRT rather than
-  RTMP (§8.2). So high-quality mode is a dead end for the simulcast relay and
-  anything reached through it: choosing it is choosing "campuses and
+  browser player takes it — and that, rather than the picture, is what makes
+  high-quality mode a dead end for the simulcast relay and anything reached
+  through it. The video half of that argument has since gone: HEVC travels over
+  both protocols now, SRT as MPEG-TS and RTMP as Enhanced RTMP (§8.2). The
+  sound half has not, and is not going to — no ingest takes FLAC. So choosing
+  it is still choosing "campuses and
   archival only", not "also simulcast this to YouTube/Facebook or watch it
   in a browser". Only the two purpose-built players (the OBS decoder plugin,
   the Pi appliance) decode through `CmafDecoder` and can play it; nothing

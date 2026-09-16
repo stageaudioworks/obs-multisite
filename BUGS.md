@@ -154,6 +154,57 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **HEVC reaches a streaming site now: the relay was refusing it for a
+  constraint that had stopped being true.** The codec gate refused HEVC on any
+  RTMP destination, on the stated grounds that "ffmpeg will happily mux HEVC
+  into FLV and exit 0 (enhanced RTMP), producing a well-formed stream that the
+  destination then rejects. Measured, not assumed." Both halves were wrong, and
+  the second was wrong in an instructive way.
+
+  **FLV carries HEVC**, through Enhanced RTMP: an `ExVideoTagHeader` with
+  `isExVideoHeader` set, a `VideoPacketType` and a FourCC (`avc1`, `hvc1`,
+  `av01`). It is a released specification — E-RTMP v2, contributors including
+  Adobe, Google, Meta, Twitch, FFmpeg and OBS — and ffmpeg has written it since
+  **6.1**, where the Changelog says so outright: "Support HEVC,VP9,AV1 codec in
+  enhanced flv format". **YouTube takes it**: its encoder settings page lists
+  H.264, H.265 and AV1 under RTMP/RTMPS, and recommends H.265 over RTMP(S) for
+  HDR.
+
+  So why did a measurement say otherwise? What was doing the measuring. This
+  container ran **Debian bookworm's ffmpeg 5.1**, whose FLV muxer has no HEVC in
+  its codec-tag table at all — it calls `unsupported_codec` and stops. A test
+  from that image could not have produced an Enhanced RTMP stream to be
+  accepted *or* rejected, so what got written down as a fact about destinations
+  was a fact about our own ffmpeg. A toolchain limit and a destination limit
+  look exactly alike when only one of them is in front of you, which is the part
+  worth keeping.
+
+  Changed: the container is **trixie** (ffmpeg **7.1**, which writes the tag);
+  the gate allows HEVC on both protocols, with the reasoning and the byte-level
+  evidence in the comment above it; AV1 stays refused, now for the honest reason
+  — nothing but YouTube obviously takes it — instead of a wrong one about what
+  ffmpeg can do; and an HEVC room's banner note is a caveat about the
+  destination rather than an obstacle, because the event is no longer unsendable
+  anywhere.
+
+  Verified: a copy remux of HEVC+AAC through the relay's own argument vector
+  (`-c copy`, `-flvflags no_duration_filesize`, `-f flv`) emits video tag byte 0
+  = **0x90** — `isExVideoHeader=1`, `VideoFrameType.KeyFrame`,
+  `VideoPacketType.SequenceStart` — then the FourCC `hvc1`, where the same run
+  with H.264 emits the legacy `0x17`. ffprobe reads the result back as hevc +
+  aac. **Not verified: the last mile.** Nothing has been pushed from a real
+  encoder to a real destination, which is the caveat the docs now carry in place
+  of the old claim.
+
+  Also corrected, because the old fact was load-bearing in nine other places:
+  `PROJECT-SCOPE.md` §8.2 twice, §9's capability table, the Phase 7 text, and
+  Phase 15's "dead end for the relay" conclusion — which rested on the video and
+  now rests on FLAC, where it belonged all along. Plus `README.md`,
+  `docs/STREAMING.md`, `docs/DEVELOPER.md`'s test table, `relay/README.md`,
+  `site/docs.html`, `site/index.html`, and the **standing** Known gaps section
+  in `.github/RELEASE-NOTES.md`, which is republished with every release rather
+  than being history.
+
 - **The TSan job found a race in the verify note — the one member of
   `RetryUploader` that was not already atomic.** It went red on `4998582`, a
   commit that touched nothing but markdown, which is how a flake that had been

@@ -818,12 +818,14 @@
         &mdash; <code>rtmp://</code> or <code>srt://</code>. SRT can also
         <em>listen</em>, for a partner that pulls from you: leave the host out
         of the address, <code>srt://:9000</code>.</li>
-        <li><strong>HEVC goes out over SRT</strong>, since MPEG-TS carries it
-        properly where FLV (what RTMP means) can't. It still can't reach
-        YouTube.</li>
-        <li><strong>It refuses rather than guesses</strong> &mdash; AV1, HEVC
-        to an RTMP destination, and packed multi-channel audio are all
-        declined with a plain explanation.</li>
+        <li><strong>HEVC goes out either way</strong>, unchanged. Over SRT it
+        travels in MPEG-TS, which has carried it for a decade; over RTMP it
+        travels as <strong>Enhanced RTMP</strong> &mdash; the extended video tag
+        YouTube documents alongside H.264, and recommends over RTMP(S) for HDR.
+        Somewhere that has never implemented it will drop the stream, which is
+        worth knowing before it surprises you.</li>
+        <li><strong>It refuses rather than guesses</strong> &mdash; AV1 and
+        packed multi-channel audio are declined with a plain explanation.</li>
       </ul>
 
       <p>For a finished event, it can <strong>download one as an MP4</strong>

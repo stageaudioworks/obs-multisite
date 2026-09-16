@@ -43,15 +43,14 @@ main site delays the public stream rather than breaking it.
 **Does not, yet**
 
 - **Re-encode.** Everything is a straight copy, which is why this runs on a
-  tiny server. If the main site records in HEVC, streaming sites cannot take
-  it over RTMP, and the relay refuses to send it rather than pushing something
-  that looks fine here and is dead at the far end. Either set the main site's
-  encoder to H.264 for events you want on YouTube, or send it to an SRT
-  destination — those carry HEVC unchanged.
-- **Anything but H.264 and HEVC.** AV1 is refused on both protocols. There is
-  a way to put it in an MPEG-TS stream, but too little of what would receive
-  it can actually decode it yet, and a stream that looks healthy here and is
-  rejected at the far end is the exact failure this whole design avoids.
+  tiny server. The video that arrives is the video that leaves, so the main
+  site's choice of codec is the one that reaches the destination.
+- **AV1.** Refused on both protocols, and now for a narrower reason than
+  before: ffmpeg can put it in either container, but only YouTube obviously
+  takes it, and a stream that looks healthy here and is dropped at the far end
+  is the exact failure this whole design avoids. Turning it on should follow a
+  real push to a real destination rather than a reading of somebody's docs.
+  HEVC, which used to be refused alongside it, is not any more — see below.
 - **Split up packed multi-channel audio.** If the main site sends its sound as
   one multi-channel track with the mix, the microphones and the click inside
   it, the relay refuses rather than guessing which channels are the programme.
@@ -102,10 +101,20 @@ without being counted as a failure; it keeps up with the event while it
 waits, so whoever attaches gets what is happening now rather than everything
 they missed.
 
-**On HEVC over SRT:** the remux is verified — ffmpeg copies HEVC into MPEG-TS
-correctly and it reads back as HEVC at the far end — but as of this writing no
-event has actually been sent from an HEVC encoder through the relay. The
-transport is proven; that one path is not. Rehearse it before you rely on it.
+**On HEVC:** it goes out over both protocols now. Over MPEG-TS that was always
+true; over RTMP it travels as **Enhanced RTMP** — an extended video tag
+carrying the codec's FourCC — which ffmpeg has written since 6.1 and which
+YouTube takes (its encoder settings list H.264, H.265 and AV1 for RTMP/RTMPS,
+and recommend H.265 over RTMP(S) for HDR). The remux is verified at the byte
+level: the tag comes out with the extended header set and a FourCC of `hvc1`,
+and reads back as HEVC. What is *not* proven is the last mile — no event has
+been carried from a real HEVC encoder to a real destination through this. The
+transport is; that is not. Rehearse it before you rely on it.
+
+One caveat worth knowing before it surprises you: a destination that has never
+implemented Enhanced RTMP will drop the stream rather than complain usefully.
+If an HEVC push somewhere new dies the moment it starts, that is the reason,
+and it is not a fault at this end.
 
 SRT needs an ffmpeg built with it. The container's is; if you have swapped in
 your own and it is not, the page says so where the address is typed, rather

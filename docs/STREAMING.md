@@ -51,14 +51,19 @@ re-encoded.
   rather than being pushed to — written down by leaving the host out of the
   address, `srt://:9000`, which is deliberately the only way to ask for one,
   because it opens a port on a machine otherwise kept closed.
-- **HEVC goes out over SRT.** RTMP means FLV, and FLV means H.264 — which is
-  why choosing HEVC for the campuses used to cost a church its public stream
-  outright. SRT means MPEG-TS, which carries HEVC properly, so that trade is
-  no longer forced. It still cannot go to YouTube.
-- **It refuses rather than guesses.** AV1, HEVC to an RTMP destination, and
-  packed multi-channel audio are all declined with a plain explanation,
-  because sending any of them onward would mean a stream the destination
-  rejects, or a mic ISO going out to the public.
+- **HEVC goes out unchanged, either way.** Over SRT it travels in MPEG-TS,
+  which has carried HEVC for a decade. Over RTMP it travels as **Enhanced
+  RTMP** — an extended video tag carrying the codec's FourCC — which YouTube
+  documents alongside H.264 and AV1 for RTMP/RTMPS, and recommends over
+  RTMP(S) for HDR. Choosing HEVC for the campuses no longer costs a church any
+  part of its public stream. A destination that has never implemented Enhanced
+  RTMP will drop the stream rather than complain usefully, so an HEVC push
+  somewhere new that dies immediately is worth trying over SRT instead.
+- **It refuses rather than guesses.** AV1 and packed multi-channel audio are
+  both declined with a plain explanation, because sending either onward means
+  a stream the destination drops, or a mic ISO going out to the public. HEVC
+  was in that list until the container's ffmpeg learned to write Enhanced RTMP
+  and a destination could be named that takes it.
 
 It also does two things with events that have already finished:
 

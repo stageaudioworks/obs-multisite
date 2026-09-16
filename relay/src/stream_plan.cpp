@@ -148,13 +148,32 @@ RoomSendability sendability(const Manifest& manifest) {
         return r;
     }
     if (!rtmp.ok) {
-        // The HEVC case, which is the whole reason SRT is here. plan_stream's
-        // own remedy already names SRT as the way out, so it is repeated
-        // rather than reworded: two different sentences about one situation
-        // is how an operator ends up believing there are two situations.
+        // A protocol that refuses something the other takes. Nothing does
+        // today — every remaining refusal is about the content rather than the
+        // transport — but the banner should not need rewriting on the day
+        // something does. plan_stream's own remedy already names the way out,
+        // so it is repeated rather than reworded: two different sentences
+        // about one situation is how an operator ends up believing there are
+        // two situations.
         r.note = sentence(rtmp);
     } else if (!srt.ok) {
         r.note = sentence(srt);
+    }
+
+    // An HEVC event is sendable everywhere now, so the honest line here is a
+    // caveat rather than an obstacle. Over RTMP it goes out as Enhanced RTMP,
+    // which YouTube takes; a destination that has never heard of it will not,
+    // and it will drop the stream rather than complain usefully. Saying so is
+    // the difference between an operator learning it here and learning it from
+    // a stream that dies on them.
+    std::string vcodec = manifest.video.codec;
+    std::transform(vcodec.begin(), vcodec.end(), vcodec.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    if (vcodec == "hevc") {
+        r.note = "This event is HEVC. It goes out unchanged either way; over "
+                 "RTMP it needs somewhere that takes Enhanced RTMP, which "
+                 "YouTube does. Somewhere that does not will drop the stream "
+                 "as soon as it starts.";
     }
     return r;
 }
@@ -166,10 +185,24 @@ StreamPlan plan_stream(const Manifest& manifest,
     const Protocol proto = protocol_of(dest);
 
     // ── Video ────────────────────────────────────────────────────────────────
-    // The codec gate, per protocol. ffmpeg will mux HEVC into FLV without
-    // complaint, so for RTMP this check is the only thing standing between an
-    // HEVC feed and a stream that looks healthy here and is dead at the
-    // destination. MPEG-TS genuinely carries HEVC, so over SRT it is allowed.
+    // The codec gate. HEVC now passes on both protocols: over MPEG-TS it always
+    // did, and over RTMP it is carried by Enhanced RTMP, which ffmpeg writes
+    // from 6.1 on and which YouTube takes.
+    //
+    // Verified at the byte level rather than taken from the documentation: a
+    // copy remux of an HEVC input through the exact argument vector below
+    // produces an Extended VideoTagHeader — byte 0 is 0x90, i.e.
+    // isExVideoHeader=1 | VideoFrameType.KeyFrame | VideoPacketType 0, then
+    // the FourCC "hvc1", which is the value E-RTMP defines for HEVC. The same
+    // run with H.264 produces byte 0x17: the legacy tag, codec 7, which is
+    // what makes the difference between the two visible rather than assumed.
+    // What is NOT yet verified is a real push to a real destination — see the
+    // note in stream_plan.h.
+    //
+    // AV1 is refused on both, and the destination is the unknown rather than
+    // ffmpeg — YouTube documents AV1 ingest, nothing else obviously does, and
+    // silently pushing something the far end drops is the failure this gate
+    // exists to prevent.
     std::string vc = manifest.video.codec;
     std::transform(vc.begin(), vc.end(), vc.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
@@ -180,21 +213,16 @@ StreamPlan plan_stream(const Manifest& manifest,
                     "the encoder.";
         return p;
     }
-    const bool video_ok =
-        vc == "h264" || (proto == Protocol::Srt && vc == "hevc");
+    const bool video_ok = vc == "h264" || vc == "hevc";
     if (!video_ok) {
         p.problem = "This event is being recorded as " + vc + " video, and " +
                     (proto == Protocol::Srt
                        ? "this kind of connection cannot carry it."
-                       : "streaming sites need H.264.");
-        p.remedy  = proto == Protocol::Srt
-                      ? "Set the main site's encoder to H.264 or HEVC for "
-                        "events you want to send here."
-                      : "The video would have to be re-encoded on the way "
-                        "out, which this server cannot do yet. Set the main "
-                        "site's encoder to H.264 for events you want to "
-                        "stream publicly, or send this to an SRT destination "
-                        "instead — those can carry HEVC unchanged.";
+                       : "streaming sites do not take it.");
+        p.remedy  = "Re-encoding on the way out is not built, so the main "
+                    "site's encoder has to send H.264 or HEVC for events you "
+                    "want to stream publicly — both go out unchanged — or this "
+                    "can go to an SRT destination instead.";
         return p;
     }
     if (dest.allow_transcode) {

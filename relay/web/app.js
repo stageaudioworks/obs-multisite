@@ -165,9 +165,10 @@ async function refresh() {
   } else if (s.cannot_send_reason) {
     message = s.cannot_send_reason;
   } else if (s.send_note) {
-    // Some destinations can take this event and some cannot — an HEVC
-    // event, in practice. Shown in the same place, because it is the same
-    // question, and there is only ever one of the two.
+    // A caveat rather than an obstacle — today that means an HEVC event,
+    // which goes to either protocol but over RTMP only to somewhere that
+    // speaks Enhanced RTMP. Shown in the same place as a refusal, because it
+    // is the same question being asked, and there is only ever one of the two.
     message = s.send_note;
   }
   warn.hidden = !message;

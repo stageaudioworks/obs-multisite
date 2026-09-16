@@ -962,12 +962,15 @@ Either of these settles it, and both are one command:
   the daemon slaves to a clock, it does not hand one out.
 - **The relay has pushed live streams to YouTube** but has not been through a
   full event.
-- **HEVC to a streaming site needs SRT.** RTMP cannot carry it and re-encoding
-  is not built, so YouTube and Facebook remain H.264 only. The HEVC-over-SRT
-  remux is verified against ffmpeg, but no event has yet been carried from a
-  real HEVC encoder through the relay. Rehearse it before relying on it.
-- **AV1 is refused by the relay on both protocols**, deliberately: too little
-  of what would receive it can decode it yet.
+- **HEVC to a streaming site needs the site to speak Enhanced RTMP.** YouTube
+  documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, so an HEVC feed reaches
+  it unchanged; somewhere that has never implemented the extension drops the
+  stream as it starts. SRT carries HEVC regardless, so there is still somewhere
+  to send it. No HEVC event has yet gone out from a real encoder to a real
+  destination, so rehearse it before relying on it.
+- **AV1 is refused by the relay on both protocols**, deliberately: ffmpeg can
+  carry it either way, but only YouTube obviously takes it, and a stream that
+  is dropped on arrival is the failure this rule exists to prevent.
 - **The relay does not terminate TLS.** It binds to localhost and expects a
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past event is a proof of concept** — one at a time, started

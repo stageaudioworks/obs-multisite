@@ -458,16 +458,19 @@ out of scope, and the relay cannot re-encode.</summary>
   See [BUGS.md entry 3](BUGS.md).
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
-- **The relay will not send an HEVC feed to a streaming site.** Those want
-  H.264 over RTMP, and re-encoding on the way out is not built. An SRT
-  destination carries HEVC unchanged, so this is no longer a straight trade
-  against streaming publicly — but it does mean YouTube and Facebook stay out
-  of reach for an HEVC site. H.264 remains the default and decodes fine
-  everywhere, Raspberry Pi campuses included.
-- **HEVC over SRT has not carried real encoder output.** The remux is verified
-  — ffmpeg copies HEVC into MPEG-TS correctly and it reads back as HEVC at the
-  far end — but no event has yet gone out that way from an actual HEVC
-  encoder. Rehearse it before relying on it.
+- **The relay sends HEVC to a streaming site only if that site speaks Enhanced
+  RTMP.** YouTube documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, so an
+  HEVC site reaches it unchanged; a destination that has never implemented the
+  extension drops the stream the moment it starts, and re-encoding on the way
+  out is not built. SRT carries HEVC regardless, so where the RTMP half fails
+  there is still somewhere to send it. H.264 remains the default: it decodes
+  fine everywhere, Raspberry Pi campuses included, and it needs nothing of the
+  far end.
+- **No HEVC event has yet gone out from a real encoder to a real
+  destination.** The remux is verified at the byte level — over MPEG-TS it
+  reads back as HEVC, and over Enhanced RTMP the tag comes out with the
+  extended header set and a FourCC of `hvc1` — but the last mile has not been
+  rehearsed. Do that before relying on it.
 - **SRT in listener mode needs a port opened**, and nothing is shipped to help.
   Publish it on the container and open it on the firewall yourself; unlike the
   web interface there is no proxy in front of it.
@@ -604,10 +607,12 @@ three things that are no longer part of this project, and why.</summary>
   through the same machinery as its AAC one, and the mux/decode core here is
   already codec-agnostic, so this is a plugin-layer change. The Pi appliance
   needs nothing at all — it decodes through the same core path regardless of
-  codec. The catch is downstream rather than technical: FLAC has no home on
-  the public web, and HEVC at that bitrate already needs SRT rather than
-  RTMP, so this mode is a dead end for the simulcast relay and anything
-  reached through it — only the OBS decoder plugin and the Pi appliance can
+  codec. The catch is downstream rather than technical, and it is the sound
+  rather than the picture: FLAC has no home on the public web — no ingest takes
+  it — so this mode is a dead end for the simulcast relay and anything reached
+  through it, even though the video half of that argument has since gone (HEVC
+  now travels over both protocols). Only the OBS decoder plugin and the Pi
+  appliance can
   ever play it back. Designed in
   [PROJECT-SCOPE.md §10, Phase 15](PROJECT-SCOPE.md#10-delivery-phases).
 

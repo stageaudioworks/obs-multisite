@@ -228,7 +228,7 @@ somebody deploys on a Sunday morning:
 
 | suite | what it proves |
 |---|---|
-| `stream_plan` | what may be sent onward and what must be refused — HEVC into FLV, AV1 anywhere, packed multi-channel audio, a sound feed that has vanished, a manifest whose track positions do not line up; that HEVC over SRT is allowed where it is not over RTMP; that a pasted SRT address is pulled apart with the secrets taken out of it; and that no secret survives redaction for the log |
+| `stream_plan` | what may be sent onward and what must be refused — AV1 on either protocol, packed multi-channel audio, a sound feed that has vanished, a manifest whose track positions do not line up; that HEVC is allowed on both, over Enhanced RTMP as much as over MPEG-TS, and that neither path re-encodes; that a pasted SRT address is pulled apart with the secrets taken out of it; and that no secret survives redaction for the log |
 | `relay_state` | the awkward cases without a destination or a wait: a stall ridden out and then given up on, an unexpected exit and its backoff, ending cleanly versus being cut short, an edit that rebuilds a stream without counting as a fault, and an SRT listener with nobody attached waiting indefinitely rather than being treated as broken |
 | `config_store` | destinations and storage settings survive a restart, an invalid one is refused before it reaches the database, and an SRT destination's stream id, passphrase and latency round-trip intact |
 

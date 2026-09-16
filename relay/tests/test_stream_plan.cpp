@@ -100,24 +100,38 @@ int main() {
               "choosing nothing sends the first track");
     }
 
-    // ── Refusals ─────────────────────────────────────────────────────────────
+    // ── HEVC over RTMP ───────────────────────────────────────────────────────
+    // Used to be refused here, on the grounds that FLV cannot carry HEVC. It
+    // can, through Enhanced RTMP, and has since ffmpeg 6.1 — so the refusal was
+    // costing an HEVC site its public stream for a constraint that had stopped
+    // being true. What is asserted now is that it goes out as a copy, in FLV,
+    // and that the summary says HEVC rather than quietly claiming H.264.
     {
         Manifest m = ordinary();
         m.video.codec = "hevc";
         auto p = plan_stream(m, dest("Main Mix"), "/tmp/f.fifo");
-        CHECK(!p.ok, "HEVC is refused rather than muxed into FLV");
-        CHECK(p.problem.find("H.264") != std::string::npos,
-              "and the reason says what is needed");
-        CHECK(p.problem.find("codec") == std::string::npos,
-              "without using the word codec at a volunteer");
-        CHECK(p.remedy.find("SRT") != std::string::npos,
-              "and points at the one way there is to send it on unchanged");
+        CHECK(p.ok, "HEVC goes to an RTMP destination, as Enhanced RTMP");
+        CHECK(has_pair(p.args, "-f", "flv"),
+              "in FLV, which is what Enhanced RTMP extends");
+        CHECK(has_pair(p.args, "-c", "copy"),
+              "still without re-encoding anything");
+        CHECK(p.summary.find("HEVC") != std::string::npos,
+              "and the summary says HEVC rather than H.264");
     }
     {
         Manifest m = ordinary();
         m.video.codec = "av1";
-        CHECK(!plan_stream(m, dest("Main Mix"), "/tmp/f.fifo").ok,
-              "so is AV1");
+        auto p = plan_stream(m, dest("Main Mix"), "/tmp/f.fifo");
+        CHECK(!p.ok, "AV1 still is, on both protocols");
+        CHECK(p.problem.find("av1") != std::string::npos,
+              "and the refusal names what the event actually is");
+        CHECK(p.problem.find("codec") == std::string::npos,
+              "without using the word codec at a volunteer");
+        CHECK(p.remedy.find("H.264") != std::string::npos &&
+              p.remedy.find("HEVC") != std::string::npos,
+              "and the way out named is both codecs a destination takes");
+        CHECK(p.remedy.find("SRT") != std::string::npos,
+              "and it still points at SRT as the other way to send it on");
     }
     {
         // Packed multi-channel: mix, ISOs and click in one 8-channel stream.
@@ -196,12 +210,13 @@ int main() {
               "with the stream tables resent, so a late arrival can decode it");
     }
     {
-        // The reason SRT is here at all: HEVC in MPEG-TS is a real, long
-        // established stream type, not FLV's after-the-fact extension.
+        // HEVC over SRT: MPEG-TS is a real, long established stream type, so
+        // nothing special is needed here — and it is no longer the only way to
+        // send HEVC, which is what the wording used to say.
         Manifest m = ordinary();
         m.video.codec = "hevc";
         auto p = plan_stream(m, srt_dest(), "pipe:0");
-        CHECK(p.ok, "HEVC can be sent over SRT, where it could not over RTMP");
+        CHECK(p.ok, "HEVC goes over SRT as it always did");
         CHECK(p.summary.find("HEVC") != std::string::npos,
               "and the summary says so rather than claiming H.264");
     }
@@ -353,16 +368,26 @@ int main() {
               "and the operator is told nothing, because there is nothing to say");
     }
     {
+        // An HEVC event used to be the case this whole mechanism existed for:
+        // RTMP could not take it, SRT could, and the banner had to say so.
+        // HEVC goes to both now, so what is left to say is the caveat that
+        // comes with the RTMP half — and it is still information rather than
+        // an obstacle, which is why it lands in `note` and not `problem`.
         Manifest m = ordinary();
         m.video.codec = "hevc";
         auto r = sendability(m);
-        CHECK(r.any, "an HEVC event is NOT unsendable");
-        CHECK(!r.rtmp_ok && r.srt_ok, "it just cannot go to a streaming site");
+        CHECK(r.any && r.rtmp_ok && r.srt_ok,
+              "an HEVC event can now go to either kind of destination");
         CHECK(r.problem.empty(),
               "so nothing tells the operator the event cannot be streamed");
-        CHECK(!r.note.empty(), "but they are told why half of it is unavailable");
-        CHECK(r.note.find("SRT") != std::string::npos,
-              "and where it CAN go, which is the point of saying anything");
+        CHECK(!r.note.empty(),
+              "but they are told what the RTMP half depends on");
+        CHECK(r.note.find("Enhanced RTMP") != std::string::npos,
+              "which is the destination speaking Enhanced RTMP");
+        CHECK(r.note.find("YouTube") != std::string::npos,
+              "named, because a volunteer needs somewhere concrete to point at");
+        CHECK(r.note.find("SRT") == std::string::npos,
+              "and SRT is not offered as a way out, because none is needed");
     }
     {
         // Refused everywhere: the banner goes back to being an obstacle.
