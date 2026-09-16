@@ -740,6 +740,19 @@ three minutes by default — so a dropout at the main site is absorbed instead
 of reaching air. It is the same trade as §1, applied to the public stream:
 latency spent to buy resilience.
 
+**One destination per audience, each with its own sound.** Destinations are a
+list, not a setting: each has its own address, its own audio track — chosen by
+the name the main site published, never by track number — and its own
+supervision and reconnection. That is what makes the multi-lingual case work: the
+desk's interpreter feeds travel as separate tracks, so English can go to one
+stream, Spanish to another and a clean feed to a broadcast partner, all from the
+single upload the main site already made and with nothing re-encoded anywhere.
+Two limits belong written down rather than discovered. The *video* is identical
+on every destination, because this is a copy remux and there is no transcoder —
+there are no per-language bitrates and no adaptive ladder. And every destination
+costs the relay's own uplink another copy of the bitrate, which is why the status
+page reports the total going out rather than a per-destination rate alone.
+
 **Two protocols, told apart by the address alone.** RTMP is what every public
 streaming site accepts, so one mechanism covers YouTube, Facebook and a
 church's own server. SRT is what broadcast partners, hardware decoders and the
@@ -1420,7 +1433,8 @@ is the better answer for a given church, section 12 says so plainly.
 | Dedicated receive appliance (Raspberry Pi) | built and proven on a Pi 5; not yet run through an event (§10 Phase 6) |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
-| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 and HEVC over either protocol — HEVC to RTMP needs a destination speaking Enhanced RTMP — and neither has yet been carried from real encoder output (§8.2) |
+| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264, HEVC and AV1 over either protocol, each subject to the destination taking it — and AV1 has now carried a real event to YouTube (§8.2); HEVC's own last mile is the one still unproven |
+| One event to several destinations, each with its own audio track | built — the relay's destination list, sound feed chosen per destination by name, and a different language or feed can go to each stream from the same upload (§8.2) |
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
 | HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination. AV1, on the same code path, has now been carried to YouTube (§8.2) |
 | Download a finished event as an MP4, all audio tracks | built (§8.2) |

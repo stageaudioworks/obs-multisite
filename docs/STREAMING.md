@@ -68,6 +68,30 @@ re-encoded.
   and that one is ffmpeg's doing rather than a policy: MPEG-TS has no AV1 stream
   type to put it in.
 
+### Can one service go out in several languages?
+
+Yes, and from the same upload. The interpreter feeds from the desk arrive as
+separate OBS audio tracks — each one named — and the relay sends **a different
+track to each destination**: English to one YouTube stream, Spanish to another,
+a clean feed to a broadcast partner. Every destination reads the same segments
+from the same bucket, so the main site uploads once no matter how many languages
+there are, which is the whole point when the service is going out from a place
+with a poor connection. Nothing is re-encoded on the way.
+
+What it does not do, stated plainly, because the answer above sounds better than
+the whole truth:
+
+- **The video is the same on every destination.** Only the sound can differ —
+  there is no transcoder here, so there are no per-language bitrates and no
+  adaptive ladder.
+- **Each language needs its own stream key or channel at the far end.**
+- **Every destination costs the relay's own uplink another copy of the bitrate.**
+  Three 1080p languages is roughly three times the egress from that server. The
+  page shows the total going out for exactly this reason.
+- **There is no in-browser player.** "Web" today means handing the stream to
+  YouTube or Facebook, or to an SRT receiver. Playing from the bucket into a
+  browser is planned and not built.
+
 It also does two things with events that have already finished:
 
 - **Download one as an MP4**, streamed straight from storage — nothing is

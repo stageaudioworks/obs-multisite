@@ -398,6 +398,11 @@ footer {
 .case-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .case-text { min-width: 0; }
 .case-text h3 { margin-top: 2px; }
+/* A case with no photograph. The education case has no picture of its own yet,
+   and a card that reserves an empty 240px column for one reads as a broken
+   image rather than as a card — so it spans the full width until a photo turns
+   up. Add the .case-media div back and drop this class when one does. */
+.case.case-wide { grid-template-columns: 1fr; }
 @media (max-width: 760px) {
   .case { grid-template-columns: 1fr; }
   .case-media { aspect-ratio: 16/9; max-width: 420px; }

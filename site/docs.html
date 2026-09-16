@@ -832,6 +832,20 @@
         in.</li>
       </ul>
 
+      <h3>Can one service go out in several languages?</h3>
+      <p>Yes, and from the same upload. Interpreter feeds arrive as separate
+      audio tracks &mdash; each one named &mdash; and the relay sends
+      <strong>a different track to each destination</strong>: English to one
+      stream, Spanish to another, a clean feed to a partner. Every destination
+      reads the same files, so the main site uploads once however many languages
+      there are, and nothing is re-encoded on the way.</p>
+      <p style="color:var(--text-3)">The picture is the same on all of them,
+      because there is no transcoder here &mdash; only the sound can differ, and
+      there is no adaptive ladder. Each language needs its own stream key at the
+      far end, each one costs the relay's uplink another copy of the bitrate,
+      and there is no in-browser player yet: today's &ldquo;web&rdquo; means
+      YouTube, Facebook, or an SRT receiver.</p>
+
       <p>For a finished event, it can <strong>download one as an MP4</strong>
       streamed straight from storage (no disk cost, every audio track
       included), or <strong>replay one to a destination</strong> as though it
