@@ -11,6 +11,8 @@
 #include "transport.h"
 #include <functional>
 #include <atomic>
+#include <mutex>
+#include <string>
 #include <thread>
 #include <chrono>
 #include <cstdint>
@@ -57,7 +59,15 @@ public:
     void stop();
 
     LinkHealth health() const { return m_health.load(); }
-    const std::string& last_verify_note() const { return m_last_verify_note; }
+    // A copy, not a reference. The upload thread writes this string while a
+    // status poll reads it, and that poll runs on somebody else's thread
+    // holding somebody else's lock — the Session's, which the uploader never
+    // takes. Handing out a reference copied the buffer on the reader's thread,
+    // which is the read that raced.
+    std::string last_verify_note() const {
+        std::lock_guard<std::mutex> lk(m_note_mtx);
+        return m_last_verify_note;
+    }
     const UploaderStats& stats() const { return m_stats; }
 
     // Drain synchronously until the spool is empty or `deadline` passes. Returns
@@ -73,10 +83,20 @@ private:
     ConfirmCallback m_on_confirmed_after;
 
     std::string          m_last_verify_note;
+    // Guards only the note above. Its own mutex rather than the Session's,
+    // because the writer is the upload thread and the reader is a status poll
+    // that already holds the Session's. Never held across the confirm
+    // callbacks, so the two locks cannot invert.
+    mutable std::mutex   m_note_mtx;
     std::thread          m_thread;
     std::atomic<bool>    m_running{false};
     std::atomic<LinkHealth> m_health{LinkHealth::Healthy};
 
+    // The only writer of the note above, so the lock lives in one place.
+    void set_verify_note(std::string note) {
+        std::lock_guard<std::mutex> lk(m_note_mtx);
+        m_last_verify_note = std::move(note);
+    }
     void run();
     // Upload one segment with retry until success/stop/deadline. Returns true
     // on confirm. `deadline` is optional (the background run() thread retries

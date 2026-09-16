@@ -41,16 +41,16 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             int64_t stored = m_transport.object_size(seg.key);
             if (stored >= 0 && stored != (int64_t)seg.data.size()) {
                 m_stats.verify_failures++;
-                m_last_verify_note = "stored size " + std::to_string(stored) +
+                set_verify_note("stored size " + std::to_string(stored) +
                     " != sent " + std::to_string(seg.data.size()) +
-                    " for " + seg.key;
+                    " for " + seg.key);
             } else if (stored < 0) {
                 m_stats.verify_failures++;
-                m_last_verify_note =
-                    "object not found after a successful PUT: " + seg.key;
+                set_verify_note(
+                    "object not found after a successful PUT: " + seg.key);
             } else {
-                m_last_verify_note = "verified " + seg.key + " (" +
-                    std::to_string(stored) + " bytes)";
+                set_verify_note("verified " + seg.key + " (" +
+                    std::to_string(stored) + " bytes)");
             }
         }
         if (r.success) {

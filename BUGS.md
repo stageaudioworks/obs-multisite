@@ -154,6 +154,41 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The TSan job found a race in the verify note — the one member of
+  `RetryUploader` that was not already atomic.** It went red on `4998582`, a
+  commit that touched nothing but markdown, which is how a flake that had been
+  rolling dice for a while finally landed: `session`, 1 of 41, `thread` job only
+  (the ASan/UBSan job and clang-tidy both passed, and the same job had passed on
+  the commit before). The report was `operator delete` inside
+  `RetryUploader::upload_one` (`retry_uploader.cpp:53`) writing against a
+  `std::string::_M_assign` read by the main thread in `Session::status()` —
+  reached from a poll loop at `tests/test_session.cpp:424`.
+
+  **The cause was an accessor, not a missing lock in the obvious place.**
+  `last_verify_note()` returned `const std::string&`, so `Session::status()`
+  copied that buffer on the *caller's* thread. It did so under the Session's own
+  mutex, which the upload thread never takes and which therefore synchronises
+  nothing; the uploader meanwhile assigned the string at three points
+  (`retry_uploader.cpp:44`, `:49`, `:52`) with no lock at all. Everything else in
+  the class was already safe — every `UploaderStats` counter is a `std::atomic`,
+  as is `m_health` — so one member was the entire gap.
+
+  **It matters outside the test.** The note is logged by the encoder dock as
+  `upload verified in bucket: …` or `UPLOAD VERIFICATION FAILED: …`
+  (`src/obs/multisite_output.cpp:789-794`), and the window is the first
+  `verify_first_n` (3) confirmations of *every* event — exactly the moment an
+  operator is watching the dock. A torn read there is a garbled log line at
+  best, and a read of memory the uploader has already freed at worst, which is
+  undefined behaviour rather than a wrong sentence.
+
+  **Fixed by giving the note its own lock and handing out a copy:**
+  `m_note_mtx`, `set_verify_note()` as the only writer, and
+  `last_verify_note()` returning `std::string` by value. Its own mutex rather
+  than the Session's, because the reader already holds the Session's and the two
+  must not invert — the note lock is never held across the confirm callbacks, so
+  they cannot. Both callers wanted a copy anyway (`session.cpp:406` and
+  `test_session.cpp:376`), so nothing else changed.
+
 - **Back to stock in one command, and the way into the box left up.**
   `scripts/player/uninstall.sh` takes the player off a box; this adds `--stock`,
   which is the whole job asked once — the player, the AES67 stack under it, and
