@@ -5,7 +5,7 @@ each entry has enough context to act on without anyone having been in the
 room when it was written. Delete an entry once it's fixed and released;
 this file is not a changelog.
 
-Last updated: 2026-09-15.
+Last updated: 2026-09-16.
 
 ---
 
@@ -862,6 +862,55 @@ which is point 2 above.
   the audio state as a word (closed / open / failed) and the card's own message.
   The arithmetic lives in headers with no ALSA in them, so it is checked on a
   laptop with no card: `tests/test_audio_plan.cpp`, `tests/test_audio_levels.cpp`.
+
+- **Phase 10, tiles: one composited feed, several pictures.** A room that
+  composites two or four cameras into one feed used to have that composite cut
+  apart again by hand at every satellite, with crop filters, every time. The main
+  site now says how it composited (**Settings → Media → Pictures in this feed**:
+  `1x1`, `2x1`, `1x2`, `2x2`), and the layout travels in `event.json` as an
+  optional field written only when it is split — so an event from before this
+  existed parses as one picture and nothing has to migrate
+  (`TileLayout::parse`, `src/core/model.cpp`). It is declared rather than
+  detected: a 3840×1080 frame is a legitimate ultrawide picture as well as a
+  plausible pair, and guessing wrong cuts a programme in half.
+
+  At the satellite each region is its own source — `multisite_tile_source`,
+  "Multisite Picture (Decoder)" — which attaches to whichever Multisite Source
+  is following the same room and receives a view of frames that source has
+  already decoded, so **one download and one decode, however many regions are
+  taken out of it**. The fan-out hands each registered tile a frame whose plane
+  pointers are offset and whose strides are the original ones, which is why a
+  tile costs no copy and no allocation on a path that runs thirty times a second;
+  every edge rounds down to an even number, because the frame is I420 and an odd
+  offset has no chroma sample to start from. A tile carries no audio of its own,
+  deliberately: the programme audio belongs to the feed, not to one quarter of
+  it. Each tile source has a **Send to screen** setting that opens one of OBS's
+  own fullscreen projectors, which is how a region reaches a second monitor or a
+  DeckLink without this code knowing what either of those is — the "assigned
+  outputs" half of the phase, on the OBS side. A build with no frontend API keeps
+  the setting and warns instead of projecting (`MULTISITE_HAVE_FRONTEND_API`),
+  and several outputs from one appliance box needs hardware beyond this project.
+
+  The appliance got the single-screen half: a **Composited feed** setting
+  (`tile_index`, `-1` whole picture, `0..3` in reading order) crops in the
+  present path as a non-owning view, with the layout re-read from the manifest on
+  every poll — so a room that sends one camera this week and four next week needs
+  nothing reconfigured at the satellite. An absent, `1x1` or out-of-range tile is
+  the whole picture, which is recoverable by hand where a wrongly cropped one is
+  not obviously wrong at all. The preview then had to catch up, because with a
+  tile selected the screen and the preview were two different pictures: it now
+  offers *what's going out* and *the whole feed*, each with its own
+  last-good-JPEG cache, and the layout and selection are read under the same lock
+  as the frame so the two are always the same instant.
+
+  Every way of getting this geometry wrong is quiet — a rectangle a pixel out is
+  still a picture, and one that took chroma at luma resolution is still a picture
+  in the wrong colours — so it is pinned by `tests/test_tile_layout.cpp` (reading
+  order, even edges, out-of-range gives the whole frame) and
+  `tests/test_tile_crop.cpp` (plane offsets and strides; every luma and chroma
+  sample of a copied tile checked against a position-dependent pattern). Commits
+  `59a56b8`, `faf1de5`, `c1a277d`, `685a0cd`; shipped in `v0.1.15-alpha` and
+  `v0.1.16-alpha`.
 
 - **The player configures and switches the AES67 stream.** The stream used to be
   something an operator built by hand in the daemon's own interface. Now the

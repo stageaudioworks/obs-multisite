@@ -222,6 +222,14 @@ but has not yet carried real encoder output.
   whether the clock is locked shown next to it. It passes eight channels on a
   bench Pi, but has not yet been through an event. See
   [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
+- **One feed, several pictures.** A room that composites two or four cameras
+  into a single feed says so at the main site, and each region arrives at a
+  satellite as its own already-cropped source — ready to drop into a scene or
+  send to a screen of its own, downloaded once and decoded once however many
+  pictures are taken out of it. A campus player can put one chosen region on its
+  single display, and its page offers both the region going out and the whole
+  feed. See
+  [Choosing a satellite](docs/SATELLITE.md#what-running-the-decoder-in-obs-makes-possible).
 - **Event browsing.** The decoder lists what a room has recorded, shows which is
   on air, which are finished recordings and which were cut short by an encoder
   that died, and plays any of them back.
@@ -409,12 +417,11 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 15, from storage redundancy and
-satellite output routing to keeping installations current, an easier way to
-connect a bucket, choosing a storage provider from a list, a satellite
-receiving directly from the encoder on the same network, and a lossless
-high-quality mode for players only — plus three things that are no longer
-part of this project, and why.</summary>
+<summary>What is planned next: phases 6 to 15, from storage redundancy to
+keeping installations current, an easier way to connect a bucket, choosing a
+storage provider from a list, a satellite receiving directly from the encoder
+on the same network, and a lossless high-quality mode for players only — plus
+three things that are no longer part of this project, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -436,12 +443,16 @@ part of this project, and why.</summary>
   against a real OBS and a real campus player; nothing has yet run a full event.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
   throughout, or holding the manifests only until a failover.
-- **Phase 10 — Tile layout.** A 2×1 or 2×2 feed exposed as discrete sources.
-  The layout and crop geometry are in the core, the OBS plugin exposes each
-  region as its own source, and the campus player can show one chosen region
-  full-screen on its single display. Assigning tiles to *several* outputs from
-  one box needs hardware beyond the Pi, which is out of this project's scope
-  — see below.
+- **Phase 10 — Tile layout.** ✅ Built. A 2×1 or 2×2 feed declared at the main
+  site arrives as discrete, already-cropped sources: the layout and crop
+  geometry are in the core, the OBS plugin exposes each region as its own
+  source with its own **Send to screen** — which drives OBS's own fullscreen
+  projector, so a region reaches a second monitor or a DeckLink without this
+  code knowing what either of those is — and the campus player can show one
+  chosen region full-screen on its single display, with the web preview
+  offering both what is going out and the whole feed. Assigning tiles to
+  *several* outputs from one box needs hardware beyond the Pi, which is out of
+  this project's scope — see below.
 - **Phase 11 — Keeping installations current.** Today the plugin is a set of
   files an operator replaces by hand, and the only way anyone learns a newer
   build exists is to go and look. Notifying them is the small half: the plugin

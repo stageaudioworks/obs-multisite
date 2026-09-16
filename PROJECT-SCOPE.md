@@ -1398,7 +1398,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
 | Redundant storage: two independent S3 targets, active/active or active/passive | planned (§10 Phase 9) |
 | Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile on its single screen (§10 Phase 10) |
-| Fullscreen / SDI output assignment driven by the decoder plugin | planned (§10 Phase 10) |
+| Fullscreen output assignment driven by the decoder plugin | built — each tile is a source with its own **Send to screen**, opening one of OBS's own fullscreen projectors; SDI is whatever OBS's DeckLink or AJA output already does, and several outputs from one appliance box is out of scope (§10 Phase 10) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
 | Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
@@ -1460,8 +1460,10 @@ paths — is a separate Stage Audio Works product line now, not built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phase 13 is built. Phase 14 is built.
-Phases 9, 10, 12 and 15 have not been started.
+event. Phase 10 is built, and its own entry below says what is not: assigning
+tiles to several outputs from one box needs hardware beyond the Pi, which is out
+of this project's scope. Phase 13 is built. Phase 14 is built.
+Phases 9, 12 and 15 have not been started.
 
 **Phases 11, 12 and 13 carry weight together.** Between them they are most
 of the distance between a project a technician can deploy and one an
@@ -1554,7 +1556,7 @@ than deleted.
   Costs to state plainly: double storage and double origin writes, lifecycle
   rules needed on **both** buckets, and *Manage storage…* extended to say which
   target an event is in and to delete from both.
-- **Phase 10 — Tile layout and assigned outputs.** ⬜ A room that needs two or
+- **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or
   four discrete pictures composites them at the main site today and pulls them
   apart at the satellite with OBS filters by hand ([Choosing a
   satellite](docs/SATELLITE.md)). This makes the split a property of the
@@ -1562,13 +1564,20 @@ than deleted.
   `event.json`, and each region becomes its own video source, already cropped,
   assignable to a fullscreen output, a DeckLink or AJA output, or a video wall.
   The shape is deliberately the one audio already uses — one decoder, many
-  sources, no extra download and no extra decode. Assignment is the part to
-  design: OBS can be asked for a fullscreen projector on a chosen monitor, so
-  tile-to-output mapping is the plugin driving OBS's own outputs rather than a
-  new output of its own. Questions recorded here rather than answered: what a
-  satellite does when it has fewer outputs than tiles, whether the mapping
-  survives a layout change mid-event, and whether audio follows the tile.
-  Built so far: the layout in `event.json` and the crop geometry live in
+  sources, no extra download and no extra decode. Assignment is the plugin
+  driving OBS's own outputs rather than a new output of its own: each tile
+  source carries a **Send to screen** setting that opens one of OBS's own
+  fullscreen projectors on the chosen display, which is what lets a region reach
+  a second monitor or a DeckLink without this code knowing what either of those
+  is. A satellite with fewer outputs than tiles needs nothing special — every
+  tile is a source, each is sent to a screen or left unsent, and an unsent one is
+  still there to put in a scene. Nothing has to survive a layout change
+  mid-event, because there is none: the layout is written at Go Live, and a later
+  event that declares a different one is picked up from the manifest on every
+  poll, so no satellite is ever reconfigured. Audio does not follow the tile — a
+  picture is a region of the frame, and the programme audio belongs to the feed
+  rather than to one quarter of it.
+  Built: the layout in `event.json` and the crop geometry live in
   `src/core/` (`TileLayout::tile_rect` and `tile_view()`), the OBS plugin
   exposes each region as its own source, and the headless campus player can put
   one chosen region on its single screen — a `tile_index` setting (`-1` whole
@@ -1838,8 +1847,11 @@ the license on the software underneath it.
 
 Practically, this is why Phase 6's own text no longer defers Pi 4's
 hardware-decoder selection to a later phase, and why Phase 10's tile-to-output
-assignment no longer promises a numbered phase to finish it in: both were
-waiting on a hardware tier that isn't part of this project's roadmap any more.
+assignment stops where it does rather than promising a numbered phase to finish
+it in: what the OBS plugin can do for itself is built, and giving one appliance
+box several outputs needs the hardware described here, so that part is out of
+scope instead of scheduled. Both were waiting on a hardware tier that isn't
+part of this project's roadmap any more.
 
 ---
 
