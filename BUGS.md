@@ -154,6 +154,46 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **AV1 is now round-tripped rather than merely carried — and the report that
+  started it was not AV1's fault.** An AV1 event played live and was then
+  nowhere in the recordings list. Since the live path worked, the question was
+  the listing, and the answer is that the listing has never known one codec from
+  another. That is now a test rather than an assertion.
+
+  What was actually missing was proof. `cmaf` and `cmaf_hevc` round-tripped the
+  other two codecs and nothing in the tests said "av1" anywhere, so "carried but
+  lightly exercised" was carrying a lot of weight in the README: an AV1 setting
+  produced a stream that nothing in this repository had ever decoded. Added:
+
+  - **`cmaf_av1`** with `cmake/run_av1_test.cmake`: an AV1 fixture (1280×720,
+    two AAC tracks) through the real muxer, then every fragment decoded back —
+    180 frames from the first, 60 from the second, both audio tracks present.
+  - **`cmaf_av1_decode`**: the muxer's own output read back through
+    `CmafDecoder`, as the H.264 fixture is.
+  - **`test_event_catalog`**: an ended AV1 event lists as a recording, a live
+    one is still the live one, and neither is skipped or reported unplayable.
+  - **`test_session` 9b**, which is the report reproduced properly: a real
+    `Session` with `video.codec = "av1"`, real segments, a real `end()`, and
+    then the real `EventCatalog` over the same store. It lists as a Recording
+    with nothing skipped.
+
+  Two things the first draft of that script did, both worth not repeating.
+  **It passed while proving nothing**: passing `-aom-params` alongside
+  libsvtav1 is an "Unrecognized option" error, so the fixture never generated,
+  the script printed "skipping", and two green tests sat there covering nothing.
+  It now distinguishes an environment gap (no encoder at all, or a GPU encoder
+  with no card) from a fault — if a *software* encoder is present and the
+  fixture still fails to build, that is a `FATAL_ERROR`. **And the encoder
+  parameters were wrong twice over** — `qp` alongside CRF mode is SVT-AV1's "bad
+  parameter" — which the louder failure surfaced at once. A test that cannot
+  fail is worse than no test, and this one briefly was.
+
+  What this does *not* settle is the appliance tier: no Pi hardware decodes AV1,
+  so an AV1 campus is dav1d in software, on the tier this project exists to keep
+  cheap. Until 1080p30 AV1 is measured on a bench Pi, the docks keep labelling
+  AV1 "experimental" and the relay's AV1 gate stays shut — where the blocker is
+  the destination rather than the container, per the entry below.
+
 - **HEVC reaches a streaming site now: the relay was refusing it for a
   constraint that had stopped being true.** The codec gate refused HEVC on any
   RTMP destination, on the stated grounds that "ffmpeg will happily mux HEVC

@@ -456,7 +456,11 @@ out of scope, and the relay cannot re-encode.</summary>
   through it. A PTP master must also exist on the network or nothing flows — the
   daemon slaves to a clock, it does not hand one out.
   See [BUGS.md entry 3](BUGS.md).
-- **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
+- **AV1 is carried end to end and now round-tripped by a test**, but it has not
+  carried an event, and no appliance tier decodes it in hardware — a Pi would be
+  software-decoding it, which is exactly the tier this project exists to keep
+  cheap. The encoder docks still label AV1 encoders experimental for that
+  reason.
 - **Seeking is accurate to about a second**, not to a frame.
 - **The relay sends HEVC to a streaming site only if that site speaks Enhanced
   RTMP.** YouTube documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, so an

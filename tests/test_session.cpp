@@ -7,7 +7,9 @@
 // network outage.
 #include "../src/core/session.h"
 #include "../src/core/null_transport.h"
+#include "../src/core/event_catalog.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -110,6 +112,53 @@ public:
         std::lock_guard<std::mutex> lk(mtx);
         auto it = objects.find(k);
         return it == objects.end() ? -1 : (int64_t)it->second.size();
+    }
+
+    // A listing honest enough to drive EventCatalog, which asks for keys one
+    // moment and for prefixes the next. A mock that ignored the delimiter would
+    // be more forgiving than S3 in the one place that matters: the catalogue's
+    // fallback scan finds events by their `events/{id}/` common prefixes, so a
+    // store that returned flat keys there would let a broken scan pass.
+    ListResult list(const std::string& prefix, const std::string& delimiter,
+                    const std::string& token, int max_keys) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        ListResult r;
+        if (fail_all) {
+            r.http_status = 403;
+            r.error = "AccessDenied (simulated)";
+            r.retryable = false;
+            return r;
+        }
+        // Ascending key order, as S3 lists, with the same delimiter grouping.
+        std::vector<std::string> keys, prefixes;
+        for (const auto& [key, _] : objects) {
+            if (key.compare(0, prefix.size(), prefix) != 0) continue;
+            if (!delimiter.empty()) {
+                const size_t at = key.find(delimiter, prefix.size());
+                if (at != std::string::npos) {
+                    std::string p = key.substr(0, at + delimiter.size());
+                    if (std::find(prefixes.begin(), prefixes.end(), p) == prefixes.end())
+                        prefixes.push_back(p);
+                    continue;
+                }
+            }
+            keys.push_back(key);
+        }
+        for (const auto& p : prefixes) r.common_prefixes.push_back(p);
+        const size_t start = token.empty() ? 0 : (size_t)std::stoul(token);
+        for (size_t i = start; i < keys.size(); ++i) {
+            if ((int)r.keys.size() >= max_keys) {
+                r.truncated = true;
+                r.next_continuation_token = std::to_string(i);
+                break;
+            }
+            ListEntry e; e.key = keys[i];
+            auto it = objects.find(keys[i]);
+            e.size = it == objects.end() ? 0 : (int64_t)it->second.size();
+            r.keys.push_back(e);
+        }
+        r.success = true; r.http_status = 200;
+        return r;
     }
 
     bool has(const std::string& k) {
@@ -394,6 +443,44 @@ int main() {
         Session ses2(cfg, store);
         CHECK(!ses2.check_resumable().resumable,
               "cleanly-ended event is not offered for resume");
+    }
+
+    std::printf("== 9b. An AV1 event is recorded, ended, and then listed ==\n");
+    {
+        // The report that started this: an AV1 event that played live and was
+        // then nowhere in the recordings list. Nothing in the listing path knows
+        // one codec from another, and this is the test that says so end to end
+        // — a real session, a real end() and the real catalogue over the same
+        // store, so a codec that did start deciding would fail here rather than
+        // in somebody's service.
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s9av1").string();
+        cfg.base_backoff_ms = 1; cfg.max_backoff_ms = 2; cfg.backoff_jitter = 0.0;
+        Session ses(cfg, store);
+
+        VideoInfo av1 = video;
+        av1.codec = "av1";
+        CHECK(ses.start_new(blob(0), av1, tracks), "an AV1 event goes live");
+        for (int i = 0; i < 3; ++i)
+            ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+        ses.end();
+
+        Manifest m = Manifest::from_json(
+            store.text("events/" + ses.event_id() + "/manifest.json"));
+        CHECK(m.video.codec == "av1", "the manifest says the event is AV1");
+        CHECK(m.status == "ended", "and that it has ended");
+
+        CatalogConfig cc; cc.room_id = "main-auditorium";
+        EventCatalog cat(cc, store);
+        CHECK(cat.refresh(), "the recordings list refreshes");
+        auto ev = cat.events();
+        CHECK(ev.size() == 1, "the AV1 event is in it");
+        CHECK(!ev.empty() && ev[0].state == EventState::Recording,
+              "as a recording — not live, not interrupted");
+        CHECK(!ev.empty() && ev[0].event_id == ses.event_id(),
+              "and it is the event that was just recorded");
+        CHECK(cat.skipped() == 0 && cat.last_error().empty(),
+              "with nothing skipped and nothing said against it");
     }
 
     std::printf("== 10. Local disk cap drops the oldest segment and warns the operator ==\n");

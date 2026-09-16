@@ -408,6 +408,27 @@ if(FFMPEG_FOUND)
                      -DCMAKE_CURRENT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_hevc_test.cmake)
 
+    # AV1, the codec this pipeline has always claimed to carry and had never
+    # once made to prove. `cmaf` and `cmaf_hevc` round-tripped the other two and
+    # nothing anywhere in the tests said "av1", which is exactly how a codec
+    # stays "carried but lightly exercised" — and how an operator finds out
+    # something is wrong only when it is a real service on the line.
+    add_test(NAME cmaf_av1
+             COMMAND ${CMAKE_COMMAND}
+                     -DTEST_EXE=$<TARGET_FILE:test_cmaf>
+                     -DCMAKE_CURRENT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_av1_test.cmake)
+    # Read the AV1 output back, as the H.264 one is read back. A muxer test that
+    # only watches its own exit code cannot tell a correct stream from a
+    # plausible one; this one decodes what the muxer wrote. It skips cleanly
+    # when the AV1 test skipped, because the decoder lives in the same ffmpeg as
+    # the encoder and one runner not having either should not read as a fault.
+    add_test(NAME cmaf_av1_decode
+             COMMAND $<TARGET_FILE:test_cmaf_decode>
+                     "${CMAKE_CURRENT_BINARY_DIR}/av1_out/init.mp4"
+                     "${CMAKE_CURRENT_BINARY_DIR}/av1_out/seg_000.m4s")
+    set_tests_properties(cmaf_av1_decode PROPERTIES DEPENDS cmaf_av1)
+
     # Round trip: decode the output the muxer test just produced. Generating
     # the fixture at test time keeps large media out of the repository while
     # still exercising encode -> decode on real bytes.

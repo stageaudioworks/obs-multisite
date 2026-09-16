@@ -1511,8 +1511,9 @@ than deleted.
   is format-agnostic and lands before the media format work. Resume-after-crash
   now also asks rather than deciding silently, when it matters — see §5.1.
 - **Phase 2 — Format, namespace & audio.** ✅ FFmpeg CMAF muxing (`init.mp4` +
-  `.m4s`), codec-agnostic wrapper (H.264 and HEVC both tested end to end; AV1
-  carried but less exercised), packed multi-channel production audio, the
+  `.m4s`), codec-agnostic wrapper (H.264, HEVC and AV1 all round-tripped end to
+  end under test; HEVC and AV1 still the less travelled of the three in the
+  field), packed multi-channel production audio, the
   `rooms/live.json` + `events/{ulid}` model, keyframe-aligned segments,
   prefix/age lifecycle, and generalized S3 endpoint configuration.
 - **Phase 3 — Timeslipping.** ✅ Decoder DVR: playback head vs live edge, deep local

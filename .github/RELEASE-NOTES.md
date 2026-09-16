@@ -975,7 +975,8 @@ Either of these settles it, and both are one command:
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past event is a proof of concept** — one at a time, started
   by hand, with no scheduling.
-- **AV1 is carried but lightly exercised**; seeking is accurate to about a
+- **AV1 is carried, and now round-tripped by a test, but has not carried an
+  event**; seeking is accurate to about a
   second, not to a frame.
 - **The appliance is still missing DeckLink SDI output** and Pi 4
   hardware-decoder selection.

@@ -87,10 +87,12 @@ public:
 static void make_event(MemStore& s, const std::string& id, const std::string& room,
                        int64_t started_ms, const std::string& status,
                        int64_t updated_ms, bool with_index = true,
-                       const std::string& name = "") {
+                       const std::string& name = "",
+                       const std::string& vcodec = "h264") {
     EventInfo ev;
     ev.event_id = id; ev.room_id = room; ev.started_at_ms = started_ms;
     ev.name = name;
+    ev.video.codec = vcodec;
     s.objects[event_prefix_for(id) + "event.json"] = ev.to_json();
 
     if (with_index) {
@@ -103,6 +105,7 @@ static void make_event(MemStore& s, const std::string& id, const std::string& ro
     Manifest m;
     m.event_id = id; m.status = status;
     m.name = name;
+    m.video.codec = vcodec;
     m.started_at_ms = started_ms; m.updated_at_ms = updated_ms;
     m.latest_seq = 100; m.first_available_seq = 0;
     ManifestSegment seg;
@@ -179,6 +182,47 @@ int main() {
             CHECK(ev[1].event_id == "01UNNAMED" && ev[1].name.empty(),
                   "an unnamed event has an empty name (UI falls back to the time)");
         }
+    }
+
+    // ── The codec does not decide whether a recording lists ─────────────────
+    // An AV1 event played live and then never appeared in the list, which is
+    // what sent somebody looking in here. Nothing in this file knows one codec
+    // from another — the codec lives in the manifest and only the decoder cares
+    // — and the point of the case below is that it stays that way. If a codec
+    // ever does start deciding, this is where it will show up.
+    std::printf("An AV1 recording\n");
+    {
+        MemStore s;
+        make_event(s, "01AV1AAAAA", "main", NOW - 30 * MIN, "ended", NOW - 25 * MIN,
+                   true, "AV1 test service", "av1");
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        CHECK(cat.refresh(NOW), "the listing refreshes with an AV1 event in it");
+        auto ev = cat.events();
+        CHECK(ev.size() == 1, "an ended AV1 event is listed");
+        CHECK(!ev.empty() && ev[0].state == EventState::Recording,
+              "and classified as a recording, exactly as another codec would be");
+        CHECK(!ev.empty() && ev[0].name == "AV1 test service",
+              "with its name, from the manifest the encoder wrote");
+        CHECK(cat.skipped() == 0,
+              "nothing was quietly skipped for being a codec this build dislikes");
+        CHECK(cat.last_error().empty(),
+              "and nothing was reported as unplayable");
+    }
+    {
+        // The same event still on air: AV1 must not change which state wins
+        // either, or an AV1 room would never show as live.
+        MemStore s;
+        set_live_pointer(s, "main", "01AV1BBBBB", NOW - 1000);
+        make_event(s, "01AV1BBBBB", "main", NOW - 40 * MIN, "live", NOW - 1000,
+                   true, "AV1 on air", "av1");
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        cat.refresh(NOW);
+        auto ev = cat.events();
+        CHECK(ev.size() == 1 && ev[0].state == EventState::Live,
+              "a live AV1 event is still the live one");
+        CHECK(ev[0].is_live_pointer, "and is known to be the one the pointer names");
     }
 
     // ── A room with no live pointer at all ───────────────────────────────────

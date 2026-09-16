@@ -216,7 +216,7 @@ build on this machine is 30; with CMake and FFmpeg alone it is 24.
 | `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
 | `storage_manager` | encoder-side storage management: the listing and the per-event size tally are separable, a tally that fails is reported as unknown rather than as `0 B`, cancellation returns early and is not counted as a store failure, and a prefix that will not finish paging gives up with a reason |
 | `crypto` | SHA-256 and HMAC-SHA256 match the NIST and RFC 4231 vectors on whichever backend was compiled in — OpenSSL, Windows bcrypt or Apple CommonCrypto. Each CI platform runs its own, so all three are held to the same published answers and a signed request cannot differ by platform |
-| `cmaf`, `cmaf_hevc` | the muxer produces decodable fragments for H.264 and HEVC, with multi-track audio |
+| `cmaf`, `cmaf_hevc`, `cmaf_av1` | the muxer produces decodable fragments for H.264, HEVC and AV1, with multi-track audio. Each skips cleanly on a machine whose ffmpeg has no encoder for it — except when a *software* encoder is present and the fixture still fails, which is a fault rather than an environment gap and must not be able to pass as a skip |
 | `cmaf_decode` | the round trip: what the muxer wrote, the decoder plays back |
 | `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
 | `s3_cancel` | `cancel_pending()` actually aborts a stalled request quickly, rather than trusting that wiring curl's progress callback was enough |
