@@ -399,6 +399,10 @@ async function refreshEvents() {
 
     if (listing.loading && !listing.listed_once) note.textContent = 'Looking…';
     else if (listing.error) note.textContent = listing.error;
+    else if (listing.no_catalog) note.textContent =
+      'Recordings are listed from cloud storage, and none is set up on this '
+      + 'machine — an event sent over the LAN only cannot be listed here. '
+      + 'What is on air can still be watched.';
     else if (listing.fallback_scan) note.textContent =
       'These were found by scanning; older events may take a moment.';
     else if (listing.skipped) note.textContent =

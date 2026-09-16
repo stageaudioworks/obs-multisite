@@ -786,12 +786,18 @@ static bool complete_start(OutputCtx* ctx) {
 
         // Report the store-side verification of early uploads. A store that
         // returns success without persisting is otherwise invisible.
+        //
+        // "verified where it was sent" rather than "in bucket": with cloud
+        // delivery off the store is the LAN cache, and a log line claiming a
+        // bucket that never saw the bytes is how somebody concludes their event
+        // was archived when it is not.
         if (!st.verify_note.empty() && st.verify_note != ctx->last_verify_note) {
             ctx->last_verify_note = st.verify_note;
             if (st.verify_failures > 0)
                 mlog_error("UPLOAD VERIFICATION FAILED: %s", st.verify_note.c_str());
             else
-                mlog_info("upload verified in bucket: %s", st.verify_note.c_str());
+                mlog_info("upload verified where it was sent: %s",
+                          st.verify_note.c_str());
         }
         // Always warn when the link degrades — that's the thing an operator
         // must know about mid-event.

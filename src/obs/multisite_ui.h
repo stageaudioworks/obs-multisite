@@ -77,6 +77,11 @@ struct EventListing {
     bool        fallback_scan = false; // events predating the room index
     int         skipped = 0;
     std::string error;
+    // There is no bucket to list, so this list can never fill: no cloud storage
+    // is configured for this machine. Distinct from "no recordings" — an event
+    // published over the LAN only is on the machine that recorded it and can
+    // never appear here, and the dock is where somebody finds that out.
+    bool        no_catalog = false;
 };
 
 struct DecoderControls {

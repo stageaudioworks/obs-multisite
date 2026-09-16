@@ -501,6 +501,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                       {"listed_once", listing.listed_once},
                       {"fallback_scan", listing.fallback_scan},
                       {"skipped", listing.skipped},
+                      {"no_catalog", listing.no_catalog},
                       {"error", listing.error}}.dump());
     });
 

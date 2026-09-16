@@ -69,6 +69,11 @@ struct EventListing {
     bool        fallback_scan = false;
     int         skipped = 0;
     std::string error;
+    // No cloud storage is configured, so there is no catalogue and this list can
+    // never fill — an event published over the LAN only lives on the machine
+    // that recorded it. The page says so rather than showing an empty list that
+    // reads as "no recordings exist".
+    bool        no_catalog = false;
 };
 
 // Everything the web UI draws, captured in one consistent read. The browser

@@ -872,6 +872,12 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
         note = QString::fromStdString(listing.error);
     } else if (!listing.listed_once) {
         note = tr_("Dock.EventsLoading");
+    } else if (listing.no_catalog) {
+        // Nothing to list, and nothing here that could ever list it: recordings
+        // are built from a bucket. "No recordings found" would be a lie by
+        // omission — the operator turned cloud upload off and this is what it
+        // costs, so say the cost rather than an empty box.
+        note = tr_("Dock.EventsNoCloud");
     } else if (listing.events.empty()) {
         note = tr_("Dock.EventsNone");
     } else if (listing.fallback_scan) {

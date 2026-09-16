@@ -154,6 +154,52 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **An event recorded with cloud upload off cannot be listed — and now says so
+  rather than looking broken.** The report was an AV1 event that played live and
+  was then nowhere in the recordings list. It turned out to be neither AV1 nor
+  the listing being wrong: the encoder's own log had said it at go-live —
+
+  ```
+  20:13:48.104 [multisite] cloud delivery is disabled for this event —
+  publishing to the LAN cache only, nothing leaves this machine
+  ```
+
+  — so nothing was published and there was nothing to list. Playback worked
+  because the live pointer still named the event and the LAN object server
+  serves that event's objects, which is exactly the asymmetry that got reported:
+  play it fine, cannot see it in a list.
+
+  The list is built from the cloud transport and only from it
+  (`multisource_source.cpp`: `if (tx) { cat = make_shared<EventCatalog>(…) }`),
+  and that is right rather than lazy — the LAN side "only ever knows about
+  whichever one is live right now", so there is no history over there to
+  enumerate. What was wrong was the silence. With no catalogue nothing was ever
+  cached and `listed_once` stayed false, so the dock sat on "Looking for
+  recordings…" for ever and the appliance showed an empty list with no
+  explanation. A dead end that reads as a spinner is worse than one that reads
+  as a sentence.
+
+  Fixed by making the absence of a catalogue a fact the UIs can report:
+  `EventListing::no_catalog` in both layers, set by the source and by the
+  player, worded where the words live — `Dock.EventsNoCloud` in the dock, a
+  plain sentence in the appliance's page. Two strings at the point of the
+  decision grew the clause they were missing as well:
+  `Dock.CloudDisableConfirm` and `Dock.CloudOffSuffix` now say that an event
+  published this way will not appear in any recordings list, because that
+  dialog is the moment an operator chooses it. And the log line that used to
+  read "upload verified in bucket" now reads "upload verified where it was
+  sent", since with cloud off the store is the LAN cache — a line claiming a
+  bucket that never saw the bytes is how somebody concludes their event was
+  archived when it was not.
+
+  **Worth knowing, and deliberately not "fixed":** a LAN-only recording is not
+  durable. `SpoolQueue::begin_event` clears every `.seg` and `.meta` at the
+  start of the next event, and the LAN object server 404s any event id that is
+  not the current one, so the bucket remains the only archive. An event recorded
+  this way lives on the encoder's disk until the next broadcast starts. Making
+  the LAN side a place recordings live would mean building a listing it was
+  never meant to have; saying so is the honest version until somebody wants it.
+
 - **AV1 is now round-tripped rather than merely carried — and the report that
   started it was not AV1's fault.** An AV1 event played live and was then
   nowhere in the recordings list. Since the live path worked, the question was

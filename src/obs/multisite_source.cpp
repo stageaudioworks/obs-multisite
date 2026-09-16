@@ -1193,6 +1193,26 @@ static void poll_loop(SourceCtx* ctx) {
                           cat->used_fallback_scan()
                               ? " (scanned events/: these predate the room index)"
                               : "");
+            } else {
+                // No cloud transport, so there is no catalogue and there never
+                // will be one: recordings are listed out of a bucket, and the
+                // LAN side only ever knows about the event that is on air. Left
+                // unsaid this is an empty box sitting on "Looking for
+                // recordings…" for ever, which reads as a broken list rather
+                // than as "there is nothing here that could list anything".
+                //
+                // An event published with cloud delivery off cannot appear in
+                // any recordings list anywhere — not on a satellite, not on the
+                // machine that recorded it — and the operator is the one who
+                // turned that off, so this is where they find out.
+                EventListing listing;
+                listing.listed_once = true;
+                listing.no_catalog  = true;
+                {
+                    std::lock_guard<std::mutex> lk(ctx->events_mtx);
+                    ctx->events_cache = std::move(listing);
+                }
+                ctx->events_listed_once = true;
             }
         }
 

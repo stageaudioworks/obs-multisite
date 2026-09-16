@@ -1755,6 +1755,16 @@ void Player::event_listing(EventListing& out) const {
         out = m_events;
     }
     out.loading = m_events_refreshing.load();
+    // No catalogue means no cloud storage configured, which means this list can
+    // never fill: recordings are enumerated out of a bucket, and the LAN side
+    // only ever knows the event that is on air. Recording an event with cloud
+    // delivery off is a legitimate thing to do — it is how a church keeps an
+    // event on its own network — so the page has to say that this is why the
+    // list is empty rather than letting it read as "nothing was recorded".
+    if (!m_catalog) {
+        out.listed_once = true;
+        out.no_catalog  = true;
+    }
 }
 
 // `show_tile` returns the region that is going to the output rather than the
