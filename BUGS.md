@@ -304,9 +304,11 @@ which is point 2 above.
   = **0x90** — `isExVideoHeader=1`, `VideoFrameType.KeyFrame`,
   `VideoPacketType.SequenceStart` — then the FourCC `hvc1`, where the same run
   with H.264 emits the legacy `0x17`. ffprobe reads the result back as hevc +
-  aac. **Not verified: the last mile.** Nothing has been pushed from a real
-  encoder to a real destination, which is the caveat the docs now carry in place
-  of the old claim.
+  aac. **What was then unverified was the last mile — and AV1, on the same code
+  path, has since settled it**: an AV1 event went from a real encoder through the
+  relay to YouTube and played there for over ten minutes without a fault. HEVC
+  has not been through that test itself, so its own last mile stays written down
+  as unproven.
 
   Also corrected, because the old fact was load-bearing in nine other places:
   `PROJECT-SCOPE.md` §8.2 twice, §9's capability table, the Phase 7 text, and

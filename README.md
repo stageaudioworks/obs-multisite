@@ -289,8 +289,10 @@ event either.
 The public simulcast relay is built and is the first piece of Phase 7. It has
 pushed live streams to YouTube, sends over SRT as well as RTMP, and survives
 having its encoder killed mid-stream — but it has not yet been through a full
-event. HEVC can now go out over SRT; that path is verified against ffmpeg
-but has not yet carried real encoder output.
+event. HEVC can go out over SRT; that path is verified against ffmpeg but has not
+yet carried real encoder output. AV1 *has* now carried real encoder output: an
+AV1 event went through the relay to YouTube and played there for over ten
+minutes, which is the first of the three to make that last mile.
 
 **What works**
 
@@ -463,17 +465,22 @@ out of scope, and the relay cannot re-encode.</summary>
   reason.
 - **Seeking is accurate to about a second**, not to a frame.
 - **AV1 reaches a streaming site only where that site documents AV1 ingest.**
-  YouTube does and nothing else obviously does, so the relay warns above every
-  destination before you start rather than refusing the event outright — and
-  reports it honestly if the far end drops the stream. AV1 over SRT is refused
-  and always will be until ffmpeg can put it in MPEG-TS, which it cannot today.
-  HEVC, which used to carry the same caveat, now reaches anywhere that speaks
-  Enhanced RTMP, unchanged.
-- **No HEVC event has yet gone out from a real encoder to a real
-  destination.** The remux is verified at the byte level — over MPEG-TS it
-  reads back as HEVC, and over Enhanced RTMP the tag comes out with the
-  extended header set and a FourCC of `hvc1` — but the last mile has not been
-  rehearsed. Do that before relying on it.
+  **YouTube does, and that is now measured rather than read:** an AV1 event went
+  through the relay and played there for over ten minutes without a fault. It
+  settles YouTube and nothing else, so the relay still warns above every
+  destination before you start, and reports it honestly if the far end drops the
+  stream. AV1 over SRT is refused and always will be until ffmpeg can put it in
+  MPEG-TS, which it cannot today. HEVC, which used to carry the same caveat, now
+  reaches anywhere that speaks Enhanced RTMP, unchanged — but its own last mile
+  is still unrehearsed.
+- **AV1 aside, no codec has carried real encoder output to a real
+  destination through the relay.** AV1 now has — YouTube, ten minutes, no fault
+  — and HEVC has not, even though its remux is verified at the byte level in the
+  same way (over MPEG-TS it reads back as HEVC; over Enhanced RTMP the tag comes
+  out with the extended header set and a FourCC of `hvc1`). The two share a code
+  path, so the AV1 result is encouraging for HEVC rather than proof of it:
+  rehearse before relying on it. H.264, the default, is the codec that has
+  carried events to YouTube for real.
 - **SRT in listener mode needs a port opened**, and nothing is shipped to help.
   Publish it on the container and open it on the firewall yourself; unlike the
   web interface there is no proxy in front of it.

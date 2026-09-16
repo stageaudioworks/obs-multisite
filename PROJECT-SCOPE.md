@@ -1422,7 +1422,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
 | Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 and HEVC over either protocol — HEVC to RTMP needs a destination speaking Enhanced RTMP — and neither has yet been carried from real encoder output (§8.2) |
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
-| HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination (§8.2) |
+| HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination. AV1, on the same code path, has now been carried to YouTube (§8.2) |
 | Download a finished event as an MP4, all audio tracks | built (§8.2) |
 | Replay a finished event to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
@@ -1562,7 +1562,10 @@ than deleted.
   not yet carried an event. HEVC goes out over both protocols now — over SRT
   as MPEG-TS, over RTMP as Enhanced RTMP, which this container's ffmpeg could
   not write until it moved off Debian bookworm's 5.1. Both remuxes are
-  verified; neither has yet carried real encoder output to a real destination.
+  verified, and AV1's — the same code path — has carried real encoder output
+  through the relay to YouTube and played there for over ten minutes. HEVC's
+  has not been through that, and the shared code path makes the AV1 result
+  encouraging rather than conclusive.
   Not started: re-encoding, web/mobile simulcast
   served from the bucket, scheduling and auto-go-live, redundancy, and local
   insertion.

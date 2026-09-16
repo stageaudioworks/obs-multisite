@@ -32,17 +32,19 @@
 // writes the extended tag, and the tag itself is verified at the byte level —
 // see the note on the codec gate in stream_plan.cpp.
 //
-// AV1 is still refused on both protocols, and now for narrower and quite
-// different reasons on each. Over RTMP ffmpeg carries it — FLV since 6.1,
-// Enhanced RTMP, FourCC av01, verified at the byte level like HEVC's — so there
-// the unknown is the destination: YouTube documents AV1 ingest, nobody else
-// obviously does. Over MPEG-TS ffmpeg does not carry it at all: no AV1 stream
-// type, so it goes out as private data and the demuxer reads it back as opaque
-// bytes. There is an AOMedia mapping for AV1-in-MPEG-2-TS; ffmpeg implements it
-// in neither direction. So AV1 over SRT would mean carrying a patch to ffmpeg
-// and finding a receiving end that understands the result, which is a different
-// size of job from this one — and turning RTMP on should still follow a real
-// push to a real destination rather than a reading of somebody's documentation.
+// AV1 is allowed to a streaming site and refused over SRT, for quite different
+// reasons. Over RTMP ffmpeg carries it — FLV since 6.1, Enhanced RTMP, FourCC
+// av01, verified at the byte level like HEVC's — so the question there is what
+// the destination takes: YouTube documents AV1 ingest and nobody else obviously
+// does. **That is measured now, not read**: an AV1 event has gone from a real
+// encoder through this relay to YouTube and played there for over ten minutes
+// without a fault. YouTube is settled; nowhere else is. Over MPEG-TS ffmpeg does
+// not carry AV1 at all: no AV1 stream type, so it goes out as private data and
+// the demuxer reads it back as opaque bytes. There is an AOMedia mapping for
+// AV1-in-MPEG-2-TS; ffmpeg implements it in neither direction. So AV1 over SRT
+// would mean carrying a patch to ffmpeg and finding a receiving end that
+// understands the result — a different size of job, for a path whose only known
+// destination is reachable over RTMP anyway.
 //
 #include "destination.h"
 #include "model.h"

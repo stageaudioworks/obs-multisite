@@ -207,8 +207,10 @@ StreamPlan plan_stream(const Manifest& manifest,
     // the FourCC "hvc1", which is the value E-RTMP defines for HEVC. The same
     // run with H.264 produces byte 0x17: the legacy tag, codec 7, which is
     // what makes the difference between the two visible rather than assumed.
-    // What is NOT yet verified is a real push to a real destination — see the
-    // note in stream_plan.h.
+    // That is now measured rather than assumed: an AV1 event has gone from a
+    // real encoder through this relay to YouTube and played there for over ten
+    // minutes without a fault. It settles YouTube and nothing else — Facebook
+    // and the rest are still the destination question the caveat describes.
     //
     // AV1 is refused over SRT and allowed over RTMP. The two halves have
     // different reasons and only one of them is ours to decide.

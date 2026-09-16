@@ -52,6 +52,9 @@ main site delays the public stream rather than breaking it.
   far end. SRT cannot carry it at all, and that half is not a policy: ffmpeg has
   no AV1 stream type in MPEG-TS, so there is nothing to send. Send H.264 or HEVC
   if a destination refuses it.
+  **Measured rather than assumed:** an AV1 event has been pushed through this to
+  YouTube and played there for over ten minutes without a fault. That settles
+  YouTube; it settles nothing about anywhere else.
 - **Split up packed multi-channel audio.** If the main site sends its sound as
   one multi-channel track with the mix, the microphones and the click inside
   it, the relay refuses rather than guessing which channels are the programme.
@@ -102,14 +105,15 @@ without being counted as a failure; it keeps up with the event while it
 waits, so whoever attaches gets what is happening now rather than everything
 they missed.
 
-**On HEVC:** it goes out over both protocols now. Over MPEG-TS that was always
-true; over RTMP it travels as **Enhanced RTMP** — an extended video tag
-carrying the codec's FourCC — which ffmpeg has written since 6.1 and which
-YouTube takes (its encoder settings list H.264, H.265 and AV1 for RTMP/RTMPS,
-and recommend H.265 over RTMP(S) for HDR). The remux is verified at the byte
-level: the tag comes out with the extended header set and a FourCC of `hvc1`,
-and reads back as HEVC. What is *not* proven is the last mile — no event has
-been carried from a real HEVC encoder to a real destination through this. The
+**On HEVC:** it goes out over both protocols. Over MPEG-TS that was always true;
+over RTMP it travels as **Enhanced RTMP** — an extended video tag carrying the
+codec's FourCC — which ffmpeg has written since 6.1 and which YouTube takes (its
+encoder settings list H.264, H.265 and AV1 for RTMP/RTMPS, and recommend H.265
+over RTMP(S) for HDR). The remux is verified at the byte level: the tag comes out
+with the extended header set and a FourCC of `hvc1`, and reads back as HEVC.
+What is still unproven is *HEVC's* last mile — the same path has carried real AV1
+from an encoder to YouTube without a fault (see the AV1 note above), but no HEVC
+event has been through it yet. The
 transport is; that is not. Rehearse it before you rely on it.
 
 One caveat worth knowing before it surprises you: a destination that has never
