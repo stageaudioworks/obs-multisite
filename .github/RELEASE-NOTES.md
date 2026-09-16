@@ -31,6 +31,124 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.20-alpha
+
+**If you stream to YouTube or Facebook, this is the release that gives you two
+more codecs.** Choosing HEVC for the campuses used to cost a church its public
+stream outright, and AV1 was refused on both kinds of destination — on the
+grounds that RTMP means FLV and FLV means H.264. That was true when it was
+written, and it had stopped being true some time before anyone noticed. Both go
+out now, unchanged and with nothing re-encoded, from the same single upload.
+
+**Re-pull the relay container to get it.** The image moved to a newer Debian
+because of one thing: the ffmpeg in it could not write the format a streaming
+site needs, and the newer one can. `:v0.1.20-alpha` is the first version tag that
+can send HEVC or AV1 to a streaming site — the older tags are images from before
+that change, and will refuse.
+
+The rest of this release is mostly things that were quietly wrong: a recordings
+list that could sit on "Looking for recordings…" for ever, event names that never
+reached the relay, a status row labelled **Bucket** that was showing a URL, and a
+README that read like a wall of text.
+
+### HEVC and AV1 both reach a streaming site now
+
+The relay refused both, and the reasoning had gone stale in a way worth
+describing, because it is the kind of mistake that is invisible from inside: it
+was measured once, correctly, and never measured again. What a destination will
+take has since changed — **Enhanced RTMP** carries HEVC and AV1 in the same
+container H.264 has always used, and YouTube documents H.264, H.265 and AV1 for
+RTMP/RTMPS ingest and recommends H.265 over RTMP(S) for HDR.
+
+- **HEVC** goes out over both protocols now, unchanged. Over SRT it always did;
+  over RTMP it travels as Enhanced RTMP.
+- **AV1** goes out over RTMP — and has been **measured** doing it: an AV1 event
+  was pushed from a real encoder through the relay to YouTube and played there
+  for over ten minutes without a fault. It is still refused over SRT, and that
+  half is ffmpeg's doing rather than a policy: MPEG-TS has no AV1 stream type at
+  all, so there is nothing to send.
+- **What is still unknown is the destination**, not the transport. YouTube
+  documents all three; nobody else obviously documents AV1. So where support
+  varies by destination, the page now says so **before** you start rather than
+  refusing the event outright: only a site that documents AV1 ingest will take it
+  over RTMP, and one that does not will drop the stream as soon as it starts.
+- **The refusal that sent you somewhere else has been fixed.** An AV1 event aimed
+  at an RTMP destination was told to "send this to an SRT destination instead" —
+  which cannot carry AV1 either. That advice was wrong for as long as it existed.
+
+### An event published with cloud upload off can never be listed, and now says so
+
+Recording with cloud upload disabled is a legitimate thing to do — it is how a
+site keeps an event inside its own network — but the consequences were not stated
+anywhere. Recordings are enumerated out of the bucket and only the bucket, so an
+event published over the LAN alone cannot appear in any recordings list, on any
+machine, including the one that recorded it. The list is empty rather than wrong,
+and the box used to sit on "Looking for recordings…" for ever, which reads as a
+broken list rather than as an answer.
+
+It now says which it is, and the two places where that decision is actually made
+say what it costs: the confirmation when you turn cloud upload off, and the dock
+while it is off. Worth knowing, and written down rather than "fixed": a LAN-only
+recording is **not durable** — the local spool is cleared when the next event
+starts, and the LAN server only ever serves the event that is on air. The bucket
+is still the only archive.
+
+### The relay shows what you called the service
+
+Its list of past events showed a date and a time and nothing else, because the
+name — which the encoder had already read back from the manifest — was dropped at
+the API boundary. It shows the name now, with the date and time underneath, and
+falls back to the date and time for events nobody named.
+
+### The status row labelled "Bucket" was showing a URL
+
+It has never shown the bucket: it shows where storage answers from and how fast
+the transfer is going. With a Custom endpoint, which is stored as a full URL, the
+fallback took the first segment of that URL, so the row could read
+`https://minio` — and because a long value in that column sets the width of the
+whole dock, it could push the dock wider than the screen. The row is now labelled
+**Storage**, the scheme and path are stripped before anything is shown, and every
+status value is elided to a sensible width with the whole value in its tooltip.
+
+### It now says where it came from
+
+All four interfaces — the two OBS docks, the plugin's own phone pages, the campus
+player and the relay — carry the project's name, a link to the manual and
+downloads, and the Stage Audio Works mark. Deliberately served from each page's
+own directory rather than linked from the website: a campus box often has no way
+out to the internet, and a logo that only loads online would be missing exactly
+where it is most useful.
+
+### Also
+
+- **AV1 is round-tripped by the tests for the first time.** It was the codec this
+  pipeline had always claimed to carry and had never once decoded in a test,
+  which is the difference between a codec that happens to work and one that is
+  supported. AV1 muxing and decoding are covered end to end now, along with the
+  recordings list and a real session's ending.
+- **A data race in the uploader's "verified" note**, found by the sanitizer job
+  on a commit that touched nothing but documentation. That note is logged in the
+  dock during the first uploads of every event; it was being read under a lock
+  the uploader never took.
+- **One content-type table.** The plugin kept a smaller second copy of it that had
+  never learned `.svg`, so the new mark would have been served as an anonymous
+  blob — which a browser is entitled to refuse to draw, silently.
+- **The website has a "Next door" section.** Teaching across sites is the case
+  named, because it uses the one thing a live stream cannot do — a facilitator
+  holding the feed to run a discussion and resuming exactly where it paused — and
+  the neighbouring cases get a sentence each.
+- **One service, several languages** is documented now, on the site and in the
+  operator guide: the desk's interpreter feeds travel as separate tracks and the
+  relay sends a different one to each destination, all from the single upload the
+  main site already made. The limits are on the same page as the answer — the
+  picture is identical everywhere because there is no transcoder, each language
+  needs its own stream key, and each costs the relay's uplink another copy of the
+  bitrate.
+- **The README leads with what the project is** rather than five paragraphs of
+  prose, and one piece of the record has been corrected: tiles were built, tested
+  and released in v0.1.15-alpha while the roadmap still said Phase 10 had not been
+  started.
+
 ## What's new in v0.1.19-alpha
 
 **If you are running v0.1.18-alpha, update before your next service.** That
@@ -976,8 +1094,10 @@ Either of these settles it, and both are one command:
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past event is a proof of concept** — one at a time, started
   by hand, with no scheduling.
-- **AV1 is carried, and now round-tripped by a test, but has not carried an
-  event**; seeking is accurate to about a
+- **AV1 is carried, round-tripped by a test, and has now carried a real event** —
+  to YouTube, through the relay. What is still unmeasured is the campus tier: no
+  Pi decodes AV1 in hardware, so an appliance would be decoding it in software.
+  Seeking is accurate to about a
   second, not to a frame.
 - **The appliance is still missing DeckLink SDI output** and Pi 4
   hardware-decoder selection.
