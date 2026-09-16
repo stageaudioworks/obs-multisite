@@ -72,7 +72,13 @@ foreach(cand ${AV1_CANDIDATES})
         set(PARAMS "")
     endif()
 
-    if("${cand}" IN_LIST AV1_SOFTWARE)
+    # `IN_LIST` would be tidier and is deliberately not used: it needs policy
+    # CMP0057 set to NEW, and a script run with `cmake -P` does not inherit the
+    # project's policy version. This passed on a CMake 4 machine and failed on
+    # the CI runner's 3.x with "Unknown arguments specified" — list(FIND) has no
+    # such dependency on how the script is run.
+    list(FIND AV1_SOFTWARE "${cand}" _soft_idx)
+    if(_soft_idx GREATER -1)
         list(APPEND SOFTWARE_TRIED "${cand}")
     endif()
 
