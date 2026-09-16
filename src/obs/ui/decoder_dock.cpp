@@ -620,6 +620,20 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
     root->addWidget(m_version);
 
+    // Where everything else about this lives, worded exactly as the encoder dock
+    // words it and for the same reason its status rows are: an operator who has
+    // seen one dock should not have to learn the other. Left in Qt's own link
+    // colour rather than the dim grey above, so it reads on either theme.
+    auto* brand = new QLabel(
+        QStringLiteral(
+            "obs-multisite &middot; "
+            "<a href=\"https://stageaudioworks.github.io/obs-multisite/\">"
+            "manual, downloads and source</a>"),
+        this);
+    brand->setOpenExternalLinks(true);
+    brand->setWordWrap(true);
+    root->addWidget(brand);
+
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &DecoderDock::refresh);
     m_timer->start(500);

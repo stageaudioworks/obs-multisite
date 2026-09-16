@@ -181,6 +181,24 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
     root->addWidget(m_version);
 
+    // Where everything else about this lives. Deliberately not styled the dim
+    // grey above: dim grey is right for a version number nobody is meant to
+    // click and wrong for the one thing on this dock that is. Left in Qt's own
+    // link colour so it reads on a light theme and a dark one, which is the
+    // problem that styling everything by hand has caused here before.
+    //
+    // No logo: the mark is an SVG and the docks do not link QtSvg, so a picture
+    // would mean a new dependency for a footer. The web pages carry it.
+    auto* brand = new QLabel(
+        QStringLiteral(
+            "obs-multisite &middot; "
+            "<a href=\"https://stageaudioworks.github.io/obs-multisite/\">"
+            "manual, downloads and source</a>"),
+        this);
+    brand->setOpenExternalLinks(true);
+    brand->setWordWrap(true);
+    root->addWidget(brand);
+
     // ── Settings dialog ──────────────────────────────────────────────────────
     m_settings = new QDialog(this);
     m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));

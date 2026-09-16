@@ -255,6 +255,27 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 .muted, .hint { color: var(--muted); font-size: 0.85rem; }
 .hint { margin: 6px 0 0; }
 
+/* Who made this, and where its documentation is. Deliberately quiet: an
+   operator mid-event is not reading the footer, and it must not compete with
+   the state banner at the top of the same screen. */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px;
+  padding: 12px 0 calc(18px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.foot a { color: inherit; }
+.foot .brandline { display: flex; align-items: center; gap: 10px; min-width: 0;
+  flex-wrap: wrap; }
+.foot .saw { display: flex; align-items: center; opacity: 0.75; }
+.foot .saw:hover { opacity: 1; }
+.foot .saw img { display: block; width: auto; }
+
 input, select {
   font: inherit;
   color: var(--text);

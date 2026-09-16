@@ -237,6 +237,29 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 }
 .row label { color: var(--muted); }
 .muted, .hint { color: var(--muted); font-size: 0.85rem; }
+
+/* Who made this, and where its documentation is. Deliberately quiet, and
+   deliberately an image served from this plugin's own data directory: these
+   pages are read on a phone in a church, sometimes on a network with no way out
+   to the internet, and a logo that only loads from a CDN would be missing
+   exactly where it is most useful. */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px;
+  padding: 12px 0 calc(18px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.foot a { color: inherit; }
+.foot .brandline { display: flex; align-items: center; gap: 10px; min-width: 0;
+  flex-wrap: wrap; }
+.foot .saw { display: flex; align-items: center; opacity: 0.75; }
+.foot .saw:hover { opacity: 1; }
+.foot .saw img { display: block; width: auto; }
 .hint { margin: 6px 0 0; }
 
 input, select {

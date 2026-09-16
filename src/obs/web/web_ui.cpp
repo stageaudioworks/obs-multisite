@@ -228,12 +228,19 @@ void start_web_ui() {
         route_file(*server, "/encoder/",           "web/encoder/index.html");
         route_file(*server, "/encoder/app.js",     "web/encoder/app.js");
         route_file(*server, "/encoder/style.css",  "web/shared/style.css");
+        // The mark in the page footer. Served from the plugin's own data
+        // directory rather than linked from the website, because these pages
+        // are reached over a church's network and often have no way out to the
+        // internet at all — a logo that only loads online is missing exactly
+        // where it is most useful.
+        route_file(*server, "/encoder/saw-logo.svg", "web/shared/saw-logo.svg");
         register_encoder_api(*server);
     }
     if (role != Role::EncoderOnly) {
         route_file(*server, "/decoder/",           "web/decoder/index.html");
         route_file(*server, "/decoder/app.js",     "web/decoder/app.js");
         route_file(*server, "/decoder/style.css",  "web/shared/style.css");
+        route_file(*server, "/decoder/saw-logo.svg", "web/shared/saw-logo.svg");
         register_decoder_api(*server);
     }
 

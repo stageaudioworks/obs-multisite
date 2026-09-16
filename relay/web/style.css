@@ -296,3 +296,15 @@ details.advanced[open] > summary { margin-bottom: 0.5rem; }
   color: var(--dim);
 }
 .foot a { color: inherit; }
+
+/* Where this came from, and who made it. The mark is the same one the project
+   website uses in its own footer, copied into this page's root rather than
+   linked: a relay on a church's own network is often the only thing on it that
+   can reach the internet, and a broken image is worse branding than none. */
+.foot .brandline { display: flex; align-items: center; gap: 10px; min-width: 0;
+  flex-wrap: wrap; }
+.foot .brandline .quiet { opacity: 0.72; }
+.foot .brandline .quiet:hover { opacity: 1; }
+.foot .saw { display: flex; align-items: center; opacity: 0.75; }
+.foot .saw:hover { opacity: 1; }
+.foot .saw img { display: block; width: auto; }
