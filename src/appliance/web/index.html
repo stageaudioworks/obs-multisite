@@ -407,6 +407,23 @@
     </details>
 
     <details class="settings-section">
+    <summary>Updates</summary>
+    <div class="field">
+      <label for="c-checkupdates">Newer builds</label>
+      <select id="c-checkupdates" name="check_updates">
+        <option value="true">Tell me when a newer build exists</option>
+        <option value="false">Do not check</option>
+      </select>
+      <p class="hint">
+        Asks GitHub once each time the player starts whether a newer release
+        exists, and shows a line under <strong>This box</strong> if one does.
+        Nothing is downloaded and nothing installs itself; choose Do not check
+        and no request is made at all.
+      </p>
+    </div>
+    </details>
+
+    <details class="settings-section">
     <summary>Network audio output</summary>
     <div class="field">
       <label for="c-aes67-on">Put the sound on the network</label>

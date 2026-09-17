@@ -88,6 +88,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "site_name",            site_name);
     take(j, "pinned_event_id",      pinned_event_id);
     take(j, "follow_next_event",    follow_next_event);
+    take(j, "check_updates",        check_updates);
 
     take(j, "prebuffer_segments",   prebuffer_segments);
     take(j, "start_buffer_seconds", start_buffer_seconds);
@@ -153,6 +154,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["site_name"]            = site_name;
     j["pinned_event_id"]      = pinned_event_id;
     j["follow_next_event"]    = follow_next_event;
+    j["check_updates"]        = check_updates;
 
     j["prebuffer_segments"]   = prebuffer_segments;
     j["start_buffer_seconds"] = start_buffer_seconds;

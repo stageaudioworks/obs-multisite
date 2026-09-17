@@ -5,6 +5,7 @@
 #include "sysinfo.h"
 #include "audio_plan.h"   // how wide the card is opened — one rule, one place
 #include "aes67.h"        // the daemon on this box, watched from aes67_loop()
+#include "update_check.h"
 #include "core/playout_clock.h"
 #include "core/tile_crop.h"
 
@@ -350,6 +351,16 @@ void Player::start() {
     m_aes67_thread   = std::thread([this] { aes67_loop(); });
 
     m_events_wanted = true;
+
+    // One request to GitHub, in the background, so the page can say a newer
+    // build exists. It is started here rather than in main() because this is
+    // where the rest of the player's long-running work begins, and it is a
+    // detached thread that fails quietly — an update check must never be the
+    // reason a box does not come up.
+    {
+        const Config cfg = config();
+        update_check_start(player_version(), cfg.check_updates);
+    }
 
     // An appliance that needs somebody to press Play after a power cut is not
     // an appliance.

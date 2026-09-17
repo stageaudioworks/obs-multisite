@@ -16,9 +16,12 @@ const $  = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 // Matches multisite::RoomState.
-const ROOM = { UNKNOWN: 0, OFFLINE: 1, LIVE: 2, ENDED: 3, INTERRUPTED: 4 };
-// Matches multisite::EventState.
+const ROOM = { UNKNOWN: 0, OFFLINE: 1, LIVE: 2, ENDED: 3, INTERRUPTED: 4 };// Matches multisite::EventState.
 const EVENT = { UNKNOWN: 0, LIVE: 1, RECORDING: 2, INTERRUPTED: 3 };
+
+// Where an operator is sent when a newer build exists: the releases page lists
+// what changed and carries the download, which is the whole answer.
+const RELEASES_URL = 'https://github.com/stageaudioworks/obs-multisite/releases';
 
 let status = null;
 let settings = null;
@@ -552,6 +555,7 @@ async function loadSettings() {
   set('#c-tile', String(settings.tile_index ?? -1));
   set('#c-hwdecode', String(settings.hardware_decode !== false));
   set('#c-follownext', String(settings.follow_next_event !== false));
+  set('#c-checkupdates', String(settings.check_updates !== false));
   set('#c-channels', settings.audio_channels);
   set('#c-audio-track', settings.audio_track);
   set('#c-audio-on', String(settings.audio_enabled));
@@ -687,6 +691,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
     tile_index: Number($('#c-tile').value),
     hardware_decode: $('#c-hwdecode').value === 'true',
     follow_next_event: $('#c-follownext').value === 'true',
+    check_updates: $('#c-checkupdates').value === 'true',
     idle_mode: $('#c-idle').value,
     idle_image_path: $('#c-idle-image').value.trim(),
     audio_enabled: $('#c-audio-on').value === 'true',
@@ -893,6 +898,14 @@ async function loadSystem() {
     if (n.ipv4) add('Address (' + n.name + ')', n.ipv4 + ':' + location.port);
   });
   add('Player version', s.version);
+  if (s.update_newer && s.update_latest) {
+    // Built here rather than through add(), which escapes its value: this one
+    // is a link, and the tag is the only part of it that came from outside.
+    rows.push(
+      '<dt>Update</dt><dd><a href="' + RELEASES_URL + '" target="_blank" ' +
+      'rel="noopener">' + escapeHtml(s.update_latest) + ' is available</a></dd>'
+    );
+  }
   if (s.model) add('Hardware', s.model);
   if (s.os_version) add('System', s.os_version);
   add('Clock', s.time.local_time + ' (' + s.time.timezone + ')');

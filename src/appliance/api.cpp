@@ -5,6 +5,7 @@
 #include "video_output.h"
 #include "audio_output.h"
 #include "aes67.h"   // the daemon on this box: its shapes, and talking to it
+#include "update_check.h"
 #include "preview.h"
 #include "../core/storage_providers.h"
 
@@ -153,6 +154,7 @@ json config_json(const Config& c) {
     j["site_name"]          = c.site_name;
     j["pinned_event_id"]    = c.pinned_event_id;
     j["follow_next_event"]  = c.follow_next_event;
+    j["check_updates"]      = c.check_updates;
     j["prebuffer_segments"] = c.prebuffer_segments;
     j["start_buffer_seconds"] = c.start_buffer_seconds;
     j["poll_interval_ms"]   = c.poll_interval_ms;
@@ -300,6 +302,7 @@ Config apply_edit(Config c, const json& j) {
     take(j, "cache_dir",            c.cache_dir);
     take(j, "hardware_decode",      c.hardware_decode);
     take(j, "follow_next_event",    c.follow_next_event);
+    take(j, "check_updates",        c.check_updates);
 
     take(j, "drm_card",   c.drm_card);
     take(j, "connector",  c.connector);
@@ -643,9 +646,17 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                                 {"mac", n.mac}, {"up", n.up},
                                 {"wireless", n.wireless}});
 
+        const UpdateInfo upd = update_check_info();
+
         res.json(json{
             {"hostname", hostname()},
             {"version", player_version()},
+            // Whether a newer release exists, when the once-per-run check got
+            // an answer. `update_checked` is false when it could not ask, which
+            // the page shows as nothing at all.
+            {"update_checked", upd.checked},
+            {"update_newer", upd.newer},
+            {"update_latest", upd.latest},
             {"model", sys.model},
             {"os_version", sys.os_version},
             {"kernel", sys.kernel},

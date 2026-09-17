@@ -569,6 +569,9 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         # switching it. Its shapes live in aes67.h and are tested separately —
         # this is only the part that talks to the daemon.
         src/appliance/aes67.cpp
+        # One request to the GitHub releases API per run, so a box left on a
+        # shelf tells somebody a newer build exists. Notification only.
+        src/appliance/update_check.cpp
         src/appliance/preview.cpp
         src/appliance/splash.cpp
         src/appliance/outputs.cpp)

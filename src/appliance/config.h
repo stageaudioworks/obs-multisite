@@ -71,6 +71,9 @@ struct Config {
     // presses a button is not doing its job. Off is for a venue that wants to
     // hold a recording deliberately (the web page still offers Follow live).
     bool follow_next_event = true;
+    // Ask GitHub once per run whether a newer build exists, and say so on the
+    // page. Notification only; off makes no request at all.
+    bool check_updates = true;
 
     // ── Receive tuning (see DecoderConfig for what each one buys) ────────────
     int prebuffer_segments   = 2;
