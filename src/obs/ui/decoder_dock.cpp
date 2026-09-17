@@ -1207,10 +1207,10 @@ void DecoderDock::refresh() {
     // something visible long before the network has finished answering it.
     // Every branch is a state of this decoder — nothing about the main site
     // appears here, which is the whole point of the split.
-    // Nothing is on air yet, so the only thing an operator can act on is how
-    // much of the buffer is actually down against the gate that Play is waiting
-    // for. Rounded to seconds: the raw double flickers, and nobody reads past
-    // the whole second.
+    // The start gate and how much of it is down. Only meaningful BEFORE Play is
+    // first pressed — the Filling buffer branch below is the only place these
+    // two belong. Rounded to seconds: the raw double flickers, and nobody reads
+    // past the whole second.
     const int bufGate = s.start_buffer_s;
     const int bufHave = (int)(s.buffered_span_s + 0.5);
 
@@ -1220,9 +1220,23 @@ void DecoderDock::refresh() {
     } else if (s.loading) {
         m_playback->setText(tr_("Dock.Loading"));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
-    } else if (s.seek_target_ms > 0 || s.buffering) {
-        m_playback->setText(bufGate > 0
-                                ? tr_("Dock.BufferingProgress").arg(bufHave).arg(bufGate)
+    } else if (s.seek_target_ms > 0) {
+        // Heading somewhere. The position line above names where, so this only
+        // has to say that the picture has not arrived yet — quoting a buffer
+        // figure here would be a figure about somewhere else.
+        m_playback->setText(tr_("Dock.Seeking"));
+        m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else if (s.buffering) {
+        // Playing, but nothing has reached the screen yet. The number that
+        // matters is how much is ready AHEAD of the playhead, since that is
+        // what decides when the picture resumes. This used to quote the
+        // longest cached run against the start gate and printed things like
+        // "84 s of 60 s": the gate only means anything before Play is first
+        // pressed (the branch further down), and the cached run is legitimately
+        // minutes long once buffering ahead is doing its job.
+        const int ahead = (int)(s.buffered_ahead_s + 0.5);
+        m_playback->setText(ahead > 0
+                                ? tr_("Dock.BufferingAhead").arg(ahead)
                                 : tr_("Dock.Buffering"));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else if (s.paused) {
