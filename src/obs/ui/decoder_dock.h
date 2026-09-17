@@ -22,6 +22,8 @@ class QLineEdit;
 class QSpinBox;
 class QDialog;
 class QListWidget;
+class QKeyEvent;
+class QMouseEvent;
 
 namespace multisite_obs {
 
@@ -66,6 +68,8 @@ protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
+    void mouseReleaseEvent(QMouseEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
     void leaveEvent(QEvent*) override;
 
 private:
@@ -79,6 +83,12 @@ private:
     std::vector<long long> m_markers;
     long long m_pending = -1;        // media time a jump is heading for
     int  m_hoverX = -1;
+    // Press-and-drag scrubbing. The seek is issued on RELEASE, not on every
+    // mouse-move: each seek tears the decoder down and re-anchors the clock, so
+    // seeking continuously while dragging would thrash it. While the button is
+    // down the bar shows where the release would land; one seek follows.
+    bool m_dragging = false;
+    int  m_scrubX = -1;
 };
 
 class DecoderDock : public QWidget {

@@ -23,6 +23,7 @@
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -92,6 +93,10 @@ static QString clock_time(long long ms) {
 TimelineBar::TimelineBar(QWidget* parent) : QWidget(parent) {
     setCursor(Qt::PointingHandCursor);
     setMouseTracking(true);          // needed for the hover readout
+    // Arrow keys nudge, so the bar has to be able to hold focus. ClickFocus,
+    // not StrongFocus: taking Tab out of OBS's own order would be rude for a
+    // panel that is not part of a form.
+    setFocusPolicy(Qt::ClickFocus);
     setToolTip(tr_("Dock.TimelineHint"));
 }
 
@@ -248,19 +253,30 @@ void TimelineBar::paintEvent(QPaintEvent*) {
     p.setBrush(Qt::NoBrush);
     p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
 
-    // Where a jump is heading, until the picture gets there. Said in the
-    // position line ("Going to 10:42:06") AND drawn here: a click on the bar
-    // that leaves no mark on it is the one place an operator looks, and its
-    // absence reads as the click having been dropped. Same blue as that line,
-    // so the two are plainly one statement.
-    if (m_pending >= 0 && m_pending >= m_earliest && m_pending <= m_live) {
-        const int px = (int)(fraction(m_pending) * w);
-        p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), 2, Qt::DashLine));
-        p.drawLine(px, y - 6, px, y + h + 6);
+    // Where a jump is heading. While the mouse is down that is the finger's
+    // position, because the release will land there; otherwise it is the target
+    // the dock reports, which stays up until the picture actually arrives.
+    // Said in the position line as well ("Going to 10:42:06") AND drawn here: a
+    // click on the bar that leaves no mark on it is the one place an operator
+    // looks, and its absence reads as the click having been dropped. Same blue
+    // as that line, solid and thicker while dragging so the two cannot be
+    // confused.
+    int markX = -1;
+    bool dragging = false;
+    if (m_dragging && m_scrubX >= 0) {
+        markX = m_scrubX;
+        dragging = true;
+    } else if (m_pending >= 0 && m_pending >= m_earliest && m_pending <= m_live) {
+        markX = (int)(fraction(m_pending) * w);
+    }
+    if (markX >= 0) {
+        p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), dragging ? 3 : 2,
+                      dragging ? Qt::SolidLine : Qt::DashLine));
+        p.drawLine(markX, y - 6, markX, y + h + 6);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(0x3b, 0x82, 0xc4));
-        const QPoint tri[3] = { QPoint(px - 4, y - 13), QPoint(px + 4, y - 13),
-                                QPoint(px, y - 5) };
+        const QPoint tri[3] = { QPoint(markX - 4, y - 13), QPoint(markX + 4, y - 13),
+                                QPoint(markX, y - 5) };
         p.drawPolygon(tri, 3);
     }
 
@@ -284,16 +300,55 @@ void TimelineBar::paintEvent(QPaintEvent*) {
 }
 
 void TimelineBar::mousePressEvent(QMouseEvent* e) {
-    const long long t = timeAt(e->pos().x());
+    if (e->button() != Qt::LeftButton) return;
+    // Start a scrub. The seek itself happens on release: one seek per gesture,
+    // because every seek tears the decoder down and re-anchors the clock, and a
+    // drag can produce dozens of mouse-moves a second.
+    m_dragging = true;
+    m_scrubX   = e->pos().x();
+    update();
+}
+
+void TimelineBar::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() != Qt::LeftButton) return;
+    if (!m_dragging) return;
+    m_dragging = false;
+    const int x = e->pos().x();
+    m_scrubX = -1;
+    update();
+    // A plain click never moved, and lands here too — which is what makes a
+    // click and a drag the same gesture with the same result.
+    const long long t = timeAt(x);
     if (t > 0) emit seekRequested(t);
 }
 
 void TimelineBar::mouseMoveEvent(QMouseEvent* e) {
     m_hoverX = e->pos().x();
+    if (m_dragging) m_scrubX = m_hoverX;
     update();
 }
 
+void TimelineBar::keyPressEvent(QKeyEvent* e) {
+    // Nudging is for lining a moment up precisely when the mouse is too coarse
+    // — the dock's jog buttons are ±10 s and ±1 min, and this is the same
+    // arithmetic from wherever the playhead sits.
+    long long delta = 0;
+    switch (e->key()) {
+    case Qt::Key_Left:  delta = e->modifiers() & Qt::ShiftModifier ? -60000 : -10000; break;
+    case Qt::Key_Right: delta = e->modifiers() & Qt::ShiftModifier ?  60000 :  10000; break;
+    default: QWidget::keyPressEvent(e); return;
+    }
+    if (m_live <= m_earliest) return;
+    long long target = (m_head > 0 ? m_head : m_earliest) + delta;
+    if (target < m_earliest) target = m_earliest;
+    if (target > m_live)     target = m_live;
+    if (target > 0) emit seekRequested(target);
+}
+
 void TimelineBar::leaveEvent(QEvent*) {
+    // While the button is down Qt keeps sending move and release events here,
+    // so the drag survives the pointer leaving the widget; only the hover
+    // readout goes.
     m_hoverX = -1;
     update();
 }
