@@ -296,12 +296,14 @@ It builds from source, so give it a few minutes and let it finish.
   hook cannot reconstruct reliably. Rerun after an upgrade if the kernel moves.
 - **What is verified, and what is not.** On a bench Pi the module built, the
   daemon came up, the card appeared, the player opened it, and eight channels of
-  clean audio arrived. Not yet verified: that the picture and the sound stay
-  together across a two-hour service, and how accurate PTP becomes, since a Pi's
-  network interface does no hardware timestamping and the result is whatever the
-  software manages. Measure both at the receiver, on a real event — ten seconds
-  of test tone cannot settle either. The detail is in
-  [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
+  clean audio arrived. A multi-hour run has since carried picture and sound
+  together with no drift found, so lip sync is settled. Not yet verified: how
+  accurate PTP becomes at the far end, since a Pi's network interface does no
+  hardware timestamping and the result is whatever the software manages. Measure
+  it at the receiver, on a real event — ten seconds of test tone cannot settle
+  it. The Pi's own side of the comparison is now logged once a minute and shown
+  under **This box**, so a run leaves something to compare against. The detail is
+  in [BUGS.md entry 1](../BUGS.md#1-aes67-audio-proven-over-an-event-ptp-lock-accuracy-at-a-receiver-is-not).
 
 ### Controlling it from the player's own page
 

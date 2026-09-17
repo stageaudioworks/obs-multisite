@@ -450,15 +450,16 @@ out of scope, and the relay cannot re-encode.</summary>
   Multi-track audio needs none of it, since each track is already its own
   source. On the appliance the packed channels go out of HDMI in order, which
   is what an eight-channel de-embedder expects.
-- **AES67 audio on the appliance is installed but unproven over an event.**
-  Eight channels were received on a bench Pi, so the card, the daemon and the
-  player's plumbing do work together, and the stream is created by the install
-  and switched from **Settings → Network audio output**. What is not measured is
-  lip sync across a two-hour service and the PTP accuracy a Pi's network
-  interface can reach without hardware timestamping, and no event has been
-  through it. A PTP master must also exist on the network or nothing flows — the
-  daemon slaves to a clock, it does not hand one out.
-  See [BUGS.md entry 3](BUGS.md).
+- **AES67 audio on the appliance has run a multi-hour test; the PTP accuracy a
+  receiver sees is still unmeasured.** Eight channels were received on a bench
+  Pi, and a multi-hour run has since carried picture and sound together with no
+  drift found — so the card, the daemon and the player's plumbing work together,
+  and lip sync is no longer the open question. What is still open is how tightly
+  a Pi's network interface holds PTP without hardware timestamping, measured at a
+  receiving console over a service. The Pi's own half of that comparison is now
+  logged once a minute and shown on its page. A PTP master must also exist on the
+  network or nothing flows: the daemon slaves to a clock, it does not hand one
+  out. See [BUGS.md entry 1](BUGS.md).
 - **AV1 is carried end to end, round-tripped by a test, and has now carried a
   real event** — to YouTube, through the relay. The campus tier is the part still
   unmeasured: no Pi decodes AV1 in hardware, so an appliance would be
@@ -488,9 +489,9 @@ out of scope, and the relay cannot re-encode.</summary>
   web interface there is no proxy in front of it.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
-- **Replaying a past event is a proof of concept.** One at a time, started by
-  hand; two of the event's cues can be chosen as in and out points, so a repeat
-  can be an excerpt, but it cannot be scheduled or looped.
+- **Replaying a past event is built but cannot run itself.** One at a time,
+  started by hand; two of the event's cues can be chosen as in and out points, so
+  a repeat can be an excerpt, but it cannot be scheduled or looped.
 - **The relay speaks plain HTTP** and relies on something in front of it for
   TLS. It binds to localhost so that is a deliberate choice rather than an
   accident, but it does not terminate TLS itself.
@@ -505,11 +506,12 @@ out of scope, and the relay cannot re-encode.</summary>
   filtering.
 - **Installing the plugin is manual, and so is updating it.** Unzip, move files,
   restart OBS, and on macOS clear the quarantine flag (see
-  [OPERATOR.md](docs/OPERATOR.md)). Nothing tells an operator that a newer build
-  exists, and there is no OBS-level mechanism to add one — no update or upgrade
-  entry point exists in `libobs` or `obs-frontend-api`. This is Phase 11 in the
-  [Roadmap](#roadmap). Its prerequisite is done: the Windows build and the
-  install instructions now use the layout OBS recommends
+  [OPERATOR.md](docs/OPERATOR.md)). The plugin now *tells* an operator a newer
+  build exists — one check per start, switchable off — but nothing installs it:
+  `libobs` and `obs-frontend-api` offer no update or upgrade entry point, which
+  is why Phase 11 starts with a notification and leaves applying it undecided.
+  One prerequisite is done, at least: the Windows build and the install
+  instructions now use the layout OBS recommends
   (`C:\ProgramData\obs-studio\plugins\obs-multisite\`) rather than the one it
   has said will stop working.
 - **Not yet used for a real event.** A six-hour soak has been run (see

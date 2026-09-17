@@ -1481,7 +1481,7 @@ is the better answer for a given church, section 12 says so plainly.
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
 | HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination. AV1, on the same code path, has now been carried to YouTube (§8.2) |
 | Download a finished event as an MP4, all audio tracks | built (§8.2) |
-| Replay a finished event to a destination | proof of concept — one at a time, by hand; two cues may bound it as in/out points (§8.2) |
+| Replay a finished event to a destination | built — one at a time; two of the event's cues bound it as in and out points, so a replay is an excerpt rather than the whole recording (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
@@ -1494,7 +1494,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Fullscreen output assignment driven by the decoder plugin | built — each tile is a source with its own **Send to screen**, opening one of OBS's own fullscreen projectors; SDI is whatever OBS's DeckLink or AJA output already does, and several outputs from one appliance box is out of scope (§10 Phase 10) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
-| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
+| Knowing a newer build exists, and applying it without a manual reinstall | notification built — the plugin and the player each ask once per run and say so; whether an update applies itself is still undecided (§10 Phase 11) |
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
