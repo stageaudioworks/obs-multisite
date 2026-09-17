@@ -5,15 +5,18 @@ name: Site
 # change — a page edit, or a new release — so the site never advertises a
 # version that is no longer the latest.
 #
-# The `release` trigger below looks like it covers a new release, and it
-# would — except obs-plugin.yml cuts every release with the default
-# GITHUB_TOKEN, and GitHub deliberately does not chain workflow triggers from
-# that token (its own anti-recursion rule). So `release: published` fires for
-# a release made by hand and silently never fires for the ones CI makes,
-# which is every real one. The `workflow_run` trigger is the actual fix: it
-# watches "obs plugin build" (the release job's own name, from
-# obs-plugin.yml) finish, rather than watching for the release event that
-# job's own token can't raise.
+# The `release` trigger is deliberately NOT used, though it looks like it covers
+# a new release. Two reasons, either of which is enough. First, obs-plugin.yml
+# cuts every CI release with the default GITHUB_TOKEN, and GitHub deliberately
+# does not chain workflow triggers from that token (its anti-recursion rule), so
+# `release: published` silently never fires for the releases that matter. Second,
+# when it DOES fire — a release published by hand, with a real user token — it
+# can never deploy: the `github-pages` environment only permits the main branch,
+# so a run whose ref is a tag is rejected by the protection rule ("Tag ... is not
+# allowed to deploy to github-pages"). A red run that can never go green is
+# worse than no run. The `workflow_run` trigger is the actual mechanism: it
+# watches "obs plugin build" (the release job's own name, from obs-plugin.yml)
+# finish, on a main ref, which the environment does allow.
 on:
   push:
     branches: [main]
@@ -21,8 +24,6 @@ on:
       - 'site/**'
       - 'CMakeLists.txt'
       - '.github/workflows/site.yml'
-  release:
-    types: [published, released, edited, deleted]
   workflow_run:
     workflows: ["obs plugin build"]
     types: [completed]
