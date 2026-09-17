@@ -112,6 +112,10 @@ void TimelineBar::setPlayhead(long long ms) {
     if (m_head == ms) return;
     m_head = ms; update();
 }
+void TimelineBar::setPending(long long media_ms) {
+    if (m_pending == media_ms) return;
+    m_pending = media_ms; update();
+}
 void TimelineBar::setDownloaded(std::vector<std::pair<long long, long long>> spans) {
     if (m_downloaded == spans) return;
     m_downloaded = std::move(spans); update();
@@ -243,6 +247,22 @@ void TimelineBar::paintEvent(QPaintEvent*) {
     p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), 2));
     p.setBrush(Qt::NoBrush);
     p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
+
+    // Where a jump is heading, until the picture gets there. Said in the
+    // position line ("Going to 10:42:06") AND drawn here: a click on the bar
+    // that leaves no mark on it is the one place an operator looks, and its
+    // absence reads as the click having been dropped. Same blue as that line,
+    // so the two are plainly one statement.
+    if (m_pending >= 0 && m_pending >= m_earliest && m_pending <= m_live) {
+        const int px = (int)(fraction(m_pending) * w);
+        p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), 2, Qt::DashLine));
+        p.drawLine(px, y - 6, px, y + h + 6);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x3b, 0x82, 0xc4));
+        const QPoint tri[3] = { QPoint(px - 4, y - 13), QPoint(px + 4, y - 13),
+                                QPoint(px, y - 5) };
+        p.drawPolygon(tri, 3);
+    }
 
     // Hover: a following marker and the recorded time under the cursor, so the
     // operator knows what they are jogging to BEFORE they click.
@@ -1303,6 +1323,12 @@ void DecoderDock::refresh() {
         for (const auto& m : s.markers) mt.push_back(media(m.seq));
         m_timeline->setMarkers(std::move(mt));
     }
+    // Confirm the click on the bar itself, not only in the position line above
+    // it. The target is a wall time; the bar's axis is media time, and the two
+    // differ by the event's own start.
+    m_timeline->setPending((s.seek_target_ms > 0 && s.started_ms > 0)
+                               ? (long long)(s.seek_target_ms - s.started_ms)
+                               : -1);
 
     // Rebuild the marker list only when it changes, so the combo doesn't
     // reset while an operator is using it.

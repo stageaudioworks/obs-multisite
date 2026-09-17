@@ -2333,9 +2333,23 @@ void SourceCtx::seek(unsigned long long seq) {
                   "window)", seq);
         return;
     }
-    pause_started_ns = 0;
-    paused = false;
-    mlog_info("source: seeked to segment %llu", seq);
+    // A click on the timeline is a jump like any other, and has to be
+    // acknowledged like one.
+    //
+    // This used to move only the session's head and leave everything else to
+    // the poll loop, which notices a discontinuity on its NEXT pass — up to a
+    // whole poll interval (3 s by default) later. So a click appeared to do
+    // nothing at all: no provisional time in the dock, no movement, and then
+    // the picture jumped and played some seconds afterwards. Worse, the old
+    // decoder kept delivering frames from the position just left for that same
+    // window, which is the stale-frame fault the jog path was already fixed
+    // for. after_jump does exactly what a jog does — flush what is queued,
+    // release the decoder, re-anchor the clock, and set the position the dock
+    // shows as provisional — so the click is confirmed the moment it lands
+    // instead of being indistinguishable from a dropped one.
+    after_jump((long long)sess->playhead_wall_ms());
+    mlog_info("source: seeked to segment %llu (%.0fs behind live)", seq,
+              sess->behind_live_s());
 }
 
 // Property buttons delegate to the same methods the hotkeys use.

@@ -40,6 +40,10 @@ public:
 
     void setSpan(long long earliest_ms, long long live_ms);
     void setPlayhead(long long ms);
+    // Where a jump is heading, in media time, until the picture gets there —
+    // or -1 for none. A click that shows nothing on the bar it was made on
+    // reads as a dropped click; this is the bar's half of the acknowledgement.
+    void setPending(long long media_ms);
     void setDownloaded(std::vector<std::pair<long long, long long>> spans);
     void setMarkers(std::vector<long long> times_ms);
     // The axis is MEDIA time (segment-anchored), so the bar can only be drawn
@@ -73,6 +77,7 @@ private:
     QString   m_placeholder;
     std::vector<std::pair<long long, long long>> m_downloaded;
     std::vector<long long> m_markers;
+    long long m_pending = -1;        // media time a jump is heading for
     int  m_hoverX = -1;
 };
 
