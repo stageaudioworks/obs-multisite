@@ -85,7 +85,7 @@ Choosing a recording always pinned playback to it, so a rehearsal beginning in
 the room could not yank an operator out of it. Following the live feed and then
 sitting in the recording of it was the same commitment in practice but not in the
 code, so when `live.json` moved on to the next event, playback jumped. A finished
-event is now held exactly as if it had been chosen, and **Return to live** is how
+event is now held exactly as if it had been chosen, and **Back to live** is how
 you follow the room on. The Pi turns this off — an unattended box is there to
 relay whatever the room does next — and that is now a setting on its own page
 rather than a hard-coded choice.

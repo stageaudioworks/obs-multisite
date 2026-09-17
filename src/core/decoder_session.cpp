@@ -313,7 +313,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // jumped out of the recording the operator was part-way through. Hold it
     // exactly as if it had been pinned: live_elsewhere() then reports the new
     // event and the dock offers the switch instead of taking it. Done ONCE, at
-    // the moment of ending, so Return to live still follows the room afterwards.
+    // the moment of ending, so Back to live still follows the room afterwards.
     if (m_cfg.hold_finished_event && is_vod(m_room.load())) {
         if (!m_end_hold_done && m_pinned_event_id.empty() && !m_event_id.empty())
             m_pinned_event_id = m_event_id;

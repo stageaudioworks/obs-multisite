@@ -184,9 +184,10 @@
           <h3>Open the dock and go live</h3>
           <p>Open the <strong>Multisite Encoder</strong> dock (View → Docks) →
           <strong>Settings…</strong> Enter your bucket details, choose a video
-          encoder, and name your markers. Press <strong>Apply</strong> to
-          commit them &mdash; opening the settings mid-service and closing them
-          changes nothing.</p>
+          encoder, name the tracks, and give this machine a <strong>Site
+          name</strong> &mdash; it is what appears on the cues this box drops.
+          Press <strong>Apply</strong> to commit them &mdash; opening the
+          settings mid-service and closing them changes nothing.</p>
           <p>Press <strong>Go live</strong>. Watch the status readout: how much
           of the service has been sent, how much is waiting, and the
           <strong>Internet</strong> line (green / amber / red). That line is
@@ -241,10 +242,13 @@
           scene.</p>
         </li>
         <li class="step">
-          <h3>Load, buffer, play</h3>
-          <p>Press <strong>Load event</strong>, let the buffer fill, then
-          <strong>Play</strong> when ready. Use <strong>Lock</strong> during
-          the service so nothing gets clicked by accident.</p>
+          <h3>Follow, buffer, play</h3>
+          <p>Press <strong>Follow live</strong>, let the buffer fill, then
+          <strong>Play</strong> when ready. The status line counts the buffer up
+          against the gate (<em>Filling buffer &mdash; 23 s of 60 s</em>), so a
+          slow link reads as slow rather than as stalled. Use
+          <strong>Lock</strong> during the service so nothing gets clicked by
+          accident.</p>
           <p>The decoder holds playback until a whole minute of the event is
           buffered (set in <strong>Settings… → Start after this much is
           ready</strong>). The buffer fills first, then the picture starts
@@ -267,8 +271,9 @@
       <strong>Load recording</strong>. Playback stays on it &mdash; if a new
       event starts mid-watch, the dock offers the switch rather than taking
       it, since being pulled out of a recording you're part-way through is
-      worse than being told. <strong>Back to live</strong> returns to
-      following the room.</p>
+      worse than being told. The same goes for an event you were <em>following</em>
+      once it ends: the next one starting doesn't take the picture away either.
+      <strong>Back to live</strong> returns to following the room.</p>
       <p>Each satellite runs its own clock: <strong>hold</strong> the picture
       for a local welcome, <strong>resume</strong>, then <strong>catch up to
       now</strong> &mdash; or sit a set number of minutes behind live all
@@ -402,6 +407,12 @@
       offers both views: <em>what's going out</em> and <em>the whole
       feed</em>, each with its own fallback frame so switching between them
       never blanks the picture.</p>
+      <p>When an event ends, an unattended box picks up whatever the room does
+      next, which is what a satellite relaying a whole day should do. If this
+      screen is deliberately holding a recording, set <strong>When the event
+      ends</strong> to hold instead &mdash; the <strong>Follow whatever is
+      live</strong> button on the front page still takes it back to the room on
+      demand.</p>
     </section>
 
     <!-- ======================= PI: AUDIO ======================= -->
@@ -545,9 +556,11 @@
         settings that change what's on air.</li>
         <li><strong>This box → Network audio output.</strong> What's actually
         being sent, read back from the daemon rather than assumed: whether it's
-        running, whether the clock is locked and to which grandmaster, the
-        address and port on the wire, and the SDP it publishes &mdash; which
-        is what a console engineer will ask for.</li>
+        running, whether the clock is locked, to which grandmaster, and how
+        tightly &mdash; the lock's own jitter figure, which is the number to
+        compare against a receiving console's &mdash; the address and port on the
+        wire, and the SDP it publishes, which is what a console engineer will ask
+        for.</li>
       </ul>
       <div class="callout">
         <p><strong>The switch moves the sound.</strong> There's one output

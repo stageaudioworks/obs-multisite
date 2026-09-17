@@ -916,13 +916,13 @@ int main() {
               "the finished event is held exactly as if it had been pinned");
         CHECK(dec.live_elsewhere(), "and the operator is told something is live");
 
-        // Return to live is what follows the room again, and it is only then
+        // Back to live is what follows the room again, and it is only then
         // that the new event takes over — with a clean slate.
         enc2.end();
         dec.unpin();
         dec.poll(enc2.clock_ms);
         CHECK(dec.event_id() == "01EVENTNEXTNEXTNEXTNEXTNE",
-              "Return to live follows the room to the new event");
+              "Back to live follows the room to the new event");
         CHECK(!dec.was_live_this_session(),
               "a different event starts with a clean slate");
     }

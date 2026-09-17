@@ -602,7 +602,7 @@ being told about it.
 The same applies to the event being followed when it *finishes*: watching it
 live and then sitting in the recording of it is the same commitment in practice
 as having chosen it, so the next event starting does not take the picture away
-either — the operator presses **Return to live** to move on. (The Raspberry Pi
+either — the operator presses **Back to live** to move on. (The Raspberry Pi
 appliance turns this off, because an unattended box is there to relay whatever
 the room does next; see `DecoderConfig::hold_finished_event`.)
 
@@ -1362,7 +1362,10 @@ already uses for its own cache, fed via three new `Session` hooks
 `on_confirmed()` and `publish_manifest_locked()` already have the relevant
 bytes or JSON in hand. `Session` itself stays completely unaware that LAN
 delivery exists — the hooks cost nothing when unset, and it never holds a
-reference to the class that uses them.
+reference to the class that uses them. The window's directory is the operator's
+**Cache folder** with `lan_cache` beneath it, or the plugin's own config when
+that is left blank, so the outgoing queue and the LAN copies sit in one place an
+operator can find (and clear).
 
 **Shape, as built.** The encoder's HTTP server (`src/core/http_server.h`)
 gained `route_prefix()` — a "starts with", not "equals", route, matched

@@ -184,6 +184,12 @@ transport controls during an event.
   deliberate acts the idle screen is for, and both still show it. On
   `idle_mode: "hold"` with nothing ever decoded there is no frame to hold, so
   the identity screen comes up rather than a blank nobody can explain.
+- **It follows the room on to the next event.** When the event it is relaying
+  ends, the box picks up whatever the room does next, so a satellite relaying a
+  whole day needs nobody to attend to it between services. Setting **When the
+  event ends** to *hold* is for the case where the screen is deliberately
+  showing a recording; the front page's **Follow whatever is live** button
+  brings it back to the room either way.
 - **The preview is a copy, not a second output.** The web UI shows the picture
   going out, refreshed at a rate the browser chooses. Watching it does not
   change or interrupt what is on the screen in the room — it is the same moment,
@@ -316,12 +322,14 @@ Two places in the player's page (port 8080, the usual one):
   settings that change what is on air.
 - **This box → Network audio output.** What is actually being sent, read back
   from the daemon rather than assumed from the settings: whether the daemon is
-  running, whether the clock is locked and to which grandmaster, the address and
-  port on the wire, and the SDP it publishes — which is the thing a console's
-  engineer will ask for. Anything that would stop the audio is said in a sentence
-  underneath, including the states that look identical from the settings and are
-  not: a stream that is configured but switched off, and a stream that is carrying
-  nothing because the player is writing the sound somewhere else.
+  running, whether the clock is locked, to which grandmaster, and how tightly —
+  the lock's own jitter figure, which is the number to compare against a
+  receiving console's — the address and port on the wire, and the SDP it
+  publishes, which is the thing a console's engineer will ask for. Anything that
+  would stop the audio is said in a sentence underneath, including the states
+  that look identical from the settings and are not: a stream that is configured
+  but switched off, and a stream that is carrying nothing because the player is
+  writing the sound somewhere else.
 
 **What the switch does, which is more than it first looks.** It *moves the
 sound*. There is one output device on this box, not two, and the daemon publishes

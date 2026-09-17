@@ -138,9 +138,12 @@ that away.
 ### Main site (encoder)
 
 1. Open the **Multisite Encoder** dock (View → Docks).
-2. **Settings…** — enter your bucket details, choose a video encoder, name your
-   markers, then press **Apply** to commit them. Opening the settings and
-   closing them again changes nothing, so it is safe to look mid-event.
+2. **Settings…** — enter your bucket details and choose a video encoder, name the
+   tracks, give this machine a **Site name** (what appears on the cues this box
+   drops), then press **Apply** to commit them. **Cache folder** on the same page
+   is where the outgoing queue, downloaded video and the copies served over the
+   LAN are kept. Opening the settings and closing them again changes nothing, so
+   it is safe to look mid-event.
 3. **Go live.** Watch the status readout: how much of the event has been sent,
    how much is waiting, and the **Internet** line (green/amber/red). That line
    is live even before you go on air — the dock checks the bucket every few
@@ -191,7 +194,9 @@ To play something other than the live event, use the **Recordings** list:
 pick a past event and press **Load recording**. Playback then stays on it —
 if a new event starts mid-watch the dock offers the switch rather than taking
 it, because being pulled out of a recording you are part-way through is worse
-than being told. **Back to live** returns to following the room.
+than being told. The same holds for the event you were *following* once it
+finishes: a recording that has just ended is not taken away by the next event
+starting either. **Back to live** returns to following the room in both cases.
 
 For production audio, the Multisite Source carries the video plus **one** audio
 track (track 1 by default). To bring in another track as

@@ -92,7 +92,7 @@ struct DecoderConfig {
     // following live.json on to whatever the room does next. On by default,
     // because being pulled out of a recording someone is part-way through is
     // worse than being told the next event has started — the operator gets the
-    // offer (live_elsewhere) and presses Return to live. An unattended box that
+    // offer (live_elsewhere) and presses Back to live. An unattended box that
     // exists to relay the room continuously wants the opposite, so the
     // appliance turns this off.
     bool   hold_finished_event = true;
