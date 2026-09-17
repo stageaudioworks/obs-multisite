@@ -4,6 +4,7 @@
 #include "../multisite_ui.h"
 #include "../decoder_settings.h"
 #include "../plugin_log.h"
+#include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
 #include "web_box.h"
@@ -14,6 +15,7 @@
 #include <obs-module.h>
 
 #include <QComboBox>
+#include <QCheckBox>
 #include <QFormLayout>
 #include <QStandardItemModel>
 #include <QLineEdit>
@@ -49,6 +51,11 @@ namespace multisite_obs {
 static QString tr_(const char* key) {
     return QString::fromUtf8(obs_module_text(key));
 }
+
+// Where an operator is sent when a newer build exists: the releases page lists
+// what changed and carries the download, which is the whole answer.
+static const char* kReleasesUrl =
+    "https://github.com/stageaudioworks/obs-multisite/releases";
 
 // Where downloaded video goes when the field is left blank. Shown as the
 // field's placeholder, so "empty" reads as a location rather than as unset.
@@ -701,6 +708,11 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* machineLayout = new QVBoxLayout(machinePage);
     machineLayout->addWidget(make_role_selector(machinePage));
     machineLayout->addWidget(make_remote_control_box(machinePage));
+    // A machine-wide choice like the role above it, and in both docks for the
+    // same reason: whichever role this box is, the setting is about the box.
+    m_checkUpdates = new QCheckBox(tr_("Dock.CheckUpdates"), machinePage);
+    m_checkUpdates->setToolTip(tr_("Dock.CheckUpdatesHint"));
+    machineLayout->addWidget(m_checkUpdates);
     machineLayout->addStretch(1);
     add_settings_tab(tabs, machinePage, tr_("Dock.ThisMachine"));
 
@@ -751,6 +763,13 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_version = new QLabel(QString("obs-multisite %1").arg(PLUGIN_VERSION), this);
     m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
     root->addWidget(m_version);
+    // Only ever filled in when a newer build actually exists — see refresh().
+    m_update = new QLabel(QString(), this);
+    m_update->setOpenExternalLinks(true);
+    m_update->setWordWrap(true);
+    m_update->setStyleSheet("color: #3b82c4;");
+    m_update->hide();
+    root->addWidget(m_update);
 
     // Where everything else about this lives, worded exactly as the encoder dock
     // words it and for the same reason its status rows are: an operator who has
@@ -810,6 +829,9 @@ void DecoderDock::loadIntoFields() {
     m_lanHost->setText(QString::fromStdString(cfg.lan_host));
     m_lanPortField->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
+    // Machine-wide, so read from its own store rather than from cfg — and read
+    // here, on every open, so a change made in the other dock's dialog shows up.
+    m_checkUpdates->setChecked(update_check_enabled());
     updateProviderFields();
     m_loading = false;
     m_dirty = false;
@@ -910,6 +932,10 @@ void DecoderDock::onSaveSettings() {
     cfg.lan_port           = m_lanPortField->value();
     cfg.lan_auth_token     = m_lanToken->text().trimmed().toStdString();
     set_decoder_settings(cfg);
+    // Its own store, and committed with Apply like everything else on this
+    // dialog — so opening the settings to look at something still changes
+    // nothing, which is the promise the Apply button exists to make.
+    update_check_set_enabled(m_checkUpdates->isChecked());
     m_dirty = false;
 }
 
@@ -1113,6 +1139,24 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
 }
 
 void DecoderDock::refresh() {
+    // The update check is about this machine, not about the source, so it is
+    // answered before the snapshot and is shown even when there is no source.
+    // Nothing is said when the check could not reach GitHub, or when this build
+    // is current: only a newer build produces a line.
+    {
+        QString text;
+        if (update_check_state() == UpdateState::Newer) {
+            const QString tag = QString::fromStdString(update_check_latest());
+            text = QString("<a href=\"%1\">%2</a>")
+                       .arg(QString::fromUtf8(kReleasesUrl),
+                            tr_("Dock.UpdateAvailable").arg(tag, PLUGIN_VERSION));
+        }
+        if (m_update->text() != text) {
+            m_update->setText(text);
+            m_update->setVisible(!text.isEmpty());
+        }
+    }
+
     DecoderSnapshot s;
     if (!decoder_snapshot(s)) {
         m_room->setText(tr_("Dock.NoSource"));

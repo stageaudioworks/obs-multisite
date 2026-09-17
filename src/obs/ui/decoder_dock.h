@@ -207,6 +207,10 @@ private:
     QLabel* m_error = nullptr;
     QLabel* m_storage = nullptr;   // colo + observed download rate
     QLabel* m_version = nullptr;
+    // "A newer build is available", shown only when the once-per-run check
+    // found one. Hidden the rest of the time, including when the check could
+    // not reach GitHub at all.
+    QLabel* m_update = nullptr;
     TimelineBar* m_timeline = nullptr;
     QPushButton* m_pause = nullptr;
     QPushButton* m_resume = nullptr;
@@ -259,6 +263,9 @@ private:
     QSpinBox*  m_keepBehind = nullptr;
     QLineEdit* m_cacheDir = nullptr;
     QPushButton* m_cacheBrowse = nullptr;
+    // Machine-wide, like the role selector beside it: whether this box asks
+    // GitHub once per run whether a newer build exists.
+    QCheckBox* m_checkUpdates = nullptr;
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — an empty host means
     // not configured, the same convention an empty bucket already uses
     // above; no separate on/off checkbox.

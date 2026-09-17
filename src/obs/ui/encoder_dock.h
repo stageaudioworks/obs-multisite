@@ -87,9 +87,16 @@ private:
     // folder, the counterpart to the decoder's.
     QLineEdit* m_cacheDir = nullptr;
     QPushButton* m_cacheBrowse = nullptr;
+    // Machine-wide, like the role selector beside it: whether this box asks
+    // GitHub once per run whether a newer build exists.
+    QCheckBox* m_checkUpdates = nullptr;
     QCheckBox* m_tags = nullptr;
     QLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;
+    // "A newer build is available", shown only when the once-per-run check
+    // found one. Hidden the rest of the time, including when the check could
+    // not reach GitHub at all.
+    QLabel*    m_update = nullptr;
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — off by default; port
     // and token only matter, and only show, once enabled.

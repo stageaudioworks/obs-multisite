@@ -4,6 +4,7 @@
 #include "../broadcast_controller.h"
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
+#include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
 #include "web_box.h"
@@ -57,6 +58,11 @@ static QString default_spool_dir() {
     bfree(p);
     return s;
 }
+
+// Where an operator is sent when a newer build exists: the releases page lists
+// what changed and carries the download, which is the whole answer.
+static const char* kReleasesUrl =
+    "https://github.com/stageaudioworks/obs-multisite/releases";
 
 // Plain-language duration: an operator reads "3 min 6 sec", not "31 segments".
 static QString friendly_duration(double seconds) {
@@ -183,6 +189,13 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_version = new QLabel(QString("obs-multisite %1").arg(PLUGIN_VERSION), this);
     m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
     root->addWidget(m_version);
+    // Only ever filled in when a newer build actually exists — see refresh().
+    m_update = new QLabel(QString(), this);
+    m_update->setOpenExternalLinks(true);
+    m_update->setWordWrap(true);
+    m_update->setStyleSheet("color: #3b82c4;");
+    m_update->hide();
+    root->addWidget(m_update);
 
     // Where everything else about this lives. Deliberately not styled the dim
     // grey above: dim grey is right for a version number nobody is meant to
@@ -391,6 +404,11 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     auto* machineLayout = new QVBoxLayout(machinePage);
     machineLayout->addWidget(make_role_selector(machinePage));
     machineLayout->addWidget(make_remote_control_box(machinePage));
+    // A machine-wide choice like the role above it, and in both docks for the
+    // same reason: whichever role this box is, the setting is about the box.
+    m_checkUpdates = new QCheckBox(tr_("Dock.CheckUpdates"), machinePage);
+    m_checkUpdates->setToolTip(tr_("Dock.CheckUpdatesHint"));
+    machineLayout->addWidget(m_checkUpdates);
     machineLayout->addStretch(1);
     add_settings_tab(tabs, machinePage, tr_("Dock.ThisMachine"));
 
@@ -677,6 +695,9 @@ void EncoderDock::loadIntoFields() {
     m_lanPort->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
     m_disableCloud->setChecked(!cfg.cloud_enabled);
+    // Machine-wide, so read from its own store rather than from cfg — and read
+    // here, on every open, so a change made in the other dock's dialog shows up.
+    m_checkUpdates->setChecked(update_check_enabled());
     updateLanFields();
     m_loading = false;
     m_dirty = false;
@@ -735,6 +756,10 @@ void EncoderDock::onSaveSettings() {
                          ? std::string()
                          : typedName.toStdString();
     BroadcastController::instance().set_settings(cfg);
+    // Its own store, and committed with Apply like everything else on this
+    // dialog — so opening the settings to look at something still changes
+    // nothing, which is the promise the Apply button exists to make.
+    update_check_set_enabled(m_checkUpdates->isChecked());
     m_dirty = false;
 }
 
@@ -867,6 +892,24 @@ void EncoderDock::setLiveState(bool live) {
 }
 
 void EncoderDock::refresh() {
+    // The update check is about this machine, not about the broadcast, so it is
+    // answered first and is shown whether or not anything is going out. Nothing
+    // is said when the check could not reach GitHub, or when this build is
+    // current: only a newer build produces a line.
+    {
+        QString text;
+        if (update_check_state() == UpdateState::Newer) {
+            const QString tag = QString::fromStdString(update_check_latest());
+            text = QString("<a href=\"%1\">%2</a>")
+                       .arg(QString::fromUtf8(kReleasesUrl),
+                            tr_("Dock.UpdateAvailable").arg(tag, PLUGIN_VERSION));
+        }
+        if (m_update->text() != text) {
+            m_update->setText(text);
+            m_update->setVisible(!text.isEmpty());
+        }
+    }
+
     auto st = BroadcastController::instance().status();
     setLiveState(st.live);
 

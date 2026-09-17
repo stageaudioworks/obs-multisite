@@ -15,6 +15,7 @@
 #include "settings_tabs.h"
 #include "../plugin_log.h"
 #include "../plugin_role.h"
+#include "../update_check.h"
 
 namespace multisite_obs {
 
@@ -60,6 +61,11 @@ void register_docks() {
     obs_frontend_add_dock_by_id("multisite_cues",
                                 obs_module_text("Dock.Cues"),
                                 scrollable(new CuesDock()));
+
+    // One update check per OBS run, started here because the docks are what
+    // show the answer and this is the one place both of them are known to
+    // exist. It runs in the background and fails quietly; nothing waits on it.
+    update_check_start(PLUGIN_VERSION);
 
     switch (role) {
         case Role::EncoderOnly:

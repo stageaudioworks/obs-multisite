@@ -77,6 +77,10 @@ add_library(multisite_core STATIC
     src/core/storage_manager.cpp
     src/core/storage_providers.cpp
     src/core/http_date.cpp
+    # Comparing this build against the published one. No network here: only the
+    # part that can be wrong (is one tag newer than another) so it is tested
+    # without a connection.
+    src/core/version.cpp
     src/core/lan_object_server.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
@@ -213,6 +217,12 @@ add_test(NAME cues COMMAND test_cues)
 add_executable(test_http_date tests/test_http_date.cpp)
 target_link_libraries(test_http_date PRIVATE multisite_core)
 add_test(NAME http_date COMMAND test_http_date)
+
+# Deciding whether the published tag is newer than this build. Pure arithmetic
+# and one string scan — the fetching lives with each host.
+add_executable(test_version tests/test_version.cpp)
+target_link_libraries(test_version PRIVATE multisite_core)
+add_test(NAME version COMMAND test_version)
 
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.
@@ -755,6 +765,9 @@ if(BUILD_OBS_PLUGIN)
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp
         src/obs/plugin_log.cpp
+        # One request to the GitHub releases API per run, so an operator learns
+        # a newer build exists. Notification only; see the file's own note.
+        src/obs/update_check.cpp
         # The remote-control pages, served on the church network. No Qt (and so
         # no docks needed): a build without them still gets remote control,
         # because the machine that most needs it is the one nobody is at.
