@@ -168,6 +168,10 @@ void BroadcastSettings::load() {
         region = obs_data_get_string(d, "region");
     if (obs_data_has_user_value(d, "room_id"))
         room_id = obs_data_get_string(d, "room_id");
+    if (obs_data_has_user_value(d, "site_name"))
+        site_name = obs_data_get_string(d, "site_name");
+    if (obs_data_has_user_value(d, "cache_dir"))
+        cache_dir = obs_data_get_string(d, "cache_dir");
     // Renamed from use_object_tags; the old key is still read so an encoder
     // configured before the rename keeps its setting.
     send_expiry_tag    = obs_data_get_bool(d, "send_expiry_tag") ||
@@ -184,8 +188,6 @@ void BroadcastSettings::load() {
         track_labels = obs_data_get_string(d, "track_labels");
     if (obs_data_has_user_value(d, "channel_labels"))
         channel_labels = obs_data_get_string(d, "channel_labels");
-    if (obs_data_has_user_value(d, "marker_labels"))
-        marker_labels = obs_data_get_string(d, "marker_labels");
     if (obs_data_has_user_value(d, "video_encoder_id"))
         video_encoder_id = obs_data_get_string(d, "video_encoder_id");
     if (obs_data_has_user_value(d, "tile_layout"))
@@ -214,6 +216,8 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "secret_access_key", secret_access_key.c_str());
     obs_data_set_string(d, "region", region.c_str());
     obs_data_set_string(d, "room_id", room_id.c_str());
+    obs_data_set_string(d, "site_name", site_name.c_str());
+    obs_data_set_string(d, "cache_dir", cache_dir.c_str());
     obs_data_set_bool(d, "send_expiry_tag", send_expiry_tag);
     obs_data_set_double(d, "segment_duration_s", segment_duration_s);
     obs_data_set_int(d, "video_bitrate_kbps", video_bitrate_kbps);
@@ -221,7 +225,6 @@ void BroadcastSettings::save() const {
     obs_data_set_int(d, "audio_tracks", audio_tracks);
     obs_data_set_string(d, "track_labels", track_labels.c_str());
     obs_data_set_string(d, "channel_labels", channel_labels.c_str());
-    obs_data_set_string(d, "marker_labels", marker_labels.c_str());
     obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
     obs_data_set_string(d, "tile_layout", tile_layout.c_str());
     obs_data_set_bool(d, "lan_enabled", lan_enabled);
@@ -297,11 +300,12 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     obs_data_set_string(s, "secret_access_key", m_cfg.secret_access_key.c_str());
     obs_data_set_string(s, "region", m_cfg.region.c_str());
     obs_data_set_string(s, "room_id", m_cfg.room_id.c_str());
+    obs_data_set_string(s, "site_name", m_cfg.site_name.c_str());
+    obs_data_set_string(s, "cache_dir", m_cfg.cache_dir.c_str());
     obs_data_set_string(s, "event_name", m_cfg.event_name.c_str());
     obs_data_set_double(s, "segment_duration_s", m_cfg.segment_duration_s);
     obs_data_set_string(s, "track_labels", m_cfg.track_labels.c_str());
     obs_data_set_string(s, "channel_labels", m_cfg.channel_labels.c_str());
-    obs_data_set_string(s, "marker_labels", m_cfg.marker_labels.c_str());
     obs_data_set_bool(s, "send_expiry_tag", m_cfg.send_expiry_tag);
     // Read once, at Go Live, and written into event.json — which is why
     // changing it mid-broadcast does nothing until the next event.
@@ -439,7 +443,12 @@ void BroadcastController::release_all() {
 // Same computation as multisite_output.cpp's out_start(): the durable spool
 // lives beside OBS's own plugin config. Kept in sync deliberately rather than
 // shared, since the two call sites otherwise have nothing else in common.
-static std::string spool_dir_path() {
+static std::string spool_dir_path(const std::string& configured) {
+    // An operator's chosen folder wins; otherwise it lives beside OBS's own
+    // plugin config. The output resolves it the same way from the same setting,
+    // so the resume peek and the broadcast cannot disagree about where the
+    // spool is.
+    if (!configured.empty()) return configured;
     char* cfgdir = obs_module_config_path("spool");
     std::string dir = cfgdir ? cfgdir : "./multisite_spool";
     bfree(cfgdir);
@@ -450,7 +459,7 @@ multisite::ResumeInfo BroadcastController::check_resumable_before_go_live() cons
     // The default straight from SessionConfig, rather than a second literal
     // that could drift from it — there is no operator-facing setting for
     // this yet (see PROJECT-SCOPE.md §5.1's open question).
-    return multisite::peek_resumable(spool_dir_path(),
+    return multisite::peek_resumable(spool_dir_path(m_cfg.cache_dir),
                                       multisite::SessionConfig{}.resume_stale_after_ms);
 }
 
@@ -464,7 +473,7 @@ BroadcastStatus BroadcastController::status() const {
     // never gone live yet, create it here too rather than showing "—" until
     // the first broadcast.
     {
-        std::string dir = spool_dir_path();
+        std::string dir = spool_dir_path(m_cfg.cache_dir);
         std::error_code ec;
         auto sp = std::filesystem::space(dir, ec);
         if (ec) {
@@ -497,6 +506,7 @@ BroadcastStatus BroadcastController::status() const {
             if (es.bytes) st.bytes = es.bytes;
             st.colo               = es.colo;
             st.storage_host       = es.storage_host;
+            st.clock_skew_ms      = es.clock_skew_ms;
             st.upload_bytes_per_s = es.upload_bytes_per_s;
             st.upload_samples     = es.upload_samples;
             st.resumed_event_id           = es.resumed_event_id;

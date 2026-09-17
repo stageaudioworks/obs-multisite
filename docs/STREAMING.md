@@ -99,8 +99,10 @@ It also does two things with events that have already finished:
   carries every audio track the main site sent, not just the streamed one, so
   the ISOs and the click are there for whoever edits it.
 - **Replay one to a destination** as though it were happening now, for a
-  second congregation or an evening repeat. This is a proof of concept: one at
-  a time, started by hand, no scheduling yet.
+  second congregation or an evening repeat. Two of the event's cues can be
+  chosen as in and out points, so the replay can be an excerpt rather than the
+  whole recording. This is a proof of concept: one at a time, started by hand,
+  no scheduling yet.
 
 Full deployment notes, including bandwidth and disk, are in
 [relay/README.md](../relay/README.md).

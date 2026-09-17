@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
-// decoder_settings.h — storage credentials for the satellite, stored once per
-// machine rather than per source.
+// decoder_settings.h — everything a satellite is set up with, stored once per
+// machine rather than per source: storage credentials, the feed name to follow,
+// the receive tuning, and where downloaded video is cached.
 //
-// They used to live only in each source's own settings, which meant OBS lost
-// them if it exited uncleanly, and meant re-entering credentials for every
-// additional source (each packed audio track will eventually be its own
-// source). Now they are saved alongside OBS's plugin config, and a source
-// falls back to them whenever its own fields are blank.
+// They used to live in each source's own settings. Storage moved here first — a
+// second editable copy per scene silently overrode the dock, with nothing on
+// screen to explain it — and the feed name and tuning moved the same way, so
+// the source properties dialog no longer carries any of them. Saved alongside
+// OBS's plugin config.
 //
 #include <string>
 
@@ -42,6 +43,17 @@ struct DecoderSettings {
     // that decides how long the campus could keep broadcasting if the
     // connection dropped, so it is worth setting as high as the link allows.
     int    buffer_minutes = 10;
+
+    // Where downloaded segments are cached. Empty keeps the built-in location
+    // under OBS's plugin config. A machine with a large or fast disk — which is
+    // most of them, and never the SD card on a Pi — can point this at it, as
+    // the appliance already allows.
+    std::string cache_dir;
+
+    // What this box calls itself — "Campus B", "Main site". Stamped on every
+    // cue it drops so the other sites can see who set one; empty disables cue
+    // authoring here (the Cues dock says so rather than failing on a click).
+    std::string site_name;
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — a host:port typed in
     // here, by hand, rather than discovered automatically (out of scope for

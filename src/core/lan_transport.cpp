@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "lan_transport.h"
+#include "../vendor/nlohmann/json.hpp"
 
 #include <curl/curl.h>
 
 #include <mutex>
+
+using json = nlohmann::json;
 
 namespace multisite {
 
@@ -86,5 +89,65 @@ GetResult LanTransport::get(const std::string& key) {
 }
 
 void LanTransport::cancel_pending() { m_cancel = true; }
+
+bool LanTransport::publish_cue(const std::string& author, const std::string& label,
+                               std::string& merged_json, std::string& error) {
+    ensure_curl();
+    CURL* curl = curl_easy_init();
+    if (!curl) { error = "curl init"; return false; }
+
+    const std::string url = "http://" + m_cfg.host + ":" +
+                            std::to_string(m_cfg.port) + "/api/cue";
+    // Built with the JSON writer, not by hand: the label is whatever the
+    // operator typed, quotes and all.
+    const std::string payload =
+        json({ {"author", author}, {"label", label} }).dump();
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    if (!m_cfg.auth_token.empty())
+        headers = curl_slist_append(headers,
+            ("Authorization: Bearer " + m_cfg.auth_token).c_str());
+
+    std::vector<uint8_t> resp;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)payload.size());
+    if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_vec);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)m_cfg.connect_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)m_cfg.request_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_cb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &m_cancel);
+
+    bool ok = false;
+    CURLcode cc = curl_easy_perform(curl);
+    if (cc == CURLE_OK) {
+        long code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+        m_last_reached = true;
+        if (code >= 200 && code < 300) {
+            merged_json.assign(resp.begin(), resp.end());
+            ok = true;
+        } else {
+            // The hub answers a refusal with a plain-text reason, which is
+            // exactly what an operator should be shown.
+            error = "HTTP " + std::to_string(code);
+            const std::string detail(resp.begin(), resp.end());
+            if (!detail.empty()) error += ": " + detail;
+        }
+    } else {
+        m_last_reached = false;
+        error = curl_easy_strerror(cc);
+    }
+
+    if (headers) curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return ok;
+}
 
 } // namespace multisite

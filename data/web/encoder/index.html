@@ -78,7 +78,7 @@
       <label for="s-endpoint">Endpoint host</label>
       <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false"
              placeholder="s3.eu-west-2.amazonaws.com">
-      <p class="hint">For S3, Backblaze, Wasabi, or a MinIO box in the building.</p>
+      <p class="hint">For S3, Backblaze, Wasabi, or a Garage box in the building.</p>
     </div>
     <div class="field">
       <label for="s-bucket">Bucket</label>
@@ -105,6 +105,18 @@
       <label for="s-room">Room</label>
       <input id="s-room" name="room_id" type="text" spellcheck="false">
       <p class="hint">Which building is sending. Campuses look for this name.</p>
+    </div>
+    <div class="field">
+      <label for="s-site">Site name</label>
+      <input id="s-site" name="site_name" type="text" spellcheck="false">
+      <p class="hint">What this campus is called, e.g. "Main site". Shown on the
+      cues this box drops, so other sites can see who set one.</p>
+    </div>
+    <div class="field">
+      <label for="s-cache">Cache folder</label>
+      <input id="s-cache" name="cache_dir" type="text" spellcheck="false">
+      <p class="hint">Where this machine keeps the queue until upload finishes.
+      Leave blank for the built-in location.</p>
     </div>
     <div class="field">
       <label for="s-tags">Tag objects with an expiry date</label>
@@ -189,11 +201,6 @@
       <label for="s-chanlabels">Channel names</label>
       <input id="s-chanlabels" name="channel_labels" type="text">
       <p class="hint">Comma-separated, eight at most, for a packed multi-channel feed.</p>
-    </div>
-    <div class="field">
-      <label for="s-markerlabels">Marker buttons</label>
-      <input id="s-markerlabels" name="marker_labels" type="text">
-      <p class="hint">Comma-separated, four at most. These are the buttons above.</p>
     </div>
     </details>
 

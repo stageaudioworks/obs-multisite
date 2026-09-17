@@ -286,7 +286,8 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     snd_pcm_sw_params_set_avail_min(m_pcm, sw, period_size);
     snd_pcm_sw_params(m_pcm, sw);
 
-    if ((rc = snd_pcm_prepare(m_pcm)) < 0) {
+    rc = snd_pcm_prepare(m_pcm);
+    if (rc < 0) {
         error = std::string("could not start the sound card: ") + snd_strerror(rc);
         snd_pcm_close(m_pcm);
         m_pcm = nullptr;

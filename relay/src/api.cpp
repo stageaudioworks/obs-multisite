@@ -517,6 +517,24 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         res.json(out.dump());
     });
 
+    // The cues of one past event, for the rebroadcast in/out pickers. Asked for
+    // on demand rather than folded into the events list: an event list holds
+    // many events, and reading every one's cues to draw a page would be a
+    // request per event for something nobody has asked to bound yet.
+    route("GET", "/api/events/cues", [&service](const HttpRequest& req,
+                                                HttpResponse& res) {
+        const std::string id = req.param("event");
+        std::string error;
+        const auto cues = service.event_cues(id, error);
+        if (!error.empty()) return fail(res, 409, error);
+        json out = json::array();
+        for (const auto& m : cues)
+            out.push_back(json{{"id", m.id}, {"label", m.label},
+                               {"author", m.author}, {"at_ms", m.at_ms},
+                               {"seq", m.seq}});
+        res.json(out.dump());
+    });
+
     route("GET", "/api/events/download", [&service](const HttpRequest& req,
                                                     HttpResponse& res) {
         const std::string id = req.param("event");
@@ -583,7 +601,8 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         const auto j = body_json(req);
         const std::string e =
             service.start_rebroadcast(str(j, "event_id"),
-                                      (int64_t)num(j, "destination_id", 0));
+                                      (int64_t)num(j, "destination_id", 0),
+                                      str(j, "start_cue"), str(j, "end_cue"));
         if (!e.empty()) return fail(res, 409, e);
         ok(res);
     });

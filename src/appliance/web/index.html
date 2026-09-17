@@ -120,6 +120,10 @@
   </details>
 
   <div class="cues" id="cues"></div>
+  <div class="row">
+    <input id="cue-name" type="text" placeholder="Name this cue" autocomplete="off">
+    <button id="btn-cue">Drop cue</button>
+  </div>
 
   <div class="readout" id="readout"></div>
   <div class="alert" id="alert" hidden></div>
@@ -145,6 +149,27 @@
       <label for="c-room">Room</label>
       <input id="c-room" name="room_id" autocomplete="off">
       <p class="hint">The name the main site broadcasts under, e.g. main-auditorium.</p>
+    </div>
+    <div class="field">
+      <label for="c-site">Site name</label>
+      <input id="c-site" name="site_name" autocomplete="off">
+      <p class="hint">
+        What this campus is called, e.g. "Campus B". Shown on the cues this box
+        drops, so other sites can see who set one. Leave blank to receive cues
+        without authoring any.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-follownext">When the event ends</label>
+      <select id="c-follownext" name="follow_next_event">
+        <option value="true">Follow the room to the next event</option>
+        <option value="false">Hold the finished event until told otherwise</option>
+      </select>
+      <p class="hint">
+        Normally an unattended box should pick up whatever the room does next.
+        Choose to hold only when this screen is showing a recording on purpose —
+        the controls on the front page still have Follow live.
+      </p>
     </div>
     <div class="field">
       <label for="c-provider">Storage provider</label>
@@ -271,6 +296,18 @@
         declares a 2×1 or 2×2 layout in the event. Then this box can put one
         of the pictures on the screen full-height instead of the wide
         composite with bars. A feed that is a single picture ignores this.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-hwdecode">Hardware decoding</label>
+      <select id="c-hwdecode" name="hardware_decode">
+        <option value="true">Prefer hardware</option>
+        <option value="false">Software only</option>
+      </select>
+      <p class="hint">
+        On a Pi 4 the hardware H.264 decoder is what keeps the picture up
+        without spending every core on it. Falling back to software is
+        automatic, so this only needs changing on a box that decodes badly.
       </p>
     </div>
     <div class="field">

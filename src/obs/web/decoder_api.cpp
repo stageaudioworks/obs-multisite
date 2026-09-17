@@ -96,6 +96,30 @@ void register_decoder_api(multisite::HttpServer& server) {
             if (!id.empty()) decoder_jump_to_marker(id);
         }));
 
+    // Drop a cue under this machine's site name. Not wrapped in decoder_control
+    // because its refusal must reach the caller in words — "no site name is
+    // set" is something an operator has to fix, not a silent no-op.
+    server.route("POST", path("decoder/cue"),
+                 [](const HttpRequest& req, HttpResponse& res) {
+        if (web_ui_stopping()) { fail(res, 503, "OBS is closing"); return; }
+        if (web_ui_locked()) {
+            res.status = 409;
+            res.json(json{{"error", "the controls are locked"},
+                          {"locked", true}}.dump());
+            return;
+        }
+        const json j = body_object(req);
+        std::string label;
+        if (!json_str(j, "label", label)) label = str_param(req, "label");
+        std::string error;
+        if (!decoder_add_cue(label, error)) {
+            res.status = 409;
+            res.json(json{{"error", error}}.dump());
+            return;
+        }
+        res.json(decoder_status_json());
+    });
+
     // ── Recordings ──────────────────────────────────────────────────────────
     server.route("GET", path("decoder/events"),
                  [](const HttpRequest&, HttpResponse& res) {

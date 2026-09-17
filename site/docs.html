@@ -127,7 +127,7 @@
       (<code>rooms/{room}/live.json</code> is rewritten on every heartbeat, so
       it stays fresh while a room is in use, and ageing out between services
       is harmless &mdash; the next Go Live recreates it.) On <strong>AWS S3,
-      MinIO, Backblaze B2 or Wasabi</strong>: the equivalent lifecycle
+      Garage, Backblaze B2 or Wasabi</strong>: the equivalent lifecycle
       configuration, an Expiration rule per prefix.</p>
 
       <h3>Deleting by hand, without waiting for the rule</h3>
@@ -152,12 +152,26 @@
       <div class="callout info">
         <p><strong>Want the storage itself self-hosted, not only
         self-configured?</strong> The bucket only needs to speak the S3 API,
-        so a self-hosted object store works exactly like MinIO does above.
-        <a href="https://github.com/achtungsoftware/alarik">Alarik</a> is one
-        such project &mdash; S3-compatible with lifecycle rules included,
-        running on hardware you own. It's a separate project in beta that we
-        haven't run this pipeline against ourselves; nothing here depends on
-        it, the same as any other provider on this page.</p>
+        so a self-hosted object store works exactly like the cloud ones above.
+        <a href="https://garagehq.deuxfleurs.fr/">Garage</a> is one such
+        project &mdash; a single dependency-free binary that runs on modest
+        hardware, S3-compatible, with the lifecycle expiration rule described
+        above. It ships no web interface of its own, but
+        <a href="https://github.com/khairul169/garage-webui">Garage Web UI</a>
+        adds one as a second container, so a volunteer still gets a page to
+        click through. It's a separate project we haven't run this pipeline
+        against ourselves; nothing here depends on it, the same as any other
+        provider on this page.</p>
+
+        <p>MinIO used to be the usual answer here, and an existing MinIO
+        deployment still works &mdash; the endpoint doesn't care. But its
+        community edition is end-of-life (repository archived February 2026,
+        binaries and images stopped October 2025, no backported security
+        fixes). <a href="https://rustfs.com/">RustFS</a> is the closest
+        drop-in successor &mdash; the same storage model, Apache-2.0, with the
+        built-in console MinIO had &mdash; but its lifecycle management is
+        still marked under testing, so it isn't yet a like-for-like
+        replacement for the rule above.</p>
       </div>
     </section>
 
@@ -170,7 +184,9 @@
           <h3>Open the dock and go live</h3>
           <p>Open the <strong>Multisite Encoder</strong> dock (View → Docks) →
           <strong>Settings…</strong> Enter your bucket details, choose a video
-          encoder, and name your markers. Settings save as you type.</p>
+          encoder, and name your markers. Press <strong>Apply</strong> to
+          commit them &mdash; opening the settings mid-service and closing them
+          changes nothing.</p>
           <p>Press <strong>Go live</strong>. Watch the status readout: how much
           of the service has been sent, how much is waiting, and the
           <strong>Internet</strong> line (green / amber / red). That line is
@@ -695,7 +711,8 @@
       <ul class="clean">
         <li><strong>Go live</strong> and <strong>End the broadcast</strong>,
         with the same editable event name the dock has.</li>
-        <li>The four <strong>marker</strong> buttons, named in Settings.</li>
+        <li>A row of <strong>cue</strong> buttons, one per cue name the event
+        already has &mdash; a tap to drop that cue, or type a new name.</li>
         <li>A live readout: confirmed pieces, what's waiting to send, retries,
         bytes sent, the measured upload rate, the Cloudflare edge serving the
         bucket, and the last error if there is one.</li>
@@ -850,7 +867,9 @@
       streamed straight from storage (no disk cost, every audio track
       included), or <strong>replay one to a destination</strong> as though it
       were happening now &mdash; a proof of concept today, one at a time,
-      started by hand.</p>
+      started by hand. Two of the event&rsquo;s cues can mark where the replay
+      starts and stops, so a repeat can be an excerpt rather than the whole
+      recording.</p>
 
       <p>Full deployment notes, including bandwidth and disk sizing, are in
       <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/relay/README.md">relay/README.md</a>.</p>

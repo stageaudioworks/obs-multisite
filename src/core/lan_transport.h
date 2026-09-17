@@ -56,6 +56,13 @@ public:
         return r;
     }
 
+    // The ONE thing a LAN satellite sends rather than reads: a cue, handed to
+    // the encoder's hub (POST /api/cue) so a box with no bucket can still set
+    // one and stay read-only. On success `merged_json` is the hub's whole
+    // merged cue list, so the caller can show the new cue at once.
+    bool publish_cue(const std::string& author, const std::string& label,
+                     std::string& merged_json, std::string& error);
+
     // Abandon whatever request is in flight, same contract as S3Transport's
     // (see transport.h) — needed for the identical reason: tearing down a
     // decoder source while a LAN request is mid-flight must not block OBS's

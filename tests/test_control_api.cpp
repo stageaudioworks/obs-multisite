@@ -64,7 +64,7 @@ int main() {
     const std::vector<std::string> want_dec = {
         "decoder/status", "decoder/play", "decoder/stop", "decoder/hold",
         "decoder/continue", "decoder/catch-up", "decoder/jog", "decoder/seek",
-        "decoder/delay", "decoder/marker", "decoder/events",
+        "decoder/delay", "decoder/marker", "decoder/cue", "decoder/events",
         "decoder/events/refresh", "decoder/load-event",
         "decoder/return-to-live", "decoder/settings",
     };

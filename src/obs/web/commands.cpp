@@ -87,10 +87,11 @@ void apply_encoder_settings(const json& j, BroadcastSettings& s) {
     json_str(j, "bucket",           s.bucket);
     json_str(j, "access_key_id",    s.access_key_id);
     json_str(j, "room_id",          s.room_id);
+    json_str(j, "site_name",        s.site_name);
+    json_str(j, "cache_dir",        s.cache_dir);
     json_str(j, "video_encoder_id", s.video_encoder_id);
     json_str(j, "track_labels",     s.track_labels);
-    json_str(j, "channel_labels",   s.channel_labels);
-    json_str(j, "marker_labels",    s.marker_labels);
+    json_str(j, "channel_labels",  s.channel_labels);
     json_bool(j, "send_expiry_tag", s.send_expiry_tag);
 
     std::string secret;
@@ -185,6 +186,8 @@ void apply_decoder_settings(const json& j, DecoderSettings& s) {
     if (json_int(j, "poll_interval_ms", n))     s.poll_interval_ms = n;
     if (json_int(j, "keep_behind_segments", n)) s.keep_behind_segments = n;
     if (json_int(j, "buffer_minutes", n))       s.buffer_minutes = n;
+    json_str(j, "cache_dir", s.cache_dir);
+    json_str(j, "site_name", s.site_name);
 
     if (s.prebuffer_segments   < 0)    s.prebuffer_segments = 0;
     if (s.start_buffer_seconds < 0)    s.start_buffer_seconds = 0;
@@ -228,11 +231,14 @@ std::string encoder_status_json() {
     j["link_health"]        = st.link_health;
     j["link_known"]         = st.link_known;
     j["colo"]               = st.colo;
+    j["clock_skew_ms"]      = st.clock_skew_ms;
     j["storage_host"]       = st.storage_host;
     j["upload_bytes_per_s"] = st.upload_bytes_per_s;
     j["upload_samples"]     = (unsigned long long)st.upload_samples;
 
     j["room_id"]    = cfg.room_id;
+    j["site_name"]  = cfg.site_name;
+    j["cache_dir"]  = cfg.cache_dir;
     j["bucket"]     = cfg.bucket;
     j["configured"] = !cfg.bucket.empty() &&
                       (!cfg.endpoint_host.empty() || !cfg.r2_account_id.empty());
@@ -243,7 +249,21 @@ std::string encoder_status_json() {
     j["other_page"] = plugin_role() == Role::EncoderOnly ? "" : "/decoder/";
 
     json markers = json::array();
-    for (const auto& m : split_csv(cfg.marker_labels)) markers.push_back(m);
+    // The event's own cue names, one per distinct name, in the order they were
+    // set — the same names the Cues dock shows. There is no configured list any
+    // more, so the buttons on this page and the dock cannot disagree.
+    {
+        std::vector<CueEntry> cues;
+        std::vector<std::string> names;
+        if (encoder_cues(cues))
+            for (const auto& c : cues) {
+                if (c.label.empty()) continue;
+                bool seen = false;
+                for (const auto& n : names) if (n == c.label) { seen = true; break; }
+                if (!seen) names.push_back(c.label);
+            }
+        for (const auto& n : names) markers.push_back(n);
+    }
     j["marker_labels"] = std::move(markers);
     return j.dump();
 }
@@ -273,6 +293,7 @@ std::string encoder_settings_json() {
                                  : std::string(kSecretPlaceholder);
     j["region"]             = s.region;
     j["room_id"]            = s.room_id;
+    j["site_name"]          = s.site_name;
     j["send_expiry_tag"]    = s.send_expiry_tag;
     j["video_encoder_id"]   = s.video_encoder_id;
     j["segment_duration_s"] = s.segment_duration_s;
@@ -281,7 +302,6 @@ std::string encoder_settings_json() {
     j["audio_tracks"]       = s.audio_tracks;
     j["track_labels"]       = s.track_labels;
     j["channel_labels"]     = s.channel_labels;
-    j["marker_labels"]      = s.marker_labels;
 
     j["lan_enabled"] = s.lan_enabled;
     j["lan_port"]    = s.lan_port;
@@ -359,6 +379,7 @@ std::string decoder_status_json() {
     j["link_known"]  = s.link_known;
     j["last_error"]  = s.last_error;
     j["colo"]        = s.colo;
+    j["clock_skew_ms"] = s.clock_skew_ms;
     j["storage_host"] = s.storage_host;
     j["download_bytes_per_s"] = s.download_bytes_per_s;
     j["download_samples"]     = (unsigned long long)s.download_samples;
@@ -436,6 +457,8 @@ std::string decoder_settings_json() {
     j["poll_interval_ms"]     = s.poll_interval_ms;
     j["keep_behind_segments"] = s.keep_behind_segments;
     j["buffer_minutes"]       = s.buffer_minutes;
+    j["cache_dir"]            = s.cache_dir;
+    j["site_name"]            = s.site_name;
 
     j["lan_host"] = s.lan_host;
     j["lan_port"] = s.lan_port;

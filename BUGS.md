@@ -86,6 +86,42 @@ NOT fix the stall or find its root cause; it only makes the next occurrence
 impossible to miss and easy to act on immediately. `src/appliance/player.cpp`,
 around the 60-second status log.
 
+**Since this was written, a third time — the suspected mechanism is now
+bounded.** The leading hypothesis is `feed_loop` parked in
+`CmafDecoder::push_fragment()`, waiting for queue space that a wedged decode
+thread will never free. That wait is no longer unbounded: `push_fragment`
+now waits only while the decoder is still PRODUCING (a monotonic
+`last_progress_ms` is stamped on every emitted frame and every fragment),
+and once nothing has come out for ten seconds it declares the decoder wedged,
+returns `false`, and sets an error. Both feeds act on that: the Pi player
+throws the decoder away and rebuilds it (`Player::teardown_decoder()`, which
+re-requests the init segment), and the OBS source logs it plainly. So the
+worst case is now a reported, acted-on event that costs at most one segment,
+not a silent freeze with downloads still climbing. A decoder wedged INSIDE
+FFmpeg rather than in our push would still park `stop()`'s join — the thread
+dump remains the way to settle which — but this code is no longer part of the
+path that can hang. `src/core/cmaf_decoder.{h,cpp}`, `src/appliance/player.cpp`
+and `src/obs/multisite_source.cpp`; the boundary is pinned by
+`tests/test_cmaf_decode.cpp`.
+
+**Since this was written, a fourth time — the other half is bounded too.**
+The paragraph above closed `push()`'s wait, but `stop()` still joined the
+decode thread unconditionally, so a thread wedged *inside* an FFmpeg call
+(the case that paragraph flagged as still open) would park teardown's `join`
+for ever — which is exactly what `Player::teardown_decoder()` calls to rebuild.
+`CmafDecoder::stop()` now waits only a bounded grace period (5 s) for the
+worker to return; if it does not, the thread is detached and its state is
+intentionally leaked (freeing it would be a use-after-free in a thread we can
+no longer control), an error is set, and the caller builds a fresh decoder.
+The abandoned path is pinned by a new case in `tests/test_cmaf_decode.cpp`
+that plants a wedge in a frame callback and asserts `stop()` returns anyway.
+`src/core/cmaf_decoder.{h,cpp}`.
+
+What remains genuinely un-diagnosed is *why* the decode thread wedged in the
+first place — the thread dump is still the only thing that settles it, and the
+self-watching WARN above is still what triggers one. The difference is that
+the process now survives it and keeps relaying.
+
 ---
 
 ### 1. AES67 audio: proven over an event, PTP lock accuracy at a receiver is not
@@ -141,7 +177,8 @@ is for the rest of what the daemon can do.
    how well PTP itself holds — AES67 wants both ends within a millisecond,
    and a Pi's network interface does no hardware timestamping, so the
    achievable accuracy is whatever the software manages. That needs a
-   receiving console's own read on it, over the same length of time.
+   receiving console's own read on it, over the same length of time. The Pi's
+   own side of that comparison is now recorded (see below).
 3. **Dante routing is by hand.** A source shows up in Dante Controller, but
    connecting it to a receiver is a manual step in that application.
 4. **A kernel upgrade means rerunning the installer.** The module is built from
@@ -149,8 +186,20 @@ is for the rest of what the daemon can do.
    build takes a branch of the submodule and a compiler choice a DKMS hook
    cannot reconstruct reliably. Rerunning the script rebuilds it.
 
+**Since this was written:** the Pi's half of that comparison is now recorded,
+where before it was only readable live in the daemon's own WebUI. The 60-second
+status line gains ` ptp=locked 12.3ns` (or `UNLOCKED`) whenever the AES67 probe
+has read `/ptp/status`, and the box's own page shows the same jitter beside the
+grandmaster it locked to. This does NOT answer point 2 — the number that decides
+it is the *receiver's*, so a console's read over a long run is still what closes
+this — but a full-length service now leaves a per-minute trace of how tightly
+the Pi held the clock, so the two ends can be compared after the fact instead of
+the question resting on nobody having looked. `src/appliance/player.{h,cpp}`,
+`src/appliance/web/app.js`.
+
 **Next step:** a full-length service on the picture and the sound together,
-which is point 2 above.
+which is point 2 above — capturing the `ptp=` trace from the Pi's journal and
+the receiving console's own lock figure over the same run.
 
 ## Recently landed (context, not action items)
 

@@ -211,10 +211,17 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         // a relay starting three minutes back would sit waiting for segments
         // that were never going to be fetched.
         if (!m_head_set) {
-            m_head = in.from_beginning
-                       ? in.first_available_seq
-                       : seq_behind_live(in.latest_seq, in.first_available_seq,
+            if (in.from_beginning) {
+                // A rebroadcast starts at its in-point when one was chosen,
+                // and never before what storage still holds — a cue whose
+                // segment has aged out cannot be honoured.
+                m_head = in.start_seq > in.first_available_seq
+                           ? in.start_seq
+                           : in.first_available_seq;
+            } else {
+                m_head = seq_behind_live(in.latest_seq, in.first_available_seq,
                                          seg_s, in.delay_s);
+            }
             m_head_set = true;
         } else {
             // A restart resumes from where the feed got to, so nothing is
@@ -245,6 +252,17 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
     }
 
     // ── Running: is there anything to send, and is it due? ───────────────────
+    // An out-point closes the feed there, whatever the room is still doing: an
+    // excerpt bounded by two cues ends when the excerpt ends, not when the
+    // recording does.
+    if (in.end_seq > 0 && m_head > in.end_seq &&
+        m_state != RelayState::Ending) {
+        d.action = RelayAction::CloseInput;
+        enter(RelayState::Ending, now, {});
+        d.note = "the out-point cue has been reached — sending up to it";
+        return d;
+    }
+
     const bool past_end = m_head > in.latest_seq;
 
     if (past_end && (in.room == RoomState::Ended ||

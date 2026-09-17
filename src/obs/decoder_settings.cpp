@@ -66,6 +66,10 @@ void DecoderSettings::load() {
         keep_behind_segments = (int)obs_data_get_int(d, "keep_behind_segments");
     if (obs_data_has_user_value(d, "buffer_minutes"))
         buffer_minutes = (int)obs_data_get_int(d, "buffer_minutes");
+    if (obs_data_has_user_value(d, "cache_dir"))
+        cache_dir = obs_data_get_string(d, "cache_dir");
+    if (obs_data_has_user_value(d, "site_name"))
+        site_name = obs_data_get_string(d, "site_name");
     if (obs_data_has_user_value(d, "lan_host"))
         lan_host = obs_data_get_string(d, "lan_host");
     if (obs_data_has_user_value(d, "lan_port"))
@@ -93,6 +97,8 @@ void DecoderSettings::save() const {
     obs_data_set_int(d, "poll_interval_ms", poll_interval_ms);
     obs_data_set_int(d, "keep_behind_segments", keep_behind_segments);
     obs_data_set_int(d, "buffer_minutes", buffer_minutes);
+    obs_data_set_string(d, "cache_dir", cache_dir.c_str());
+    obs_data_set_string(d, "site_name", site_name.c_str());
     obs_data_set_string(d, "lan_host", lan_host.c_str());
     obs_data_set_int(d, "lan_port", lan_port);
     obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());

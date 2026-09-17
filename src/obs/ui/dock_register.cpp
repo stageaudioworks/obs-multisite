@@ -11,6 +11,8 @@
 
 #include "encoder_dock.h"
 #include "decoder_dock.h"
+#include "cues_dock.h"
+#include "settings_tabs.h"
 #include "../plugin_log.h"
 #include "../plugin_role.h"
 
@@ -18,9 +20,11 @@ namespace multisite_obs {
 
 // OBS docks share vertical space with the mixer, transitions and controls, so
 // a dock can end up much shorter than its content. Wrapping in a scroll area
-// means nothing becomes unreachable on a small screen.
+// means nothing becomes unreachable on a small screen — and it has to be a
+// ShrinkableScrollArea, because a plain QScrollArea reports its content's
+// minimum as its own and the dock then cannot be shrunk at all.
 static QWidget* scrollable(QWidget* inner) {
-    auto* area = new QScrollArea();
+    auto* area = new ShrinkableScrollArea();
     area->setWidget(inner);
     area->setWidgetResizable(true);
     area->setFrameShape(QFrame::NoFrame);
@@ -49,6 +53,13 @@ void register_docks() {
         obs_frontend_add_dock_by_id("multisite_decoder",
                                     obs_module_text("Dock.Decoder"),
                                     scrollable(new DecoderDock()));
+
+    // The Cues dock is in BOTH roles on purpose. Cues are the same thing on
+    // either end — the same list, the same names, whoever set them — so an
+    // operator should find them in the same place whichever this machine is.
+    obs_frontend_add_dock_by_id("multisite_cues",
+                                obs_module_text("Dock.Cues"),
+                                scrollable(new CuesDock()));
 
     switch (role) {
         case Role::EncoderOnly:

@@ -267,10 +267,15 @@ destination as though it were happening now — for a second congregation in a
 different time zone, or an evening repeat. It plays at normal speed from the
 beginning and ends by itself at the end of the recording.
 
+**Bounded by two cues.** Two of the event's cues can be chosen as an in point
+and an out point, so a replay is an excerpt rather than the whole recording —
+start at "Sermon Start", finish at "Dismissal". Leave either blank to use the
+beginning or the end of the recording. The pickers are per event, loaded when
+opened, and the cue list is the same merged, per-author list the campuses see.
+
 This is a first version and is honest about it: one replay at a time, started
 by hand, to a destination that is not currently carrying the live event. What
-it does not do yet is schedule itself, loop, start part-way in, or run several
-at once.
+it does not do yet is schedule itself, loop, or run several at once.
 
 ---
 

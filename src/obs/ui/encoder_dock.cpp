@@ -22,6 +22,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QFileDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -46,6 +47,15 @@ namespace multisite_obs {
 
 static QString tr_(const char* key) {
     return QString::fromUtf8(obs_module_text(key));
+}
+
+// Where the durable spool goes when the field is left blank. Shown as the
+// field's placeholder, so an operator can see where the queue actually is.
+static QString default_spool_dir() {
+    char* p = obs_module_config_path("spool");
+    const QString s = p ? QString::fromUtf8(p) : QStringLiteral("./multisite_spool");
+    bfree(p);
+    return s;
 }
 
 // Plain-language duration: an operator reads "3 min 6 sec", not "31 segments".
@@ -149,17 +159,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     row->addWidget(m_end);
     root->addLayout(row);
 
-    // ── Markers ──────────────────────────────────────────────────────────────
-    auto* markerBox = new QGroupBox(tr_("Dock.Markers"), this);
-    auto* mrow = new QGridLayout(markerBox);
-    for (int i = 0; i < 4; ++i) {
-        m_markers[i] = new QPushButton(QString("—"), markerBox);
-        m_markers[i]->setEnabled(false);
-        mrow->addWidget(m_markers[i], i / 2, i % 2);
-        connect(m_markers[i], &QPushButton::clicked, this,
-                [this, i] { onMarker(i); });
-    }
-    root->addWidget(markerBox);
+    // Cues are dropped from the Multisite Cues dock, which is the same dock a
+    // satellite gets: one mechanism, one place to name a cue, and the event's
+    // own cue names as one-press buttons there. The four configurable marker
+    // buttons that used to live here were a second way to do the same thing.
 
     // Settings button — opens the dialog built below.
     m_settingsBtn = new QPushButton(tr_("Dock.Settings"), this);
@@ -200,7 +203,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     root->addWidget(brand);
 
     // ── Settings dialog ──────────────────────────────────────────────────────
-    m_settings = new QDialog(this);
+    m_settings = new SettingsDialog(this);
     m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));
     auto* dlgRoot = new QVBoxLayout(m_settings);
 
@@ -240,6 +243,8 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_secret->setEchoMode(QLineEdit::Password);
     m_region    = new QLineEdit(storeBox);
     m_room      = new QLineEdit(storeBox);
+    m_siteName  = new QLineEdit(storeBox);
+    m_siteName->setToolTip(tr_("Dock.SiteNameHint"));
     m_tags      = new QCheckBox(tr_("SendExpiryTag"), storeBox);
     // The caveats are a tooltip, not part of the label: as a label they were a
     // single unwrapped line that set the width of the entire dialog.
@@ -263,6 +268,31 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("SecretKey"), m_secret);
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_room);
+    form->addRow(tr_("Dock.SiteName"), m_siteName);
+    m_cacheDir = new QLineEdit(storeBox);
+    m_cacheDir->setToolTip(tr_("Dock.CacheDirHint"));
+    // The effective default, in grey: the encoder's queue location should be
+    // visible without anyone having to set it.
+    m_cacheDir->setPlaceholderText(default_spool_dir());
+    {
+        auto* wrap = new QWidget(storeBox);
+        auto* hl = new QHBoxLayout(wrap);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(m_cacheDir, 1);
+        m_cacheBrowse = new QPushButton(tr_("Dock.Browse"), wrap);
+        hl->addWidget(m_cacheBrowse);
+        connect(m_cacheBrowse, &QPushButton::clicked, this, [this] {
+            const QString typed = m_cacheDir->text().trimmed();
+            const QString dir = QFileDialog::getExistingDirectory(
+                this, tr_("Dock.CacheDir"),
+                typed.isEmpty() ? default_spool_dir() : typed);
+            if (!dir.isEmpty()) {
+                m_cacheDir->setText(dir);
+                m_dirty = true;
+            }
+        });
+        form->addRow(tr_("Dock.CacheDir"), wrap);
+    }
     form->addRow(QString(), m_tags);
     form->addRow(QString(), m_disableCloud);
     storePageLayout->addWidget(storeBox);
@@ -312,7 +342,6 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_tracks->setRange(1, 6);
     m_trackLabels   = new QLineEdit(mediaBox);
     m_channelLabels = new QLineEdit(mediaBox);
-    m_markerLabels  = new QLineEdit(mediaBox);
     // Encoder choice, populated from what OBS actually has here. A hardware
     // encoder leaves the CPU free for everything else the main site is doing.
     // Filled by populateEncoders() rather than here — see that function.
@@ -349,7 +378,6 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_audioNote->setWordWrap(true);
     m_audioNote->setStyleSheet("color: palette(text); opacity: 0.75;");
     mform->addRow(QString(), m_audioNote);
-    mform->addRow(tr_("MarkerLabels"), m_markerLabels);
     mediaPageLayout->addWidget(mediaBox);
     mediaPageLayout->addStretch(1);
     add_settings_tab(tabs, mediaPage, tr_("Dock.Media"));
@@ -368,38 +396,56 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
 
     dlgRoot->addWidget(tabs, 1);            // the tabs take the stretch
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Close | QDialogButtonBox::Apply, m_settings);
     dlgRoot->addWidget(buttons, 0);         // …and the buttons never scroll
-    connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::accept);
+    // Closing does NOT apply. An event may be live, and merely opening the
+    // settings or changing your mind must not reconfigure a running broadcast.
+    // Only Apply commits; a live action (Go live, End) reads the fields itself.
+    connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::reject);
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+            this, &EncoderDock::onApplySettings);
 
     connect(m_goLive, &QPushButton::clicked, this, &EncoderDock::onGoLive);
     connect(m_end,    &QPushButton::clicked, this, &EncoderDock::onEnd);
 
-    // Settings are saved as they are edited, so nothing is lost if OBS closes
-    // unexpectedly — an operator should never have to retype credentials.
-    for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
-                          m_region, m_room, m_trackLabels, m_channelLabels,
-                          m_markerLabels, m_lanToken })
-        connect(e, &QLineEdit::editingFinished, this,
-                &EncoderDock::onSaveSettings);
-    connect(m_tags, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
-    connect(m_lanEnabled, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
-    connect(m_lanPort, &QSpinBox::editingFinished, this, &EncoderDock::onSaveSettings);
-    connect(m_disableCloud, &QCheckBox::toggled, this, &EncoderDock::onDisableCloudToggled);
-    connect(m_provider, &QComboBox::currentIndexChanged, this,
-            [this](int) { onSaveSettings(); });
-    connect(m_encoder, &QComboBox::currentIndexChanged, this,
-            [this](int) { onSaveSettings(); });
-    connect(m_segDur, &QDoubleSpinBox::editingFinished, this,
-            &EncoderDock::onSaveSettings);
-    for (QSpinBox* sb : { m_vBitrate, m_aBitrate, m_tracks })
-        connect(sb, &QSpinBox::editingFinished, this,
-                &EncoderDock::onSaveSettings);
+    // Fields no longer save on every edit. Settings are committed with Apply,
+    // or read by an action that needs them (Go live, End), so typing a value
+    // and closing the dialog changes nothing — which matters most while an
+    // event is live. The one exception is switching cloud delivery off, which
+    // has its own confirmation below.
+    connect(m_disableCloud, &QCheckBox::toggled, this,
+            &EncoderDock::onDisableCloudToggled);
 
     loadIntoFields();
     updateAudioFields();
     connect(m_tracks, &QSpinBox::valueChanged, this,
             &EncoderDock::updateAudioFields);
+
+    // Closing with unapplied edits asks first (see settings_dialog.h). That is
+    // the other half of "closing is not a commit": closing must not silently
+    // throw away what was typed either.
+    m_settings->is_dirty = [this] { return m_dirty; };
+    m_settings->apply_changes = [this] { onApplySettings(); };
+    // textEdited, not textChanged: only a person's typing counts, and the
+    // setText in loadIntoFields must not. Everything else is guarded by
+    // m_loading, since setValue/setChecked/setCurrentIndex all raise signals.
+    for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
+                          m_region, m_room, m_siteName, m_cacheDir,
+                          m_trackLabels, m_channelLabels, m_lanToken,
+                          m_eventName })
+        connect(e, &QLineEdit::textEdited, this, [this] { m_dirty = true; });
+    for (QCheckBox* cb : { m_tags, m_lanEnabled, m_disableCloud })
+        connect(cb, &QCheckBox::toggled, this,
+                [this](bool) { if (!m_loading) m_dirty = true; });
+    for (QComboBox* combo : { m_provider, m_encoder, m_tileLayout })
+        connect(combo, &QComboBox::currentIndexChanged, this,
+                [this](int) { if (!m_loading) m_dirty = true; });
+    for (QSpinBox* sb : { m_lanPort, m_vBitrate, m_aBitrate, m_tracks })
+        connect(sb, &QSpinBox::valueChanged, this,
+                [this](int) { if (!m_loading) m_dirty = true; });
+    connect(m_segDur, &QDoubleSpinBox::valueChanged, this,
+            [this](double) { if (!m_loading) m_dirty = true; });
 
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &EncoderDock::refresh);
@@ -481,8 +527,9 @@ void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
     populateEncoders();        // by now every module has registered its own
     updateAudioFields();       // OBS's audio layout may have changed
-    updateProviderFields();
-    updateLanFields();
+    // Show what is actually saved: the dialog is reused, so without this it
+    // would show last session's edits — including ones never applied.
+    loadIntoFields();
 
     // Fit the screen it is about to open on, not the one it was built on. The
     // scroll area means everything can be reached, but Qt will still size the
@@ -495,12 +542,16 @@ void EncoderDock::onOpenSettings() {
         // Nine tenths, not all: a dialog exactly the height of the work area
         // has its title bar under the menu bar on macOS and cannot be moved.
         m_settings->setMaximumHeight((int)(avail.height() * 0.9));
+        m_settings->setMaximumWidth((int)(avail.width() * 0.9));
         if (m_settings->height() > m_settings->maximumHeight())
             m_settings->resize(m_settings->width(), m_settings->maximumHeight());
+        if (m_settings->width() > m_settings->maximumWidth())
+            m_settings->resize(m_settings->maximumWidth(), m_settings->height());
     }
 
     m_settings->exec();
-    onSaveSettings();      // persist whatever was changed
+    // Deliberately nothing after exec(): closing is not a commit. Apply
+    // commits, and a close leaves a running broadcast untouched.
 }
 
 // Refill from what OBS has registered at this moment.
@@ -554,6 +605,8 @@ void EncoderDock::populateEncoders() {
 }
 
 void EncoderDock::loadIntoFields() {
+    m_loading = true;   // the setValue/setChecked below are not the operator's edits
+
     // setChecked()/setCurrentIndex() below emit toggled()/currentIndexChanged()
     // whenever the loaded value differs from whatever a freshly constructed
     // widget defaulted to — and every one of those signals is wired to
@@ -597,6 +650,8 @@ void EncoderDock::loadIntoFields() {
     m_secret->setText(QString::fromStdString(cfg.secret_access_key));
     m_region->setText(QString::fromStdString(cfg.region));
     m_room->setText(QString::fromStdString(cfg.room_id));
+    m_siteName->setText(QString::fromStdString(cfg.site_name));
+    m_cacheDir->setText(QString::fromStdString(cfg.cache_dir));
     m_tags->setChecked(cfg.send_expiry_tag);
     updateProviderFields();
     {
@@ -610,7 +665,6 @@ void EncoderDock::loadIntoFields() {
     m_tracks->setValue(cfg.audio_tracks);
     m_trackLabels->setText(QString::fromStdString(cfg.track_labels));
     m_channelLabels->setText(QString::fromStdString(cfg.channel_labels));
-    m_markerLabels->setText(QString::fromStdString(cfg.marker_labels));
     {
         // findData rather than an index: the stored value is the layout string
         // itself, so reordering or adding entries later cannot silently change
@@ -624,6 +678,8 @@ void EncoderDock::loadIntoFields() {
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
     m_disableCloud->setChecked(!cfg.cloud_enabled);
     updateLanFields();
+    m_loading = false;
+    m_dirty = false;
 }
 
 void EncoderDock::onSaveSettings() {
@@ -654,6 +710,8 @@ void EncoderDock::onSaveSettings() {
     cfg.access_key_id     = m_keyId->text().trimmed().toStdString();
     cfg.secret_access_key = m_secret->text().trimmed().toStdString();
     cfg.room_id           = m_room->text().trimmed().toStdString();
+    cfg.site_name         = m_siteName->text().trimmed().toStdString();
+    cfg.cache_dir         = m_cacheDir->text().trimmed().toStdString();
     cfg.send_expiry_tag   = m_tags->isChecked();
     cfg.video_encoder_id   = m_encoder->currentData().toString().toStdString();
     cfg.segment_duration_s = m_segDur->value();
@@ -662,7 +720,6 @@ void EncoderDock::onSaveSettings() {
     cfg.audio_tracks       = m_tracks->value();
     cfg.track_labels       = m_trackLabels->text().toStdString();
     cfg.channel_labels     = m_channelLabels->text().toStdString();
-    cfg.marker_labels      = m_markerLabels->text().toStdString();
     cfg.tile_layout        = m_tileLayout->currentData().toString().toStdString();
     cfg.lan_enabled    = m_lanEnabled->isChecked();
     cfg.lan_port       = m_lanPort->value();
@@ -678,6 +735,13 @@ void EncoderDock::onSaveSettings() {
                          ? std::string()
                          : typedName.toStdString();
     BroadcastController::instance().set_settings(cfg);
+    m_dirty = false;
+}
+
+void EncoderDock::onApplySettings() {
+    // Commit the fields now. set_settings(), inside onSaveSettings(), is what
+    // applies them to a running session.
+    onSaveSettings();
 }
 
 QString EncoderDock::defaultEventName() const {
@@ -786,24 +850,16 @@ void EncoderDock::onManageStorage() {
     dlg.exec();
 }
 
-void EncoderDock::onMarker(int index) {
-    auto labels = m_markerLabels->text().split(',', Qt::SkipEmptyParts);
-    QString label = (index < labels.size())
-                      ? labels[index].trimmed()
-                      : QString("Marker %1").arg(index + 1);
-    BroadcastController::instance().drop_marker(label.toStdString());
-}
-
 void EncoderDock::setLiveState(bool live) {
     m_goLive->setEnabled(!live);
     m_end->setEnabled(live);
-    for (auto* b : m_markers) b->setEnabled(live);
     // Storage cannot change mid-broadcast.
     for (QWidget* w : { (QWidget*)m_provider, (QWidget*)m_accountId,
                         (QWidget*)m_endpoint,
                         (QWidget*)m_bucket, (QWidget*)m_keyId,
                         (QWidget*)m_secret, (QWidget*)m_region,
-                        (QWidget*)m_room, (QWidget*)m_segDur,
+                        (QWidget*)m_room, (QWidget*)m_siteName,
+                        (QWidget*)m_cacheDir, (QWidget*)m_segDur,
                         (QWidget*)m_tracks, (QWidget*)m_lanEnabled,
                         (QWidget*)m_lanPort, (QWidget*)m_lanToken,
                         (QWidget*)m_disableCloud })
@@ -811,14 +867,6 @@ void EncoderDock::setLiveState(bool live) {
 }
 
 void EncoderDock::refresh() {
-    // Marker button captions follow the labels the operator has typed.
-    auto labels = m_markerLabels->text().split(',', Qt::SkipEmptyParts);
-    for (int i = 0; i < 4; ++i) {
-        QString cap = (i < labels.size()) ? labels[i].trimmed()
-                                          : QString("Marker %1").arg(i + 1);
-        if (m_markers[i]->text() != cap) m_markers[i]->setText(cap);
-    }
-
     auto st = BroadcastController::instance().status();
     setLiveState(st.live);
 
@@ -955,8 +1003,16 @@ void EncoderDock::refresh() {
     showDisk();
     showLan();
 
-    if (!st.last_error.empty()) {
-        m_error->setText(QString::fromStdString(st.last_error));
+    // A real error wins the red line, but a clock far from the store's earns
+    // the same attention: it is what puts this site's times out of step with
+    // the others. The figure comes from the store's own Date header, so it
+    // describes THIS machine's error, not a guess.
+    QString warn = QString::fromStdString(st.last_error);
+    const long long skew = st.clock_skew_ms;
+    if (warn.isEmpty() && (skew >= 5000 || skew <= -5000))
+        warn = tr_("Dock.ClockOut") + " (" + QString::number(skew / 1000) + " s)";
+    if (!warn.isEmpty()) {
+        m_error->setText(warn);
         m_error->show();
     } else {
         m_error->hide();

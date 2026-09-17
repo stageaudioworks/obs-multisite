@@ -31,6 +31,112 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.21-alpha
+
+**Cues belong to the event, not to the main site.** A cue — "Sermon Start",
+"Go to local" — has always been the main site's to drop and everyone else's to
+watch. It is now everyone's. A dedicated **Cues dock** is present whichever role
+a machine is, shows one merged list, and lets any site add to it. Names are
+typed rather than picked from a fixed set, because a service has no fixed set of
+moments, and each cue carries the name of the site that set it — so a cue
+dropped at another campus is never mistaken for the main site's.
+
+**A campus can drop a cue without being able to write your bucket.** Each cue
+lives in one object per author, `events/{id}/cues/{site}.json`, so a satellite
+given a key scoped to its own file can add cues and nothing else. On a LAN with
+no bucket at all the cue is handed to the main site, which writes it, so the
+satellite stays read-only. The **Raspberry Pi player** can drop cues from its
+own page as well — the first of the cue work to land on the tier MultisiteOS is
+being built from.
+
+**Cue times no longer depend on anybody's clock being right.** Cues are ordered
+by where they fall in the event, not by the time of day a box claims; and a box
+whose clock is plainly wrong is now told so. The store answers every request
+with its own NTP-disciplined time in a `Date` header, and the difference is
+measured from traffic already being sent — no NTP client, no extra request, no
+privilege. Both docks and the Pi page say when a machine is out past a few
+seconds, because that is what makes its clock times read oddly.
+
+**A replay can now be an excerpt.** The relay could already play a finished
+event out to a destination as though it were happening now; it can now be
+bounded by two cues, an in point and an out point, chosen per event and loaded
+when you open the picker.
+
+**The Pi player's stall has a floor under it now.** A player could stall
+indefinitely while downloads kept succeeding — the picture frozen, the cache
+still filling, nothing in the log but the shape of it. The suspected mechanism
+was the feed loop parked for ever inside the decoder's back-pressure wait. That
+wait is now bounded by whether the decoder is still *producing*: ten seconds
+with no output and the decoder is declared wedged, the loop is released, and the
+player rebuilds it. It is a defensive fix, not a diagnosis — the thread dump is
+still what would settle the last of it — but the worst case is now a reported
+event that costs at most one segment instead of a silent freeze.
+
+**And the teardown has a floor under it too.** The first fix released the feed
+loop; a decode thread wedged *inside* FFmpeg still parked the join that rebuilds
+it, so stopping a wedged player could hang the process instead of recovering it.
+Tearing a decoder down now waits a bounded grace period and, if the thread will
+not return, abandons it and lets the caller build a fresh one. Same defensive
+posture as above, same remaining question — the thread dump is still what names
+the root cause.
+
+**Watching an event end no longer lets the next one take the picture away.**
+Choosing a recording always pinned playback to it, so a rehearsal beginning in
+the room could not yank an operator out of it. Following the live feed and then
+sitting in the recording of it was the same commitment in practice but not in the
+code, so when `live.json` moved on to the next event, playback jumped. A finished
+event is now held exactly as if it had been chosen, and **Return to live** is how
+you follow the room on. The Pi turns this off — an unattended box is there to
+relay whatever the room does next — and that is now a setting on its own page
+rather than a hard-coded choice.
+
+**You can see the buffer fill.** Before Play there is no playback head to measure,
+so the dock had nothing to show but a static **READY** while the link was plainly
+busy. It now counts up against the start gate — *Filling buffer — 23 s of 60 s* —
+so a slow link looks slow instead of looking stalled.
+
+**The docks fit the window you have.** The decoder dock could not be shrunk below
+its own content, so on a laptop it wanted more height than OBS itself had: the
+scroll areas reported their content's minimum as their own, and both docks and
+both Settings dialogs inherited it. They scroll properly now and the dialogs cap
+themselves to the screen, so nothing has to be dragged past the edges of the
+display to reach a button.
+
+**"Load event" is now "Follow live".** Two buttons both said Load — one followed
+the room's live feed, the other pinned a chosen recording from the list — which
+made the difference between them hard to see. Only the second is a choice of
+*what* to play, so the first is renamed. The encoder's cache folder, meanwhile,
+now holds its outgoing queue, its downloaded video and the copies it serves over
+the LAN in the one place an operator chose, rather than the queue there and the
+LAN copies somewhere else.
+
+**Settings are one page, and applied when you say so.** The decoder's feed name,
+buffering, cache location and poll interval moved out of each source's own
+properties dialog and into the dock's Settings, where the storage already was —
+a second editable copy per scene was what let a dock edit appear to do nothing.
+Both docks also gained an **Apply** button: opening the settings to look at
+them, and closing them again, no longer saves or reconfigure anything, which
+makes it safe to do mid-event.
+
+**The cache folder is yours to choose.** Where downloaded video is kept is a
+setting on both the plugin and the Pi, rather than a fixed directory under OBS's
+plugin config.
+
+**Pi 4 hardware decoding.** The campus player prefers the hardware H.264 decoder
+where one exists and falls back to software otherwise, which is the difference
+between a Pi 4 keeping up and spending three of its four cores trying.
+
+**clang-tidy is a gate now.** The static-analysis job held a short list of
+checks as errors after a triage pass against this tree, rather than advice
+nobody acts on. The list and the reasons the noisy checks are excluded are in
+`.clang-tidy`.
+
+**MinIO is no longer recommended.** Its community edition reached end of life —
+repository archived, binaries stopped, security fixes no longer backported — so
+the documentation now points at Garage for a self-hosted bucket, and mentions
+RustFS as the closest drop-in successor once its lifecycle support ships. An
+existing MinIO deployment still works: the endpoint does not care.
+
 ## What's new in v0.1.20-alpha
 
 **If you stream to YouTube or Facebook, this is the release that gives you two

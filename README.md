@@ -367,7 +367,8 @@ events/{ulid}/event.json         codec config, audio layout, start time
 events/{ulid}/init.mp4           codec configuration for the event
 events/{ulid}/segments/…m4s      the media
 events/{ulid}/manifest.json      rolling window of confirmed segments
-events/{ulid}/markers.json       cues dropped by the main site
+events/{ulid}/markers.json      the main site's cues
+events/{ulid}/cues/{site}.json  one object per site that has set a cue
 ```
 
 **The invariant that makes it reliable:** a segment is listed in the manifest
@@ -488,7 +489,8 @@ out of scope, and the relay cannot re-encode.</summary>
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
 - **Replaying a past event is a proof of concept.** One at a time, started by
-  hand, and it cannot be scheduled, looped, or started part-way in.
+  hand; two of the event's cues can be chosen as in and out points, so a repeat
+  can be an excerpt, but it cannot be scheduled or looped.
 - **The relay speaks plain HTTP** and relies on something in front of it for
   TLS. It binds to localhost so that is a deliberate choice rather than an
   accident, but it does not terminate TLS itself.

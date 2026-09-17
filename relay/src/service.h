@@ -93,11 +93,22 @@ public:
     // One at a time on purpose: this is the first version of the idea, and a
     // church running several at once needs answers about bandwidth and
     // scheduling that do not exist yet.
-    std::string start_rebroadcast(const std::string& event_id, int64_t dest_id);
+    //
+    // `start_cue` and `end_cue` name two of the event's cues, used as in and
+    // out points so the replay is an excerpt rather than the whole recording.
+    // Empty means "no bound", which is what the replay always did.
+    std::string start_rebroadcast(const std::string& event_id, int64_t dest_id,
+                                  const std::string& start_cue = "",
+                                  const std::string& end_cue = "");
     void        stop_rebroadcast();
     bool        rebroadcasting() const;
     RelayStatus rebroadcast_status() const;
     std::string rebroadcast_event() const;
+
+    // The cues of a specific past event, for the rebroadcast UI's in/out
+    // pickers. Reads the store directly; cloud only.
+    std::vector<multisite::Marker> event_cues(const std::string& event_id,
+                                              std::string& error) const;
 
 private:
     void supervise();

@@ -2,10 +2,12 @@
 #include "s3_transport.h"
 #include "aws_sigv4.h"
 #include "s3_list_xml.h"
+#include "http_date.h"
 
 #include <curl/curl.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <sstream>
@@ -40,10 +42,11 @@ static size_t write_to_vec(void* ptr, size_t sz, size_t nm, void* ud) {
     return n;
 }
 
-// What a response told us about itself. Only the two headers worth keeping:
+// What a response told us about itself. Only the headers worth keeping:
 // cf-ray, whose suffix is the Cloudflare edge that served the request, and
 // Server, which distinguishes R2 from AWS from MinIO without asking anybody.
-struct HeaderCtx { std::string cf_ray; std::string server; };
+// Date is the store's own clock, which is how a box checks its time of day.
+struct HeaderCtx { std::string cf_ray; std::string server; std::string date; };
 static size_t collect_headers(char* ptr, size_t sz, size_t nm, void* ud) {
     auto* hc = static_cast<HeaderCtx*>(ud);
     const size_t n = sz * nm;
@@ -51,6 +54,7 @@ static size_t collect_headers(char* ptr, size_t sz, size_t nm, void* ud) {
     std::string v;
     if (header_is(line, "cf-ray", v))      hc->cf_ray = v;
     else if (header_is(line, "server", v)) hc->server = v;
+    else if (header_is(line, "date", v))   hc->date = v;
     return n;
 }
 
@@ -109,6 +113,9 @@ struct S3Transport::Impl {
     mutable std::mutex obs_mtx;
     std::string last_colo;
     std::string last_server;
+    // The store's clock minus ours, from the Date header — see
+    // Transport::server_clock_skew_ms. Guarded by obs_mtx with the rest.
+    int64_t     last_skew_ms = 0;
     // Kept apart because they answer different questions and a site only ever
     // does one of them: a main site's figure is what its upload is managing, a
     // campus's is whether it can bank a buffer. Averaging them together would
@@ -122,6 +129,16 @@ struct S3Transport::Impl {
         const std::string colo = cloudflare_colo(hc.cf_ray);
         if (!colo.empty())        last_colo = colo;
         if (!hc.server.empty())   last_server = hc.server;
+        // The store stamps Date from its own NTP-disciplined servers, so the
+        // difference is this machine's error (to within the round trip, which
+        // is milliseconds and irrelevant to a seconds-level check).
+        int64_t server_ms = 0;
+        if (!hc.date.empty() && parse_http_date_ms(hc.date, server_ms)) {
+            const int64_t local_ms =
+                (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+            last_skew_ms = server_ms - local_ms;
+        }
         (uploading ? up : down).add(bytes, seconds);
     }
 
@@ -367,6 +384,10 @@ std::string S3Transport::last_colo() const {
 std::string S3Transport::last_server() const {
     std::lock_guard<std::mutex> lk(d->obs_mtx);
     return d->last_server;
+}
+int64_t S3Transport::server_clock_skew_ms() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->last_skew_ms;
 }
 double S3Transport::observed_upload_bytes_per_s() const {
     std::lock_guard<std::mutex> lk(d->obs_mtx);

@@ -23,7 +23,6 @@ using multisite::HttpResponse;
 using multisite::HttpServer;
 using multisite::StorageProvider;
 using multisite::all_providers;
-using multisite::provider_info;
 using multisite::provider_key;
 using multisite::provider_from_key;
 using multisite::detect_provider;
@@ -109,7 +108,7 @@ json status_json(const Player& player) {
     json markers = json::array();
     for (const auto& m : s.markers)
         markers.push_back(json{{"label", m.label}, {"id", m.id},
-                               {"at_ms", m.at_ms}});
+                               {"author", m.author}, {"at_ms", m.at_ms}});
     j["markers"] = std::move(markers);
     j["current_marker"] = s.current_marker;
 
@@ -151,7 +150,9 @@ json config_json(const Config& c) {
     j["lan_auth_token_set"] = !c.lan_auth_token.empty();
 
     j["room_id"]            = c.room_id;
+    j["site_name"]          = c.site_name;
     j["pinned_event_id"]    = c.pinned_event_id;
+    j["follow_next_event"]  = c.follow_next_event;
     j["prebuffer_segments"] = c.prebuffer_segments;
     j["start_buffer_seconds"] = c.start_buffer_seconds;
     j["poll_interval_ms"]   = c.poll_interval_ms;
@@ -160,6 +161,7 @@ json config_json(const Config& c) {
     j["max_cached_segments"] = c.max_cached_segments;
     j["stale_after_ms"]     = c.stale_after_ms;
     j["cache_dir"]          = c.cache_dir;
+    j["hardware_decode"]    = c.hardware_decode;
 
     j["drm_card"]        = c.drm_card;
     j["connector"]       = c.connector;
@@ -286,6 +288,7 @@ Config apply_edit(Config c, const json& j) {
         }
     }
     take(j, "room_id", c.room_id);
+    take(j, "site_name", c.site_name);
 
     take(j, "prebuffer_segments",   c.prebuffer_segments);
     take(j, "start_buffer_seconds", c.start_buffer_seconds);
@@ -295,6 +298,8 @@ Config apply_edit(Config c, const json& j) {
     take(j, "max_cached_segments",  c.max_cached_segments);
     take(j, "stale_after_ms",       c.stale_after_ms);
     take(j, "cache_dir",            c.cache_dir);
+    take(j, "hardware_decode",      c.hardware_decode);
+    take(j, "follow_next_event",    c.follow_next_event);
 
     take(j, "drm_card",   c.drm_card);
     take(j, "connector",  c.connector);
@@ -463,6 +468,19 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         [&player](const HttpRequest& req) {
             player.jump_to_marker(req.param("id"));
         }));
+    // Drop a cue with an operator-typed name. The one control here that
+    // WRITES, so a refusal is reported to the page rather than swallowed —
+    // "no site name is set" is something an operator has to fix.
+    server.route("POST", "/api/cue", [&player](const HttpRequest& req,
+                                               HttpResponse& res) {
+        std::string err;
+        if (!player.add_cue(req.param("label"), err)) {
+            res.status = 409;
+            res.json(json{ {"ok", false}, {"error", err} }.dump());
+            return;
+        }
+        res.json(status_json(player).dump());
+    });
     server.route("POST", "/api/load", control("load",
         [&player](const HttpRequest& req) {
             const std::string id = req.param("event");
@@ -641,7 +659,8 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                           {"local_time", t.local_time},
                           {"timezone", t.timezone},
                           {"ntp_enabled", t.ntp_enabled},
-                          {"ntp_synchronised", t.ntp_synchronised}}},
+                          {"ntp_synchronised", t.ntp_synchronised},
+                          {"clock_skew_ms", player.clock_skew_ms()}}},
             {"disk", json{{"path", disk.path},
                           {"total_bytes", disk.total_bytes},
                           {"free_bytes", disk.free_bytes},

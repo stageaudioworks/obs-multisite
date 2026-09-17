@@ -191,13 +191,12 @@ that checkable without the hardware:
 
 ## What the tests cover
 
-Thirty suites, all runnable without OBS. How many a given build produces depends
-on what is installed, so `ctest -N` is the way to know rather than a number here
-that goes stale — but the gates are these: the `cmaf*` three need FFmpeg,
-`s3_url` and `s3_cancel` need libcurl, `preview` and the whole appliance need
-FFmpeg and libcurl together, the three relay suites need
-`-DMULTISITE_BUILD_RELAY=ON`, and `core_portable` needs a POSIX host. A full
-build on this machine is 30; with CMake and FFmpeg alone it is 24.
+Every suite runs without OBS. How many a given build produces depends on what
+is installed, so `ctest -N` is the way to know rather than a number here that
+goes stale — but the gates are these: the `cmaf*` suites need FFmpeg, `s3_url`
+and `s3_cancel` need libcurl, `preview` and the whole appliance need FFmpeg and
+libcurl together, the three relay suites need `-DMULTISITE_BUILD_RELAY=ON`, and
+`core_portable` needs a POSIX host.
 
 | suite | what it proves |
 |---|---|

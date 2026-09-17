@@ -46,7 +46,7 @@ void add_settings_tab(QTabWidget* tabs, QWidget* content, const QString& title) 
     if (!tabs || !content) return;
     tighten(content);
 
-    auto* scroll = new QScrollArea(tabs);
+    auto* scroll = new ShrinkableScrollArea(tabs);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     // Horizontal scrolling would mean the page is too narrow, which is a layout

@@ -41,6 +41,14 @@ struct BroadcastSettings {
     std::string secret_access_key;
     std::string region = "auto";
     std::string room_id = "main-auditorium";
+    // What this machine calls itself, stamped on every cue it drops. Empty
+    // reads as "main site" — which the encoder is unless told otherwise. The
+    // Cues dock is the same on either end, so both have this (§7).
+    std::string site_name;
+    // Where this machine keeps the durable store-and-forward queue — the
+    // encoder's equivalent of a satellite's cache folder. Empty keeps the
+    // built-in location beside OBS's own plugin config, as the decoder does.
+    std::string cache_dir;
     // Operator-facing title for the next event, taken from the dock at Go
     // Live. Not persisted: it is per-event and defaults to the current
     // date/time. Empty means "no custom name".
@@ -59,8 +67,6 @@ struct BroadcastSettings {
         "Main mix,Sermon ISO,Click";
     std::string channel_labels =
         "Main L,Main R,Sermon ISO,Click,Spare 5,Spare 6,Spare 7,Spare 8";
-    std::string marker_labels =
-        "Sermon Start,Offering,Go to local,Dismissal";
     // How this feed is composited, if it carries more than one picture:
     // "1x1", "2x1", "1x2" or "2x2". The satellite splits it accordingly and
     // exposes each region as its own source. Declared rather than detected —
@@ -110,6 +116,10 @@ struct BroadcastStatus {
     // The link, as measured from this broadcast's own uploads.
     std::string colo;
     std::string storage_host;
+    // This machine's clock against the store's, from the HTTP Date header on
+    // traffic already being sent. A large value means THIS box is the one that
+    // is out; 0 means nothing has been observed yet.
+    long long   clock_skew_ms = 0;
     double      upload_bytes_per_s = 0.0;
     unsigned long long upload_samples = 0;
     // Free space where the durable spool lives. Checked whether live or

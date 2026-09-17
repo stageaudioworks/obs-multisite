@@ -36,6 +36,17 @@ function hhmmss(ms) {
   return d.toLocaleTimeString('en-GB', { hour12: false });
 }
 
+// Elapsed time within an event: "4:05", or "1:24:15" for a long one. Distinct
+// from hhmmss(), which is a time of day.
+function elapsedClock(ms) {
+  if (!ms || ms < 0) ms = 0;
+  const t = Math.floor(ms / 1000);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = String(t % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
 function shortDateTime(ms) {
   if (!ms) return '';
   return new Date(ms).toLocaleString('en-GB', {
@@ -277,10 +288,20 @@ function drawCues(s) {
   const box = $('#cues');
   const markers = s.markers || [];
   if (!markers.length) { box.innerHTML = ''; return; }
+  // A recording's cue times run 00:00 to the end of the event; live they are
+  // times of day. Same rule the playhead readout follows.
+  const vod = !!s.ended || !!s.interrupted;
+  const started = s.started_ms || 0;
   box.innerHTML = markers.map((m) => {
     const passed = m.at_ms && s.playhead_ms && m.at_ms <= s.playhead_ms;
+    const who = m.author
+      ? ' <span class="muted">' + escapeHtml(m.author) + '</span>' : '';
+    const when = m.at_ms
+      ? ((vod && started && m.at_ms >= started)
+          ? elapsedClock(m.at_ms - started) : hhmmss(m.at_ms))
+      : '';
     return `<button class="${passed ? 'passed' : ''}" data-marker="${escapeHtml(m.id)}">
-              ${escapeHtml(m.label)} <span class="muted">${hhmmss(m.at_ms)}</span>
+              ${escapeHtml(m.label)}${who} <span class="muted">${when}</span>
             </button>`;
   }).join('');
 }
@@ -361,6 +382,18 @@ $('#cues').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-marker]');
   if (b) control('/api/marker?id=' + encodeURIComponent(b.dataset.marker));
 });
+
+// Drop a cue with whatever name is typed. The one control here that writes, so
+// a refusal ("no site name is set") is shown rather than swallowed.
+$('#btn-cue').onclick = async () => {
+  const label = $('#cue-name').value.trim() || 'Cue';
+  try {
+    status = await api('POST', '/api/cue?label=' + encodeURIComponent(label));
+    $('#cue-name').value = '';
+    notify('');
+    drawStatus();
+  } catch (e) { notify(e.message, true); }
+};
 
 $('#lock').onclick = async () => {
   const on = !(status && status.locked);
@@ -498,6 +531,7 @@ async function loadSettings() {
   settings = await api('GET', '/api/config');
   const set = (sel, value) => { const el = $(sel); if (el) el.value = value; };
   set('#c-room', settings.room_id);
+  set('#c-site', settings.site_name || '');
   set('#c-bucket', settings.bucket);
   set('#c-account', settings.r2_account_id);
   set('#c-endpoint', settings.endpoint_host);
@@ -516,6 +550,8 @@ async function loadSettings() {
   set('#c-cache', settings.cache_dir);
   set('#c-idle', settings.idle_mode);
   set('#c-tile', String(settings.tile_index ?? -1));
+  set('#c-hwdecode', String(settings.hardware_decode !== false));
+  set('#c-follownext', String(settings.follow_next_event !== false));
   set('#c-channels', settings.audio_channels);
   set('#c-audio-track', settings.audio_track);
   set('#c-audio-on', String(settings.audio_enabled));
@@ -629,6 +665,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
   const mode = ($('#c-mode').value || '0x0x0').split('x').map(Number);
   const body = {
     room_id: $('#c-room').value.trim(),
+    site_name: $('#c-site').value.trim(),
     storage_provider: $('#c-provider').value,
     bucket: $('#c-bucket').value.trim(),
     r2_account_id: $('#c-account').value.trim(),
@@ -648,6 +685,8 @@ $('#settings-form').addEventListener('submit', async (e) => {
     out_height: mode[1] || 0,
     out_fps: mode[2] || 0,
     tile_index: Number($('#c-tile').value),
+    hardware_decode: $('#c-hwdecode').value === 'true',
+    follow_next_event: $('#c-follownext').value === 'true',
     idle_mode: $('#c-idle').value,
     idle_image_path: $('#c-idle-image').value.trim(),
     audio_enabled: $('#c-audio-on').value === 'true',
@@ -744,7 +783,8 @@ async function loadAes67() {
     add('AES67 service', s.service_active ? 'running' : 'not running');
     if (s.rest_reachable) {
       add('PTP clock', s.ptp_locked
-          ? ('locked' + (s.ptp_gmid ? ' to ' + s.ptp_gmid : ''))
+          ? ('locked' + (s.ptp_gmid ? ' to ' + s.ptp_gmid : '') +
+             (s.ptp_jitter ? ' (±' + s.ptp_jitter.toFixed(1) + ' ns)' : ''))
           : (s.ptp_status || 'not locked'));
       if (s.source_present) {
         add('Stream', (s.source_enabled ? 'sending' : 'stopped') +
@@ -858,6 +898,12 @@ async function loadSystem() {
   add('Clock', s.time.local_time + ' (' + s.time.timezone + ')');
   add('Network time', s.time.ntp_enabled
       ? (s.time.ntp_synchronised ? 'on, in step' : 'on, not yet in step') : 'off');
+  // A clock that is out puts this campus's cues in the wrong place on every
+  // other site's timeline, so it earns its own line. The figure is the store's
+  // own clock (from the Date header on ordinary traffic) against this box's.
+  const skew = Number(s.time.clock_skew_ms || 0);
+  if (Math.abs(skew) >= 2000)
+    add('Clock is out', (skew > 0 ? '+' : '') + Math.round(skew / 1000) + ' s against the store');
   add('Running for', spoken(s.uptime_s));
   if (s.cpu_temp_c) add('Temperature', s.cpu_temp_c.toFixed(1) + ' °C');
   if (s.disk && s.disk.total_bytes)

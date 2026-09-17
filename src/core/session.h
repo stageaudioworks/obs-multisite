@@ -52,7 +52,7 @@ struct SessionConfig {
     // operator instead of calling resume() itself. Same shape as the
     // decoder's own stale_after_ms, which makes the same kind of judgment
     // about a quiet room. See PROJECT-SCOPE.md §5.1.
-    int64_t     resume_stale_after_ms = 30 * 60 * 1000; // 30 minutes
+    int64_t     resume_stale_after_ms = 30LL * 60 * 1000; // 30 minutes
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
@@ -119,6 +119,24 @@ public:
 
     // Append a marker and publish markers.json.
     void add_marker(const std::string& label, const std::string& type = "cue");
+
+    // Who this encoder is — "Main site", a room name, whatever the operator
+    // called it. Stamped on every cue it drops so a shared cue list can say
+    // which site set one. Empty (the default) reads as the main site.
+    void set_author_name(const std::string& name);
+
+    // The cues this event has, in the order they were published — the
+    // encoder's own, plus any a LAN satellite handed in (see add_cue_from).
+    // A guarded copy, safe to call from the UI thread.
+    std::vector<Marker> markers() const;
+
+    // A cue handed in by another site over the LAN, where this encoder is
+    // acting as the hub because the satellite has no bucket of its own. Writes
+    // the author's own cue object (so cloud readers see it too), folds it into
+    // the list served over the LAN, and republishes. Returns false with
+    // `error` when the cue could not be stored.
+    bool add_cue_from(const std::string& author, const std::string& label,
+                      std::string& error);
 
     // Refresh live.json's heartbeat (drives decoder stale-detection).
     void heartbeat();
@@ -252,9 +270,14 @@ private:
     std::string m_event_id;
     uint64_t    m_next_seq = 0;
     int64_t     m_last_heartbeat_ms = 0;
+    std::string m_author_name;      // guarded by m_mtx; stamped on cues
 
     Manifest    m_manifest;
     MarkerList  m_markers;
+    // Cues handed in over the LAN by other sites, kept apart from the
+    // encoder's own so markers.json stays exactly what it always was; the two
+    // are merged only for what the LAN serves.
+    MarkerList  m_guest_markers;
     uint64_t    m_dropped_total = 0;   // guarded by m_mtx
     // Set once in resume(), read by status(). Empty resumed_event_id means
     // this run started fresh. Guarded by m_mtx like the rest of Status's
@@ -274,6 +297,10 @@ private:
     std::string segment_key(uint64_t seq) const;
     std::string event_prefix() const;
     bool  put_json(const std::string& key, const std::string& body);
+    // Fires the markers-published hook with every cue this event has — the
+    // encoder's own plus any a LAN satellite handed in — so a LAN decoder sees
+    // cues from every site, including ones set at another campus.
+    void  publish_lan_markers();
     bool  put_bytes(const std::string& key, const std::vector<uint8_t>& b,
                     const std::string& content_type);
     std::string publish_manifest_locked();

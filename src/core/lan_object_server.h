@@ -63,6 +63,17 @@ public:
     void stop();
     int  port() const;
 
+    // A cue handed in by a satellite that has no bucket of its own, over
+    // POST /api/cue. The server does not write anything: it parses and
+    // authorises the request and hands it to this, which is the encoder's
+    // Session (see Session::add_cue_from) — so one writer owns each cue
+    // object and a satellite stays read-only where it has to be. Returns
+    // false with `error` set when the cue is refused.
+    using CueHandler = std::function<bool(const std::string& author,
+                                          const std::string& label,
+                                          std::string& error)>;
+    void set_cue_callback(CueHandler cb) { m_on_cue = std::move(cb); }
+
     // Wire these three straight to the matching Session callbacks
     // (set_event_started_callback / set_segment_confirmed_callback /
     // set_manifest_published_callback) and this class needs nothing else.
@@ -113,6 +124,9 @@ private:
     bool check_auth(const HttpRequest& req) const;
     void handle_events(const HttpRequest& req, HttpResponse& res);
     void handle_live(const HttpRequest& req, HttpResponse& res);
+    void handle_cue(const HttpRequest& req, HttpResponse& res);
+
+    CueHandler m_on_cue;            // set by the encoder; empty means no cue authoring
 };
 
 } // namespace multisite

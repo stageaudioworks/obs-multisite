@@ -302,6 +302,52 @@ int main() {
         ses.end();
     }
 
+    std::printf("== 3b. A LAN satellite's cue joins the event, one object per site ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s3b").string();
+        Session ses(cfg, store);
+
+        std::string published;   // the merged list a LAN decoder would be served
+        ses.set_markers_published_callback(
+            [&](const std::string& json) { published = json; });
+
+        ses.start_new(blob(0), video, tracks);
+        ses.publish_segment(blob(1), 6.0, 0.0);
+
+        std::string err;
+        CHECK(ses.add_cue_from("Campus B", "Notice", err),
+              "the encoder accepts a cue for a satellite");
+
+        const std::string own =
+            "events/" + ses.event_id() + "/cues/campus-b.json";
+        CHECK(store.objects.count(own) == 1,
+              "the cue is written under the satellite's OWN site object");
+        MarkerList cl = MarkerList::from_json(store.text(own));
+        CHECK(cl.markers.size() == 1 && cl.markers[0].author == "Campus B",
+              "carrying the site name as its author");
+
+        MarkerList lan = MarkerList::from_json(published);
+        CHECK(lan.markers.size() == 1 && lan.markers[0].label == "Notice",
+              "the LAN list already carries the satellite's cue");
+
+        const std::string cloud_json =
+            store.text("events/" + ses.event_id() + "/markers.json");
+        CHECK(cloud_json.empty(),
+              "the encoder's own markers.json is not written by a guest cue");
+
+        ses.add_marker("Sermon Start");
+        MarkerList lan2 = MarkerList::from_json(published);
+        bool has_notice = false, has_sermon = false;
+        for (const auto& m : lan2.markers) {
+            if (m.label == "Notice")       has_notice = true;
+            if (m.label == "Sermon Start") has_sermon = true;
+        }
+        CHECK(lan2.markers.size() == 2 && has_notice && has_sermon,
+              "and the LAN list merges both sites' cues");
+        ses.end();
+    }
+
     std::printf("== 4. Resume continues the sequence after a crash ==\n");
     {
         MemStore store;

@@ -60,6 +60,48 @@ RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
 
 RoomFeeder::~RoomFeeder() { stop(); }
 
+std::vector<multisite::Marker> RoomFeeder::markers() const {
+    return m_session ? m_session->markers() : std::vector<multisite::Marker>{};
+}
+
+std::vector<multisite::Marker> RoomFeeder::event_cues(
+    const std::string& event_id, std::string& error) const {
+    if (!m_transport) {
+        error = "a cue list needs cloud storage — a LAN hub only holds the "
+                "event in progress";
+        return {};
+    }
+    const std::string prefix = multisite::event_prefix_for(event_id);
+    std::vector<multisite::MarkerList> parts;
+
+    // The encoder's own file, then one per author, merged — the same rule the
+    // decoder applies to the live event, so the two agree about a recording's
+    // cues.
+    auto mk = m_transport->get(prefix + "markers.json");
+    if (mk.success) {
+        try {
+            parts.push_back(multisite::MarkerList::from_json(
+                std::string(mk.body.begin(), mk.body.end())));
+        } catch (...) {}
+    }
+    auto ls = m_transport->list(multisite::cues_prefix_for(event_id), "", "", 1000);
+    if (ls.success) {
+        for (const auto& e : ls.keys) {
+            if (e.key.size() < 6 ||
+                e.key.compare(e.key.size() - 5, 5, ".json") != 0)
+                continue;
+            auto cg = m_transport->get(e.key);
+            if (!cg.success) continue;
+            try {
+                parts.push_back(multisite::MarkerList::from_json(
+                    std::string(cg.body.begin(), cg.body.end())));
+            } catch (...) {}
+        }
+    }
+    if (parts.empty()) return {};
+    return multisite::merge_markers(std::move(parts)).markers;
+}
+
 std::string RoomFeeder::check_storage() {
     // Cloud, when there is one, is the more informative check: self_test()
     // actually verifies the credentials rather than just reachability, and a

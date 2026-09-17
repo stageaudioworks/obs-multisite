@@ -59,9 +59,18 @@ struct Config {
 
     // ── What to receive ──────────────────────────────────────────────────────
     std::string room_id = "main-auditorium";
+    // What this box is called on the cues it drops — "Campus B". Empty means it
+    // receives cues but authors none.
+    std::string site_name;
     // Play this specific past event instead of following the room. Empty is
     // the normal, live case.
     std::string pinned_event_id;
+    // When the event being relayed ends, pick up whatever the room does next
+    // rather than sitting on the finished recording. On by default: this box is
+    // usually unattended, and a satellite that stops following until someone
+    // presses a button is not doing its job. Off is for a venue that wants to
+    // hold a recording deliberately (the web page still offers Follow live).
+    bool follow_next_event = true;
 
     // ── Receive tuning (see DecoderConfig for what each one buys) ────────────
     int prebuffer_segments   = 2;
@@ -75,6 +84,14 @@ struct Config {
     // would wear a card out. The install script points this at the SSD if it
     // finds one.
     std::string cache_dir = "/var/lib/multisite-player/cache";
+
+    // Prefer a hardware video decoder when this box has one, falling back to
+    // software. On a Pi 4 that is h264_v4l2m2m: without it H.264 is decoded in
+    // software, which is the difference between a picture that keeps up and
+    // three of the four cores spent keeping up. Ignored where no such decoder
+    // exists — every non-Pi, and the Pi 5 — because a preference that cannot
+    // be opened falls through to software (see CmafDecoder).
+    bool hardware_decode = true;
 
     // ── Video output ─────────────────────────────────────────────────────────
     std::string drm_card;               // blank = first card with a connected output

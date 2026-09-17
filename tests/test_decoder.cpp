@@ -58,6 +58,18 @@ public:
         }
         return r;
     }
+    // Enumerates the fake store. The cue merge lists the per-author prefix; a
+    // bare prefix match is all this needs to stand in for ListObjectsV2.
+    ListResult list(const std::string& prefix, const std::string&,
+                    const std::string&, int) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        ListResult r;
+        for (const auto& kv : objects)
+            if (kv.first.compare(0, prefix.size(), prefix) == 0)
+                r.keys.push_back(ListEntry{ kv.first, (int64_t)kv.second.size(), "" });
+        r.success = true; r.http_status = 200;
+        return r;
+    }
 };
 
 // Publishes an event the way the encoder does, so the decoder sees realistic
@@ -890,12 +902,27 @@ int main() {
         CHECK(dec.was_live_this_session(),
               "still knows the broadcast ended while we watched");
 
-        // A different event resets the memory.
+        // Watching an event through to its own end holds it. The next event
+        // going live in the room must NOT steal the playback: being pulled out
+        // of a recording somebody is part-way through is worse than being told
+        // about the new one — which is what live_elsewhere() is for.
         FakeEncoder enc2(store, "r", "01EVENTNEXTNEXTNEXTNEXTNE");
         enc2.publish_start();
         for (int i = 0; i < 3; ++i) enc2.publish_segment();
-        enc2.end();
         dec.poll(enc2.clock_ms);
+        CHECK(dec.event_id() == "01EVENTWASLIVEWASLIVEWASL",
+              "a new event does not steal a recording that has just finished");
+        CHECK(dec.is_pinned(),
+              "the finished event is held exactly as if it had been pinned");
+        CHECK(dec.live_elsewhere(), "and the operator is told something is live");
+
+        // Return to live is what follows the room again, and it is only then
+        // that the new event takes over — with a clean slate.
+        enc2.end();
+        dec.unpin();
+        dec.poll(enc2.clock_ms);
+        CHECK(dec.event_id() == "01EVENTNEXTNEXTNEXTNEXTNE",
+              "Return to live follows the room to the new event");
         CHECK(!dec.was_live_this_session(),
               "a different event starts with a clean slate");
     }
@@ -1043,6 +1070,161 @@ int main() {
               "and has a minute buffered ahead of the playhead");
         std::printf("     (started %.0fs behind live, %.0fs buffered ahead)\n",
                     dec.behind_live_s(), dec.buffered_ahead_s());
+    }
+
+    std::printf("== 23. Cues: one object per author, merged for every site ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "main-auditorium", "01EVENTCUESCUESCUESCUESCCC");
+        enc.publish_start();
+        for (int i = 0; i < 8; ++i) enc.publish_segment();
+        enc.drop_marker("Sermon Start");          // the encoder's own cue
+
+        DecoderConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.cache_dir = (base / "cache_cues").string();
+        cfg.author_name = "Campus B";
+        cfg.can_author_cues = true;
+
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(20);
+
+        std::string err;
+        CHECK(dec.add_cue("Our notice", err), "a satellite drops a cue of its own");
+        const std::string own = "events/" + enc.event + "/cues/campus-b.json";
+        CHECK(store.objects.count(own) == 1,
+              "the cue is written to this site's OWN object");
+        {
+            const auto& raw = store.objects[own];
+            auto cj = MarkerList::from_json(std::string(raw.begin(), raw.end()));
+            CHECK(cj.markers.size() == 1 && cj.markers[0].author == "Campus B",
+                  "and it carries the site name as its author");
+        }
+        CHECK(dec.markers().size() == 2,
+              "the site sees its own cue at once, beside the encoder's");
+
+        // A second site authors independently; the next poll merges all three.
+        MarkerList other;
+        other.markers.push_back(Marker{ 1, enc.clock_ms - 500, "cue", "Welcome",
+                                        "campus-c-id", "Campus C" });
+        const std::string oj = other.to_json();
+        store.put("events/" + enc.event + "/cues/campus-c.json",
+                  std::vector<uint8_t>(oj.begin(), oj.end()), "", {});
+        enc.clock_ms += 6000;
+        enc.publish_segment();
+        dec.poll(enc.clock_ms);
+        auto merged = dec.markers();
+        CHECK(merged.size() == 3, "cues from three sites merge into one list");
+        CHECK(merged.size() == 3 && merged[0].label == "Welcome" &&
+              merged[0].author == "Campus C",
+              "and are ordered by time, each author intact");
+    }
+
+    std::printf("== 24. A LAN satellite authors through the hub, not the bucket ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTHUBHUBHUBHUBHUBHUBH");
+        enc.publish_start();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_hub").string();
+        cfg.author_name = "Campus D";
+        cfg.can_author_cues = true;
+        bool hub_used = false;
+        cfg.cue_hub = [&](const std::string& author, const std::string& label,
+                          std::string& merged, std::string& error) {
+            hub_used = true;
+            CHECK(author == "Campus D", "the hub is told which site is authoring");
+            MarkerList ml;
+            Marker mk; mk.seq = 1; mk.at_ms = enc.clock_ms; mk.type = "cue";
+            mk.label = label; mk.id = "hub-id"; mk.author = author;
+            ml.markers.push_back(mk);
+            merged = ml.to_json();
+            error.clear();
+            return true;
+        };
+
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        std::string err;
+        CHECK(dec.add_cue("Hub cue", err), "the cue is accepted through the hub");
+        CHECK(hub_used, "and the hub was used, not a bucket write");
+        CHECK(store.objects.count("events/" + enc.event + "/cues/campus-d.json") == 0,
+              "no cue object was written by the satellite itself");
+        CHECK(dec.markers().size() == 1 && dec.markers()[0].label == "Hub cue",
+              "the hub's merged list is reflected locally at once");
+    }
+
+    std::printf("== 25. A cue on a RECORDING lands at the playhead, not the end ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTRECRECRECRECRECRECR");
+        enc.publish_start();
+        for (int i = 0; i < 30; ++i) enc.publish_segment();
+        enc.end();                         // a finished recording
+
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_rec").string();
+        cfg.author_name = "Campus B";
+        cfg.can_author_cues = true;
+
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(40);
+        CHECK(dec.start(), "the recording starts playing");
+        for (int i = 0; i < 3; ++i) { dec.next_segment(); dec.pump_downloads(4); }
+        const uint64_t head = dec.playback_head();
+        CHECK(head < dec.live_edge(),
+              "the playhead is inside the recording, not at its end");
+
+        std::string err;
+        CHECK(dec.add_cue("Halfway", err), "a cue can be dropped on a recording");
+        const std::string own = "events/" + enc.event + "/cues/campus-b.json";
+        auto it = store.objects.find(own);
+        CHECK(it != store.objects.end(), "the cue object was written");
+        MarkerList cl;
+        if (it != store.objects.end())
+            cl = MarkerList::from_json(std::string(it->second.begin(), it->second.end()));
+        CHECK(cl.markers.size() == 1 && cl.markers[0].seq == head,
+              "and it is stamped at the playhead, not the live edge");
+        CHECK(cl.markers.size() == 1 && cl.markers[0].seq < dec.live_edge(),
+              "so it is nowhere near the end of the event");
+        CHECK(cl.markers.size() == 1 &&
+              cl.markers[0].at_ms >= enc.started_at_ms,
+              "and carries the event's own time, not today's");
+
+        // And when the host says which frame is on screen, the cue goes in the
+        // segment that time falls IN, at exactly that time — not wherever the
+        // session's head has run ahead to.
+        const long long at = enc.started_at_ms + 5 * 6000 + 3000;   // 5.5 segments in
+        std::string err2;
+        CHECK(dec.add_cue("By time", err2, 0, at), "a cue can be placed by on-screen time");
+        MarkerList cl2;
+        auto it2 = store.objects.find(own);
+        if (it2 != store.objects.end())
+            cl2 = MarkerList::from_json(std::string(it2->second.begin(), it2->second.end()));
+        bool placed = false;
+        for (const auto& m : cl2.markers)
+            if (m.label == "By time") placed = (m.seq == 5 && m.at_ms == at);
+        CHECK(placed, "landing in the segment that time falls in, at exactly that time");
+
+        // And the path a host actually uses: the on-screen segment, straight.
+        // No clock involved, so a seek that re-pins the clock cannot move it.
+        std::string err3;
+        CHECK(dec.add_cue("By segment", err3, 17),
+              "a cue can be placed by the on-screen segment");
+        MarkerList cl3;
+        auto it3 = store.objects.find(own);
+        if (it3 != store.objects.end())
+            cl3 = MarkerList::from_json(std::string(it3->second.begin(), it3->second.end()));
+        bool placed3 = false;
+        for (const auto& m : cl3.markers)
+            if (m.label == "By segment") placed3 = (m.seq == 17);
+        CHECK(placed3, "landing on exactly the segment the host named");
     }
 
     fs::remove_all(base);

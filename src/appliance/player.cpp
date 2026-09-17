@@ -143,6 +143,12 @@ Config Player::config() const {
     return m_cfg;
 }
 
+long long Player::clock_skew_ms() const {
+    std::shared_ptr<S3Transport> tx;
+    { std::lock_guard<std::mutex> lk(m_obj_mtx); tx = m_transport; }
+    return tx ? (long long)tx->server_clock_skew_ms() : 0;
+}
+
 Player::StorageHealth Player::storage_health(bool probe) {
     StorageHealth h;
     const Config cfg = config();
@@ -278,6 +284,26 @@ void Player::rebuild_session() {
     dc.keep_behind_segments = cfg.keep_behind_segments;
     dc.stale_after_ms       = cfg.stale_after_ms;
     dc.pinned_event_id      = cfg.pinned_event_id;
+    // An appliance is usually unattended: when the event it is relaying ends it
+    // should pick up the next one the room starts, not sit on the finished
+    // recording waiting for someone to press Follow live. (There IS a Follow
+    // live control on the web page — /api/follow-live — for the case where an
+    // operator wants to hold a recording deliberately.) follow_next_event is the
+    // operator-facing form of this; the config default is to follow.
+    dc.hold_finished_event  = !cfg.follow_next_event;
+    // Cues: who this box is, and whether it may drop one. See DecoderConfig.
+    dc.author_name          = cfg.site_name;
+    dc.can_author_cues      = !cfg.site_name.empty() && cfg.configured();
+    if (m_lan_transport && !m_transport) {
+        // A cue goes to the encoder's hub only when there is no bucket to write
+        // to. With cloud configured the cue is written directly, so a
+        // configured-but-unreachable LAN host cannot break cue authoring.
+        auto lan = m_lan_transport;
+        dc.cue_hub = [lan](const std::string& author, const std::string& label,
+                           std::string& merged, std::string& error) {
+            return lan->publish_cue(author, label, merged, error);
+        };
+    }
     m_session = std::make_shared<DecoderSession>(dc, *active);
 
     // Event browsing (§7.5) is inherently cloud-only — there is no such
@@ -830,6 +856,11 @@ const char* Player::aes67_reconcile_once() {
         cfg.aes67_address.empty() ? aes67_default_address() : cfg.aes67_address;
 
     const Aes67State st = aes67_probe(cfg.alsa_device, width, address);
+    // Cached for the status line (atomics, not under m_aes67_mtx — see the
+    // header). Written here because this is the only place the probe runs.
+    m_aes67_ptp_known  = st.ptp_known;
+    m_aes67_ptp_locked = st.ptp_locked;
+    m_aes67_ptp_jitter = st.ptp_jitter;
     const Aes67Action action = aes67_converge_action(st, cfg.aes67_manage,
                                                      st.source_correct);
     switch (action) {
@@ -1050,6 +1081,10 @@ void Player::deliver_loop() {
             const long long segstart = m_seg_starts_at_ms.load();
             if (segstart > 0)
                 m_playing_at_ms = segstart + (pts - base) / 1000000LL;
+            // The segment of the frame going to air, from the frame itself. A
+            // cue is placed with this rather than a clock reading, because the
+            // media clock is re-pinned on every seek.
+            if (item.is_video) m_on_screen_seq = item.video.seq;
         }
 
         // Boot splash: while it is showing, drop video and audio alike so the
@@ -1423,9 +1458,20 @@ void Player::poll_loop() {
                     : sess->at_end()                         ? "at-end"
                     : sess->play_state() == PlayState::Stopped ? "starting"
                                                                : "playing";
+                // PTP lock accuracy, when this box manages the network sound.
+                // Appended to the one line somebody already reads rather than
+                // logged separately: the accuracy question (BUGS.md entry 1) is
+                // only answerable over a long run, so it has to be in the
+                // periodic record and not only when the state changes.
+                char ptp[64] = "";
+                if (m_aes67_ptp_known.load())
+                    std::snprintf(ptp, sizeof(ptp), " ptp=%s%.1fns",
+                                  m_aes67_ptp_locked.load() ? "locked "
+                                                            : "UNLOCKED ",
+                                  m_aes67_ptp_jitter.load());
                 plog_info("%s head=%llu live=%llu behind=%.0fs buffered=%.0fs "
                           "cached=%zu downloaded=%llu frames_out=%llu "
-                          "fps=%.1f dropped=%llu (%llu v / %llu a)",
+                          "fps=%.1f dropped=%llu (%llu v / %llu a)%s",
                           state,
                           (unsigned long long)sess->playback_head(),
                           (unsigned long long)sess->live_edge(),
@@ -1435,7 +1481,8 @@ void Player::poll_loop() {
                           (unsigned long long)out, fps,
                           (unsigned long long)m_frames_dropped.load(),
                           (unsigned long long)m_dropped_video.load(),
-                          (unsigned long long)m_dropped_audio.load());
+                          (unsigned long long)m_dropped_audio.load(),
+                          ptp);
 
                 // A stall that looks nothing like a download problem: the
                 // exact shape BUGS.md entry 0 describes — head and frames_out
@@ -1537,6 +1584,14 @@ void Player::feed_loop() {
                 continue;
             }
             auto dec = std::make_shared<CmafDecoder>();
+            // Pi 4: prefer the hardware H.264 decoder, falling back to
+            // software. The name is ignored on any box that has no such
+            // decoder — every non-Pi, and the Pi 5 — so asking for it
+            // unconditionally is safe; where it does open, it is the
+            // difference between a picture that keeps up and three cores
+            // spent keeping up. See CmafDecoder::set_preferred_video_decoders.
+            if (config().hardware_decode)
+                dec->set_preferred_video_decoders({ "h264_v4l2m2m" });
             dec->on_video([this](const DecodedVideoFrame& f) { on_video(f); });
             dec->on_audio([this](const DecodedAudioFrame& f) { on_audio(f); });
             if (!dec->start(seg->init)) {
@@ -1568,7 +1623,19 @@ void Player::feed_loop() {
             m_skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
 
         // push_fragment blocks when the decoder is full — never under a lock.
-        if (auto dec = decoder_ref()) dec->push_fragment(seg->media);
+        // It returns false only when the decoder has stopped consuming (BUGS.md
+        // entry 0): rebuilding it beats freezing for ever behind this call, and
+        // teardown_decoder() re-requests the init segment so the next segment
+        // that arrives is not rejected for want of it.
+        if (auto dec = decoder_ref()) {
+            if (!dec->push_fragment(seg->media, seg->seq)) {
+                plog_warn("decoder stopped consuming fragments — rebuilding it "
+                          "(%s)", dec->error().c_str());
+                note_error("decoder: " + dec->error());
+                teardown_decoder();
+                continue;   // the loop rebuilds it on the next pass
+            }
+        }
         m_pushed_media_ns += (uint64_t)(seg->duration_s * 1e9);
     }
     plog_info("feed loop stopped");
@@ -1690,6 +1757,16 @@ void Player::set_delay_from_live(double seconds) {
     m_delay_from_live_s = seconds;
     seek_to_time((long long)live - (long long)(seconds * 1000.0));
     plog_info("holding %.0f minute(s) behind live", seconds / 60.0);
+}
+
+bool Player::add_cue(const std::string& label, std::string& error) {
+    if (m_locked.load()) { error = "this box is locked"; return false; }
+    auto sess = session_ref();
+    if (!sess) { error = "no event is loaded"; return false; }
+    // The on-screen SEGMENT goes with it: the media clock is re-pinned on every
+    // seek, so a clock reading names a place inconsistently, while the segment
+    // number is where the operator is actually looking.
+    return sess->add_cue(label, error, m_on_screen_seq.load());
 }
 
 void Player::jump_to_marker(const std::string& id) {
@@ -1899,6 +1976,7 @@ void Player::status(Status& out) const {
         Status::MarkerEntry e;
         e.label = m.label;
         e.id    = m.id;
+        e.author = m.author;
         e.at_ms = (long long)sess->wall_clock_ms(m.seq);
         out.markers.push_back(std::move(e));
     }

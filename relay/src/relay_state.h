@@ -119,6 +119,13 @@ struct RelayInput {
     // plays and then ends (§7.5) — which is exactly what a rebroadcast is.
     bool from_beginning = false;
 
+    // Rebroadcast in/out points, chosen as two cues. Zero means "no bound" —
+    // the start of what storage still holds, or the end of the recording — so
+    // the default is exactly the behaviour there was before these existed.
+    // A rebroadcast bound at both ends is a deliberate excerpt of the event.
+    uint64_t start_seq = 0;
+    uint64_t end_seq = 0;
+
     // How long a silence to ride out before giving up on the connection.
     // Measured against the destination's own tolerance: YouTube ends a
     // broadcast after roughly 60 seconds without data, so this sits under it.

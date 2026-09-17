@@ -59,7 +59,7 @@ a campus can rewind only as far as retention allows.
 
 1. Open the **Multisite Encoder** dock → **Settings…**
 2. Enter the bucket details and pick a video encoder. Choose a **feed name** —
-   every campus will type the same one. Settings save as you type.
+   every campus will type the same one. Press **Apply** to save them.
 3. Press **Go live.** The dock shows how much has been sent, how much is
    waiting, and whether the link is healthy.
 
@@ -79,7 +79,7 @@ sources to tracks in Advanced Audio Properties, then name them under
    already configured.
 2. Add a **Multisite Source (Decoder)** to a scene and enter the same feed
    name.
-3. Press **Load event**, let the buffer fill, then **Play** when you are ready.
+3. Press **Follow live**, let the buffer fill, then **Play** when you are ready.
 4. Press **Lock** for the event so nothing gets clicked by accident.
 
 Each campus runs its own clock: **hold** the picture for a local welcome,

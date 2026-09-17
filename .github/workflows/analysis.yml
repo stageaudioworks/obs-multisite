@@ -80,15 +80,26 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
                    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      # Advisory for now (see .clang-tidy): this prints what it finds and does
-      # not fail the build. Promoting checks to errors is a decision to make
-      # against a real list, once that list has been read and acted on.
+      # A gate, not advice. `.clang-tidy` lists the checks held as errors and
+      # this fails the job when one fires; everything else it reports is still
+      # printed, so a finding outside the gate stays visible without being
+      # fatal. The list was chosen after a triage run against this tree, not in
+      # advance of one.
       - name: Run clang-tidy
         run: |
+          set +e
+          set -o pipefail
           # The portable core first — every other target depends on it, so a
-          # fault here is a fault everywhere.
+          # fault here is a fault everywhere — alongside the appliance, which
+          # is the rest of the portable code.
           find src/core src/appliance -name '*.cpp' \
             | xargs clang-tidy -p build --quiet 2>&1 \
-            | tee tidy.log || true
-          echo "--- summary ---"
-          grep -oE '\[[a-z0-9-]+\]$' tidy.log | sort | uniq -c | sort -rn | head -30
+            | tee tidy.log
+          rc=$?
+          echo "--- everything reported, gate checks and advisory alike ---"
+          grep -oE '\[[A-Za-z0-9._-]+\]$' tidy.log | sort | uniq -c | sort -rn | head -30 || true
+          if [ "$rc" -ne 0 ]; then
+            echo "--- the findings held as errors ---"
+            grep -E ": error:" tidy.log | head -50 || true
+          fi
+          exit "$rc"

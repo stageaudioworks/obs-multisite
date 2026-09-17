@@ -85,7 +85,9 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "lan_auth_token",       lan_auth_token);
 
     take(j, "room_id",              room_id);
+    take(j, "site_name",            site_name);
     take(j, "pinned_event_id",      pinned_event_id);
+    take(j, "follow_next_event",    follow_next_event);
 
     take(j, "prebuffer_segments",   prebuffer_segments);
     take(j, "start_buffer_seconds", start_buffer_seconds);
@@ -95,6 +97,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "max_cached_segments",  max_cached_segments);
     take(j, "stale_after_ms",       stale_after_ms);
     take(j, "cache_dir",            cache_dir);
+    take(j, "hardware_decode",      hardware_decode);
 
     take(j, "drm_card",             drm_card);
     take(j, "connector",            connector);
@@ -147,7 +150,9 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["lan_auth_token"]       = lan_auth_token;
 
     j["room_id"]              = room_id;
+    j["site_name"]            = site_name;
     j["pinned_event_id"]      = pinned_event_id;
+    j["follow_next_event"]    = follow_next_event;
 
     j["prebuffer_segments"]   = prebuffer_segments;
     j["start_buffer_seconds"] = start_buffer_seconds;
@@ -157,6 +162,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["max_cached_segments"]  = max_cached_segments;
     j["stale_after_ms"]       = stale_after_ms;
     j["cache_dir"]            = cache_dir;
+    j["hardware_decode"]      = hardware_decode;
 
     j["drm_card"]             = drm_card;
     j["connector"]            = connector;

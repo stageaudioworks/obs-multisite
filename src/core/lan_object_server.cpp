@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "lan_object_server.h"
+#include "../vendor/nlohmann/json.hpp"
 
 #include <cstring>
+
+using json = nlohmann::json;
 
 namespace multisite {
 
 namespace {
-const std::string kEventsPrefix = "/events/";
-const std::string kSegmentsInfix = "segments/";
+// constexpr, not std::string: a namespace-scope std::string is a static
+// initialisation that may run before main and cannot be caught if it throws.
+constexpr const char* kEventsPrefix = "/events/";
+constexpr const char* kSegmentsInfix = "segments/";
 }
 
 LanObjectServer::LanObjectServer(LanServerConfig cfg, std::string cache_dir)
@@ -30,6 +35,11 @@ LanObjectServer::LanObjectServer(LanServerConfig cfg, std::string cache_dir)
                  [this](const HttpRequest& req, HttpResponse& res) {
                      handle_live(req, res);
                  });
+    // A cue from a satellite with no bucket of its own. See set_cue_callback.
+    m_http->route("POST", "/api/cue",
+                 [this](const HttpRequest& req, HttpResponse& res) {
+                     handle_cue(req, res);
+                 });
 }
 
 LanObjectServer::~LanObjectServer() { stop(); }
@@ -49,7 +59,7 @@ void LanObjectServer::handle_events(const HttpRequest& req, HttpResponse& res) {
     if (!check_auth(req)) { res.text(401, "unauthorized"); return; }
 
     // Path shape: /events/<id>/(manifest.json|event.json|init.mp4|segments/<seq>.m4s)
-    const std::string rest = req.path.substr(kEventsPrefix.size());
+    const std::string rest = req.path.substr(std::strlen(kEventsPrefix));
     const size_t slash = rest.find('/');
     if (slash == std::string::npos) { res.text(404, "not found"); return; }
     const std::string id   = rest.substr(0, slash);
@@ -86,8 +96,8 @@ void LanObjectServer::handle_events(const HttpRequest& req, HttpResponse& res) {
         return;
     }
 
-    if (tail.compare(0, kSegmentsInfix.size(), kSegmentsInfix) == 0) {
-        std::string fname = tail.substr(kSegmentsInfix.size());
+    if (tail.compare(0, std::strlen(kSegmentsInfix), kSegmentsInfix) == 0) {
+        std::string fname = tail.substr(std::strlen(kSegmentsInfix));
         const std::string ext = ".m4s";
         if (fname.size() > ext.size() &&
             fname.compare(fname.size() - ext.size(), ext.size(), ext) == 0) {
@@ -127,6 +137,37 @@ void LanObjectServer::handle_live(const HttpRequest& req, HttpResponse& res) {
     // under it) — a genuine "no live pointer", not a malformed request.
     if (json.empty()) { res.text(404, "not found"); return; }
     res.json(json);
+}
+
+void LanObjectServer::handle_cue(const HttpRequest& req, HttpResponse& res) {
+    if (!check_auth(req)) { res.text(401, "unauthorized"); return; }
+    if (!m_on_cue) { res.text(503, "cue authoring is not available"); return; }
+
+    std::string author, label;
+    try {
+        json j = json::parse(req.body);
+        author = j.value("author", "");
+        label  = j.value("label", "");
+    } catch (...) {
+        res.text(400, "malformed cue");
+        return;
+    }
+    if (label.empty()) { res.text(400, "a cue needs a name"); return; }
+
+    std::string error;
+    if (!m_on_cue(author, label, error)) {
+        res.text(409, error.empty() ? "the cue was refused" : error);
+        return;
+    }
+    // The callback publishes synchronously, so the merged list is already
+    // updated: return it, and the satellite's dock shows the cue at once
+    // rather than up to a poll later.
+    std::string merged;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        merged = m_markers_json;
+    }
+    res.json(merged.empty() ? std::string("{\"markers\":[]}") : merged);
 }
 
 void LanObjectServer::on_live_published(std::string json) {

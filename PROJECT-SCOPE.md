@@ -68,7 +68,7 @@ This ranking is the tie-breaker for every design choice.
   minutes behind on purpose, so a wobble at the main site delays the public
   stream rather than breaking it (§8.2).
 - **Bring-your-own storage.** Works with any S3-compatible endpoint — Cloudflare
-  R2, AWS S3, Backblaze B2, Wasabi, or self-hosted MinIO. Cost is just storage.
+  R2, AWS S3, Backblaze B2, Wasabi, or self-hosted Garage. Cost is just storage.
 - **Satellites can be appliances.** A campus that only needs to *receive* runs a
   headless Linux decoder box driving SDI/HDMI out, controlled from a phone or
   tablet over the local network. No OBS to learn, nothing to misconfigure, and
@@ -502,12 +502,41 @@ Backed by durable object storage, this is "pause live TV," per campus.
 
 ## 7. Markers & cues
 
-- **Authoring (main site).** The operator drops markers live (button/hotkey) or
-  from a pre-loaded schedule; each is appended to `markers.json` keyed by `seq`.
-- **Consumption (satellites).** Decoders display upcoming and passed markers on a
-  timeline, can jump to a marker, and can fire local automation from one (e.g. a
-  "Go to local" marker triggering a campus scene switch). Markers ride the same
+- **Shared, not mains-only.** Every site can drop a cue, and every site sees the
+  same merged list. Cues live ONE OBJECT PER AUTHOR —
+  `events/{id}/cues/{site}.json` — so the encoder and any number of satellites
+  can each add one without overwriting another's. The encoder keeps writing
+  `markers.json`, which is its own file and what older decoders still read; a
+  reader merges both into one time-ordered list. One writer per object is what
+  makes this safe with no locking and no lost cues.
+- **Authoring from any end, with any name.** The **Cues dock** is present in
+  both roles — the same list and the same controls whichever this machine is.
+  The name is typed, not picked from a fixed set: a service has no fixed set of
+  moments. Each cue carries the **site name** that set it, so a cue dropped at
+  another campus is never mistaken for the main site's.
+- **How a satellite publishes one.** With a bucket configured it writes its own
+  cue object directly, under scoped write access to `cues/{its-own-site}.json`
+  only — it can add cues and nothing else. With NO bucket it hands the cue to
+  the encoder instead (`LanObjectServer`'s cue hub, §8.7), which writes it, so a
+  LAN-only box stays read-only and needs no bucket credentials at all. That
+  precedence is deliberate: cue authoring must never depend on the encoder being
+  reachable when the box could have written the cue itself.
+- **Consumption (satellites).** Decoders display upcoming and passed cues on a
+  timeline, can jump to one, and can fire local automation from one (e.g. a
+  "Go to local" cue triggering a campus scene switch). Cues ride the same
   durable object path as the media.
+- **A cue lands where the operator is watching, and carries the event's own
+  time.** It is stamped at the playhead, not the live edge — the live edge of a
+  finished event *is* its end, so stamping that put every cue dropped on a
+  recording at the end of it; and a campus sitting behind live means its own
+  position, not the encoder's. Its time is the content's time within the event,
+  so a recording's cues read 00:00 to the end while a live event's read as times
+  of day.
+- **Ordered by the event, not by any site's clock.** Each cue carries the
+  segment it was dropped at, and the merged list is ordered by that first. A
+  box whose clock is minutes out therefore still puts its cue in the right place
+  on every other site's timeline, and the displayed time is derived from the
+  event's own start rather than from the author's clock.
 
 ---
 
@@ -570,6 +599,13 @@ steal the playback; the operator is told something is live and offered the
 switch, because being pulled out of a recording part-way through is worse than
 being told about it.
 
+The same applies to the event being followed when it *finishes*: watching it
+live and then sitting in the recording of it is the same commitment in practice
+as having chosen it, so the next event starting does not take the picture away
+either — the operator presses **Return to live** to move on. (The Raspberry Pi
+appliance turns this off, because an unattended box is there to relay whatever
+the room does next; see `DecoderConfig::hold_finished_event`.)
+
 ## 8. User interface
 
 Two Qt docks, plus hotkeys. The core reliability and media path work with no UI
@@ -577,12 +613,15 @@ at all, which is what lets the same engine drive the planned appliance.
 
 **Encoder dock (main site)**
 
-- Storage settings, saved as they are edited so credentials are never retyped.
+- Storage settings, entered once per machine and committed with **Apply** — so
+  opening the settings to look at them and closing again changes nothing, which
+  is what makes it safe to do mid-broadcast.
 - Video encoder chosen from what the machine actually has (x264, NVENC,
   QuickSync, AMF), hardware first.
 - **Go live / End broadcast**, with failures shown in the dock rather than left
   in the log.
-- Marker buttons, named by the operator.
+- Cues dropped from the shared **Cues dock** (§7) — the same dock a satellite
+  gets — with a one-press button per cue name the event already has.
 - The reliability readout that matters mid-event: how much of the event has
   been sent, how much is waiting, retries, and link health.
 
@@ -1055,7 +1094,8 @@ access to the machine.
 **Shape.**
 
 - **Sending side** — Go live and End the broadcast, the editable event name, the
-  four markers, and the reliability readout an operator watches mid-event:
+  cue buttons (the event's own cue names), and the reliability readout an
+  operator watches mid-event:
   confirmed pieces, what is waiting to send, retries, bytes sent, the measured
   upload rate, the colo serving the bucket, and the last error.
 - **Receiving side** — play, hold picture, catch up to now, jog, stay behind
@@ -1438,7 +1478,7 @@ is the better answer for a given church, section 12 says so plainly.
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
 | HEVC out, over SRT or Enhanced RTMP | built, and the remux verified at the byte level — but not yet carried from a real HEVC encoder to a real destination. AV1, on the same code path, has now been carried to YouTube (§8.2) |
 | Download a finished event as an MP4, all audio tracks | built (§8.2) |
-| Replay a finished event to a destination | proof of concept — one at a time, by hand (§8.2) |
+| Replay a finished event to a destination | proof of concept — one at a time, by hand; two cues may bound it as in/out points (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
@@ -1547,8 +1587,9 @@ than deleted.
 - **Phase 3 — Timeslipping.** ✅ Decoder DVR: playback head vs live edge, deep local
   cache, pause/resume/jump-to-live/scrub, behind-live indicator, restart
   recovery.
-- **Phase 4 — Markers & cues.** ✅ Authoring from the encoder, consumption and
-  jump-to-marker at the satellite. Decoder-side cue authoring is not built.
+- **Phase 4 — Markers & cues.** ✅ Authoring from any site, a shared per-author
+  cue list (§7), consumption and jump-to-cue at the satellite, and a Cues dock
+  present in both roles.
 - **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
   plain-language status, plus event browsing (section 7.5.1), which needs
   bucket listing.

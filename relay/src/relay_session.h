@@ -51,9 +51,11 @@ class RelaySession {
 public:
     // `from_beginning` makes this a rebroadcast of a finished event rather
     // than a relay of a live one. The feeder it is given must be pinned to
-    // that event.
+    // that event. `start_seq`/`end_seq` are an optional excerpt — two cues
+    // chosen as in and out points; 0 means "no bound".
     RelaySession(Destination dest, RoomFeeder& feeder,
-                 bool from_beginning = false);
+                 bool from_beginning = false,
+                 uint64_t start_seq = 0, uint64_t end_seq = 0);
     ~RelaySession();
 
     void start_thread();
@@ -91,6 +93,10 @@ private:
     Destination  m_dest;
     RoomFeeder&  m_feeder;
     const bool   m_from_beginning = false;
+    // An excerpt bounded by two cues: 0 means "no bound", so the default is a
+    // whole-event replay.
+    const uint64_t m_start_seq = 0;
+    const uint64_t m_end_seq = 0;
     RelayMachine m_machine;
     std::unique_ptr<FfmpegProcess> m_child;
 

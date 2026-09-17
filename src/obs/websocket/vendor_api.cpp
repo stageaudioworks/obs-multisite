@@ -232,6 +232,17 @@ void h_decoder_marker(obs_data_t* req, obs_data_t* res, void*) {
     set_json(res, decoder_status_json());
 }
 
+void h_decoder_cue(obs_data_t* req, obs_data_t* res, void*) {
+    const std::string label = req_str(req, "label");
+    std::string error;
+    // A refusal is reported in words — "no site name is set" is something the
+    // operator has to fix, and a button that quietly does nothing is worse.
+    if (!decoder_add_cue(label, error))
+        reply(res, decoder_status_json(), error);
+    else
+        set_json(res, decoder_status_json());
+}
+
 void h_decoder_events(obs_data_t*, obs_data_t* res, void*) {
     set_json(res, decoder_events_json());
 }
@@ -292,6 +303,7 @@ obs_websocket_request_callback_function handler_for(const char* name) {
     if (n == "decoder/seek")           return h_decoder_seek;
     if (n == "decoder/delay")          return h_decoder_delay;
     if (n == "decoder/marker")         return h_decoder_marker;
+    if (n == "decoder/cue")            return h_decoder_cue;
     if (n == "decoder/events")         return h_decoder_events;
     if (n == "decoder/events/refresh") return h_decoder_events_refresh;
     if (n == "decoder/load-event")     return h_decoder_load_event;

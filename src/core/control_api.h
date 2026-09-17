@@ -42,6 +42,7 @@ inline constexpr const char* kDecoderCommands[] = {
     "decoder/seek",
     "decoder/delay",
     "decoder/marker",
+    "decoder/cue",
     "decoder/events",
     "decoder/events/refresh",
     "decoder/load-event",

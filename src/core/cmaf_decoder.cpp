@@ -4,14 +4,17 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -20,6 +23,12 @@ extern "C" {
 #include <vector>
 
 namespace multisite {
+
+// Monotonic, so a clock step cannot fool the wedge watchdog below.
+static int64_t mono_ms() {
+    return (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // Each fragment is decoded as an independent, SEEKABLE in-memory unit
 // (init + fragment concatenated).
@@ -66,11 +75,35 @@ struct MemReader {
 struct CmafDecoder::Impl {
     std::vector<uint8_t> init;
 
-    std::deque<std::vector<uint8_t>> frags;
+    // A queued fragment and the media segment it came from. The segment number
+    // rides along so decoded frames can carry it (see DecodedVideoFrame::seq).
+    struct Queued { std::vector<uint8_t> bytes; uint64_t seq = 0; };
+    std::deque<Queued> frags;
     mutable std::mutex      q_mtx;
     std::condition_variable q_cv;
     std::atomic<bool>       running{false};
     std::atomic<size_t>     queued_bytes_v{0};
+    // When the decode thread last produced anything. The feed loop's
+    // back-pressure wait is bounded by this rather than by a wall clock, so a
+    // decoder that is merely slow is never mistaken for one that is wedged —
+    // and one that has genuinely stopped is never waited on for ever (bug #0).
+    std::atomic<int64_t>    last_progress_ms{0};
+    // How long a decoder may produce nothing, while the feed loop is waiting to
+    // hand it more, before it is called wedged. A fragment decodes in well
+    // under a second even in software; ten seconds is a fault, not slowness.
+    static constexpr int64_t kWedgeMs = 10000;
+
+    // How long stop() waits for the decode thread to return before abandoning
+    // it. A healthy worker leaves its loop as soon as `running` goes false —
+    // it only has to finish the one fragment it is inside — so this is
+    // generous on purpose; it exists purely so a thread wedged INSIDE an FFmpeg
+    // call cannot freeze whoever is tearing the decoder down (bug #0).
+    static constexpr int64_t kStopGraceMs = 5000;
+    // Overridable only by the testing hook below.
+    std::atomic<int64_t>    stop_grace_ms{kStopGraceMs};
+    std::atomic<bool>       worker_done{false};
+    std::mutex              done_mtx;
+    std::condition_variable done_cv;
 
     SwsContext* sws = nullptr;
     int sws_w = 0, sws_h = 0, sws_fmt = -1;
@@ -78,7 +111,11 @@ struct CmafDecoder::Impl {
 
     int width = 0, height = 0, audio_tracks = 0;
     std::string video_codec;
+    // The segment the decode thread is currently working on, stamped onto every
+    // frame it emits.
+    uint64_t cur_seq = 0;
     int decode_threads = 0;
+    std::vector<std::string> prefer_video_decoders;
 
     VideoFrameCallback on_video;
     AudioFrameCallback on_audio;
@@ -89,20 +126,45 @@ struct CmafDecoder::Impl {
 
     void fail(const std::string& m) { if (ok_flag) { ok_flag = false; err = m; } }
 
-    void push(std::vector<uint8_t> bytes) {
+    bool push(std::vector<uint8_t> bytes, uint64_t seq) {
         std::unique_lock<std::mutex> lk(q_mtx);
-        q_cv.wait(lk, [this] {
-            return frags.size() < kMaxQueuedFragments || !running.load();
-        });
-        if (!running.load()) return;
+        // Bounded on purpose (bug #0): wait while the queue is full, but only
+        // as long as the decoder is still producing. A wedged decode thread
+        // used to park the feed loop here for ever, with the picture frozen and
+        // downloads still climbing — the exact shape of the stall.
+        while (frags.size() >= kMaxQueuedFragments && running.load()) {
+            q_cv.wait_for(lk, std::chrono::milliseconds(250));
+            if (!running.load()) break;
+            if (mono_ms() - last_progress_ms.load() > kWedgeMs) {
+                fail("the decoder stopped consuming fragments");
+                return false;
+            }
+        }
+        if (!running.load()) return false;
         queued_bytes_v += bytes.size();
-        frags.push_back(std::move(bytes));
+        frags.push_back(Queued{ std::move(bytes), seq });
         lk.unlock();
         q_cv.notify_all();
+        return true;
     }
 
     void emit_video(AVFrame* f, AVRational tb) {
         if (!on_video) return;
+
+        // A hardware decoder (the Pi 4's h264_v4l2m2m) may hand back a frame
+        // still living in the decoder's own memory. Bring it into system
+        // memory before the scaler sees it: sws_getContext cannot read a
+        // hardware pixel format and would return null, which reads as "no
+        // picture" rather than as anything an operator could act on.
+        AVFrame* sw = nullptr;
+        const AVPixFmtDescriptor* pd =
+            av_pix_fmt_desc_get((AVPixelFormat)f->format);
+        if (pd && (pd->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+            AVFrame* tmp = av_frame_alloc();
+            if (tmp && av_hwframe_transfer_data(tmp, f, 0) >= 0) { sw = tmp; f = tmp; }
+            else av_frame_free(&tmp);
+        }
+
         auto in_fmt = (AVPixelFormat)f->format;
         if (!sws || sws_w != f->width || sws_h != f->height || sws_fmt != in_fmt) {
             if (sws) sws_freeContext(sws);
@@ -111,10 +173,11 @@ struct CmafDecoder::Impl {
                                  SWS_BILINEAR, nullptr, nullptr, nullptr);
             sws_w = f->width; sws_h = f->height; sws_fmt = in_fmt;
         }
-        if (!sws) return;
+        if (!sws) { if (sw) av_frame_free(&sw); return; }
 
         DecodedVideoFrame out;
         out.width = f->width; out.height = f->height;
+        out.seq = cur_seq;
         out.full_range = (f->color_range == AVCOL_RANGE_JPEG);
         int lines[4];
         av_image_fill_linesizes(lines, AV_PIX_FMT_YUV420P, f->width);
@@ -130,6 +193,8 @@ struct CmafDecoder::Impl {
         out.pts_ns = (int64_t)(pts * av_q2d(tb) * 1e9);
         width = f->width; height = f->height;
         on_video(out);
+        if (sw) av_frame_free(&sw);
+        last_progress_ms = mono_ms();
     }
 
     void emit_audio(AVFrame* f, AVRational tb, int track_index) {
@@ -149,6 +214,7 @@ struct CmafDecoder::Impl {
         out.sample_rate = f->sample_rate;
         out.channels = out_ch;
         out.track_index = track_index;
+        out.seq = cur_seq;
         out.interleaved.resize((size_t)f->nb_samples * out_ch);
         uint8_t* dstp = reinterpret_cast<uint8_t*>(out.interleaved.data());
         int got = swr_convert(swr, &dstp, f->nb_samples,
@@ -159,10 +225,12 @@ struct CmafDecoder::Impl {
         int64_t pts = (f->pts == AV_NOPTS_VALUE) ? 0 : f->pts;
         out.pts_ns = (int64_t)(pts * av_q2d(tb) * 1e9);
         on_audio(out);
+        last_progress_ms = mono_ms();
     }
 
     // Decode one fragment (init + fragment) as a seekable unit.
-    void decode_unit(const std::vector<uint8_t>& frag) {
+    void decode_unit(const std::vector<uint8_t>& frag, uint64_t seq) {
+        cur_seq = seq;
         std::vector<uint8_t> unit;
         unit.reserve(init.size() + frag.size());
         unit.insert(unit.end(), init.begin(), init.end());
@@ -195,15 +263,19 @@ struct CmafDecoder::Impl {
         }
 
         // Open a decoder per stream for this unit.
+        //
+        // Every decoder is opened through one helper, so the thread policy
+        // lives in exactly one place and the hardware preference below has a
+        // single "open it; if it refuses, try the next one" step to lean on.
         std::vector<AVCodecContext*> ctxs(fmt->nb_streams, nullptr);
         std::vector<int> audio_idx(fmt->nb_streams, -1);
         int video_stream = -1, an = 0;
-        for (unsigned i = 0; i < fmt->nb_streams; ++i) {
-            AVCodecParameters* par = fmt->streams[i]->codecpar;
-            const AVCodec* dec = avcodec_find_decoder(par->codec_id);
-            if (!dec) continue;
-            AVCodecContext* c = avcodec_alloc_context3(dec);
-            if (!c) continue;
+
+        auto open_codec = [](AVCodecParameters* par,
+                             const AVCodec* codec) -> AVCodecContext* {
+            if (!codec) return nullptr;
+            AVCodecContext* c = avcodec_alloc_context3(codec);
+            if (!c) return nullptr;
             avcodec_parameters_to_context(c, par);
             // FFmpeg defaults AVCodecContext to a single thread. On a campus
             // player that is three of the Pi's four cores left idle while
@@ -234,14 +306,48 @@ struct CmafDecoder::Impl {
             c->thread_count = 0;
             c->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
 #endif
-            if (avcodec_open2(c, dec, nullptr) < 0) { avcodec_free_context(&c); continue; }
+            if (avcodec_open2(c, codec, nullptr) < 0) {
+                avcodec_free_context(&c);
+                return nullptr;
+            }
+            return c;
+        };
+
+        for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+            AVCodecParameters* par = fmt->streams[i]->codecpar;
+            const AVCodec* dec = nullptr;
+
+            // Hardware preference (the Pi 4's h264_v4l2m2m): tried in order,
+            // before FFmpeg's own choice, and accepted only for the codec it
+            // actually decodes. A name that is missing, that belongs to
+            // another codec, or that refuses to open falls through to the
+            // software decoder below — so a preference can change which
+            // decoder runs, and never whether playback works.
+            if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+                for (const std::string& name : prefer_video_decoders) {
+                    const AVCodec* cand = avcodec_find_decoder_by_name(name.c_str());
+                    if (!cand || cand->id != par->codec_id) continue;
+                    AVCodecContext* c = open_codec(par, cand);
+                    if (!c) continue;
+                    ctxs[i] = c;
+                    dec = cand;
+                    break;
+                }
+            }
+            if (!ctxs[i]) {
+                const AVCodec* sw = avcodec_find_decoder(par->codec_id);
+                AVCodecContext* c = open_codec(par, sw);
+                if (!c) continue;
+                ctxs[i] = c;
+                dec = sw;
+            }
+
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_codec.empty()) {
                 // Core has no logger of its own — it is shared with the OBS
                 // plugin. Record it and let the caller report it.
                 video_codec = dec->name ? dec->name : "?";
-                decode_threads = c->thread_count;
+                decode_threads = ctxs[i]->thread_count;
             }
-            ctxs[i] = c;
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_stream < 0) video_stream = (int)i;
             else if (par->codec_type == AVMEDIA_TYPE_AUDIO) audio_idx[i] = an++;
         }
@@ -307,18 +413,32 @@ struct CmafDecoder::Impl {
     }
 
     void run() {
+        // Marks the thread as returned however it leaves — including by an
+        // exception out of FFmpeg — so stop()'s bounded wait is never fooled
+        // into thinking a finished thread is wedged.
+        struct Done {
+            Impl* s;
+            ~Done() {
+                { std::lock_guard<std::mutex> lk(s->done_mtx); s->worker_done = true; }
+                s->done_cv.notify_all();
+            }
+        } done{ this };
+
+        last_progress_ms = mono_ms();
         while (running.load()) {
-            std::vector<uint8_t> frag;
+            Queued q;
             {
                 std::unique_lock<std::mutex> lk(q_mtx);
                 q_cv.wait(lk, [this] { return !frags.empty() || !running.load(); });
                 if (!running.load()) break;
-                frag = std::move(frags.front());
+                q = std::move(frags.front());
                 frags.pop_front();
-                queued_bytes_v -= std::min(queued_bytes_v.load(), frag.size());
+                queued_bytes_v -= std::min(queued_bytes_v.load(), q.bytes.size());
             }
             q_cv.notify_all();
-            decode_unit(frag);
+            decode_unit(q.bytes, q.seq);
+            // A fragment that produced no frames is still progress.
+            last_progress_ms = mono_ms();
         }
     }
 
@@ -334,6 +454,10 @@ CmafDecoder::~CmafDecoder() { stop(); }
 void CmafDecoder::on_video(VideoFrameCallback cb) { d->on_video = std::move(cb); }
 void CmafDecoder::on_audio(AudioFrameCallback cb) { d->on_audio = std::move(cb); }
 
+void CmafDecoder::set_preferred_video_decoders(std::vector<std::string> names) {
+    if (d) d->prefer_video_decoders = std::move(names);
+}
+
 bool CmafDecoder::start(const std::vector<uint8_t>& init_segment) {
     if (init_segment.empty()) { d->fail("empty init segment"); return false; }
     d->init = init_segment;
@@ -342,25 +466,48 @@ bool CmafDecoder::start(const std::vector<uint8_t>& init_segment) {
     return true;
 }
 
-void CmafDecoder::push_fragment(const std::vector<uint8_t>& bytes) {
-    if (!d->running.load()) return;
-    d->push(bytes);
+bool CmafDecoder::push_fragment(const std::vector<uint8_t>& bytes, uint64_t seq) {
+    if (!d->running.load()) return false;
+    return d->push(bytes, seq);
 }
 
 size_t CmafDecoder::queued_bytes() const { return d->queued_bytes_v.load(); }
 
 void CmafDecoder::stop() {
     if (!d) return;
-    if (!d->running.exchange(false)) {
-        if (d->worker.joinable()) d->worker.join();
-        return;
-    }
+    d->running = false;
     d->q_cv.notify_all();
-    if (d->worker.joinable()) d->worker.join();
+    if (!d->worker.joinable()) return;
+
+    // Bounded: a decode thread wedged inside FFmpeg must not freeze whoever is
+    // tearing this decoder down. push()'s wedge bound (above) stops the FEED
+    // loop hanging on a full queue; this stops stop()'s join hanging on a
+    // thread that will never return. Both are needed — they are different
+    // threads parked in different places.
+    bool stopped = false;
+    {
+        std::unique_lock<std::mutex> lk(d->done_mtx);
+        stopped = d->done_cv.wait_for(
+            lk, std::chrono::milliseconds(d->stop_grace_ms.load()),
+            [this] { return d->worker_done.load(); });
+    }
+    if (stopped) { d->worker.join(); return; }
+
+    d->fail("the decoder thread did not stop within 5s — abandoning it");
+    // Detach and LEAK on purpose. The detached thread still holds `d`, so `d`
+    // must outlive it: freeing it here would be a use-after-free in a thread we
+    // can no longer control. A few hundred bytes leaked per wedge is the price
+    // of not taking the process down. The caller is expected to discard this
+    // decoder and build a fresh one, which is exactly what the Pi player does.
+    d->worker.detach();
+    (void)d.release();
 }
 
 bool CmafDecoder::ok() const { return d->ok_flag; }
 const std::string& CmafDecoder::error() const { return d->err; }
+void CmafDecoder::set_stop_grace_ms_for_testing(int64_t ms) {
+    if (d && ms > 0) d->stop_grace_ms = ms;
+}
 int CmafDecoder::video_width() const { return d->width; }
 int CmafDecoder::video_height() const { return d->height; }
 int CmafDecoder::audio_track_count() const { return d->audio_tracks; }

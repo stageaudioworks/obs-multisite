@@ -80,7 +80,7 @@ for `rooms/`. (`rooms/{room}/live.json` is rewritten on every heartbeat, so it
 stays fresh while a room is in use, and ageing out between events is
 harmless — the next Go Live recreates it.)
 
-On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
+On **AWS S3, Garage, Backblaze B2 or Wasabi**: the equivalent lifecycle
 configuration with an Expiration rule per prefix.
 
 You can also delete events by hand, without waiting for the rule: the encoder's
@@ -105,12 +105,26 @@ doing nothing.
 provider above still means somebody else's servers. If that matters to you —
 data residency, a church that already runs its own infrastructure, or simply
 keeping a third party out of the chain entirely — the bucket only needs to
-speak the S3 API, so a self-hosted object store works exactly like MinIO
-does above. [Alarik](https://github.com/achtungsoftware/alarik) is one such
-project: S3-compatible with lifecycle rules included, and it runs on hardware
-you own — on premises, at a colo, wherever. It is a separate project, in
-beta, and one we have not run this pipeline against ourselves; nothing here
-depends on it, the same as any other storage provider on this page.
+speak the S3 API, so a self-hosted object store works exactly like the cloud
+ones above. [Garage](https://garagehq.deuxfleurs.fr/) is one such project: a
+single dependency-free binary that runs on modest hardware (1 GB of RAM, any
+x86_64 or ARM machine), S3-compatible, with the lifecycle expiration rule
+described above. It ships no web interface of its own, but
+[Garage Web UI](https://github.com/khairul169/garage-webui) adds one as a
+second container — cluster health, buckets, an object browser and key
+management — so a volunteer still gets a page to click through. It is a
+separate project, and one we have not run this pipeline against ourselves;
+nothing here depends on it, the same as any other storage provider on this
+page.
+
+MinIO used to be the usual answer here, and an existing MinIO deployment
+still works — the endpoint does not care. But its community edition is
+end-of-life: the repository was archived in February 2026, official binaries
+and images stopped in October 2025, and security fixes are no longer
+backported. [RustFS](https://rustfs.com/) is the closest drop-in successor —
+the same storage model in Rust, Apache-2.0, with the built-in console MinIO
+had — but its lifecycle management is still marked under testing, so it is
+not yet a like-for-like replacement for the rule described above.
 
 Object *tagging* is off by default and is deliberately not the mechanism: R2
 rejects `x-amz-tagging`, and a tag never deletes anything by itself. Enable it
@@ -125,7 +139,8 @@ that away.
 
 1. Open the **Multisite Encoder** dock (View → Docks).
 2. **Settings…** — enter your bucket details, choose a video encoder, name your
-   markers. Settings are saved as you type.
+   markers, then press **Apply** to commit them. Opening the settings and
+   closing them again changes nothing, so it is safe to look mid-event.
 3. **Go live.** Watch the status readout: how much of the event has been sent,
    how much is waiting, and the **Internet** line (green/amber/red). That line
    is live even before you go on air — the dock checks the bucket every few
@@ -144,16 +159,27 @@ Sending stereo only? Do nothing: track 1 is the default at both ends.
 ### Satellite (decoder)
 
 1. Open the **Multisite Decoder** dock and enter the same bucket details under
-   **Settings…**. These are stored per machine, so every source you add
-   afterwards is already configured.
+   **Settings…**, then press **Apply** to commit them. Everything a satellite
+   needs is set once for the machine here — storage, the **feed name** to
+   follow, the buffering, and where downloaded video is kept — so every source
+   you add afterwards is already configured. A source's own properties dialog
+   no longer carries any of these; keeping them in one place is what stops a
+   scene's saved copy silently overriding the dock. Opening Settings and
+   closing it again changes nothing, so it is safe to look mid-event.
 2. Add a **Multisite Source (Decoder)** to a scene.
-3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
+3. **Follow live**, let the buffer fill, then **Play** when you are ready. The
+   state line counts the buffer up against the start gate (*Filling buffer — 23 s
+   of 60 s*), so a slow link is visible rather than looking stalled. Use
    **Lock** during the event so nothing can be clicked by accident.
 
    The decoder holds playback until a whole minute of the event is buffered
    (set in **Settings… → Start after this much is ready**). The buffer fills
    first, then the picture starts — so it does not chase the live edge and
    stall after a single piece on a slow or uneven connection.
+
+   **Cache folder** on the same page is where downloaded segments are kept.
+   Leave it blank for the built-in location under OBS's plugin settings, or
+   point it at a large or fast disk on a machine that stores a lot.
 
 The **Internet** line in the Status box tells you whether the box can reach the
 bucket, separately from whether anything is on air. If it flips to red
@@ -181,6 +207,40 @@ Settings → Hotkeys.
 > Read & Write" token has it; an object-scoped or read-only token often does
 > not, and the dock will say so rather than showing an empty list.
 
+## Cues
+
+A cue is a named moment — "Sermon Start", "Go to local" — that every site can
+see and jump to. Cues are set from the **Multisite Cues** dock, which is present
+whichever role this machine is, so a cue looks and behaves the same wherever it
+was set.
+
+- **Drop a cue** with any name you type. There is no fixed list to choose from:
+  a service has no fixed set of moments, so the name is whatever the operator
+  says.
+- **It lands where you are watching.** A cue goes at the current position, not
+  at the live edge — so dropping one while watching a recording puts it where
+  the picture is, and a campus sitting behind live means its own position. On a
+  recording the times read 00:00 to the end of the event; on a live one they are
+  times of day.
+- **Jump** to any cue in the list. A cue is jumpable while the part of the event
+  it points at is still retained — the same seven-day rule as the recording.
+- **Every site sees every cue.** Each carries the name of the site that set it,
+  so a cue dropped at another campus is never mistaken for the main site's. The
+  list merges the main site's cues with every satellite's, oldest first.
+- **A satellite can set one too.** Given storage credentials it writes its own
+  cue file, so its key needs permission for that file alone. On a LAN with no
+  bucket, the cue is handed to the main site, which writes it — so a campus box
+  can set cues with no bucket credentials at all.
+
+Set the box's **Site name** under **Settings…** first (for example "Campus B").
+A box with no site name still receives and jumps to cues; it simply cannot set
+any, and the dock says so rather than failing quietly.
+
+Cues are ordered by where they fall in the event, not by any site's clock, so a
+box whose clock is wrong still places its cue correctly on every other site's
+timeline. **Settings…** also warns when this machine's clock is plainly out
+against the store's, since that is what would make its clock times read oddly.
+
 ## Remote control from a phone
 
 Both docks have a **Remote control** group in their settings. It serves the same
@@ -199,7 +259,10 @@ What the encoder's page offers:
 
 - **Go live** and **End the broadcast**, with the same editable event name the
   dock has, pre-filled with the current date and time.
-- The four **marker** buttons, named in Settings.
+- **A row of cue buttons**, one per cue name this event already has — press one
+  to drop that cue in a tap, with the field above for a new name. This is what
+  the encoder's old four configured marker buttons were, now the same mechanism
+  on both ends and named from the event rather than a settings field.
 - A live readout: confirmed pieces, what is waiting to send, retries, bytes
   sent, the measured upload rate, the Cloudflare edge serving the bucket, and
   the last error if there is one.
@@ -241,11 +304,11 @@ them. These are the same commands as the HTTP routes, under the vendor
 |---|---|
 | `encoder/status`, `decoder/status` | the same document the page polls |
 | `encoder/go-live` | go live, with an optional `event_name` |
-| `encoder/end`, `encoder/marker` | end the broadcast; drop a marker (`label`) |
+| `encoder/end`, `encoder/marker` (`label`) | end the broadcast; drop a cue at the main site |
 | `encoder/settings`, `decoder/settings` | read, and apply a partial document |
 | `decoder/play`, `stop`, `hold`, `continue`, `catch-up` | the transport controls |
 | `decoder/jog` (`seconds`), `decoder/seek` (`ms`), `decoder/delay` (`seconds`) | navigate |
-| `decoder/marker` (`id`), `decoder/load-event` (`event_id`), `decoder/return-to-live` | markers and recordings |
+| `decoder/marker` (`id`), `decoder/cue` (`label`), `decoder/load-event` (`event_id`), `decoder/return-to-live` | cues and recordings |
 | `decoder/events`, `decoder/events/refresh` | the recording list |
 
 Each request answers with the new status, so a client never has to guess what its

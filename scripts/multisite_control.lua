@@ -40,7 +40,7 @@ local cfg = {
 function script_description()
   return [[<b>Multisite output control</b><br/>
 Publishes this OBS instance's program feed as CMAF segments to an
-S3-compatible bucket (Cloudflare R2, S3, MinIO...) with a durable
+S3-compatible bucket (Cloudflare R2, S3, Garage...) with a durable
 store-and-forward queue.<br/><br/>
 Fill in the storage details, choose how many audio tracks to send, then
 click <b>Go live</b>. Watch the OBS log for <code>[multisite]</code> lines.]]

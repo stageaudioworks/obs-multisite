@@ -21,6 +21,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QFileDialog>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
@@ -46,6 +47,15 @@ namespace multisite_obs {
 
 static QString tr_(const char* key) {
     return QString::fromUtf8(obs_module_text(key));
+}
+
+// Where downloaded video goes when the field is left blank. Shown as the
+// field's placeholder, so "empty" reads as a location rather than as unset.
+static QString default_cache_dir() {
+    char* p = obs_module_config_path("cache");
+    const QString s = p ? QString::fromUtf8(p) : QStringLiteral("./multisite_cache");
+    bfree(p);
+    return s;
 }
 
 // Plain-language duration. Volunteers read "1 min 30 sec", not "90 s" and
@@ -125,6 +135,22 @@ long long TimelineBar::timeAt(int x) const {
     return m_earliest + (long long)(f * (double)(m_live - m_earliest));
 }
 
+// A position on the media axis, as text. With an origin (a live event) it reads
+// as a time of day; without one (a recording) it reads as elapsed. The axis is
+// media time either way, so a tick is always where the picture is.
+static QString axis_time(long long media_ms, long long origin, bool seconds) {
+    if (origin > 0)
+        return QDateTime::fromMSecsSinceEpoch((qint64)(origin + media_ms))
+            .toString(seconds ? "HH:mm:ss" : "HH:mm");
+    if (media_ms < 0) media_ms = 0;
+    const long long t = media_ms / 1000;
+    const long long h = t / 3600, m = (t % 3600) / 60, s = t % 60;
+    if (h > 0)
+        return QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0'))
+              .arg(s, 2, 10, QChar('0'));
+    return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
+}
+
 void TimelineBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -185,8 +211,7 @@ void TimelineBar::paintEvent(QPaintEvent*) {
             (long long)(frac * (double)(m_live - m_earliest));
         const int x = (int)(frac * w);
         p.drawLine(x, y - 4, x, y - 1);
-        const QString label =
-            QDateTime::fromMSecsSinceEpoch((qint64)t).toString("HH:mm");
+        const QString label = axis_time(t, m_clock_origin, false);
         // Keep the end labels inside the widget. Centred on x, the first
         // rect started at -22 and the last ended at w+22, so both were
         // clipped by the widget edge and the scale read "5 … 1" instead of
@@ -225,8 +250,7 @@ void TimelineBar::paintEvent(QPaintEvent*) {
         const long long t = timeAt(m_hoverX);
         p.setPen(QPen(QColor(0xdf, 0xe3, 0xe7, 160), 1, Qt::DashLine));
         p.drawLine(m_hoverX, y - 6, m_hoverX, y + h + 6);
-        const QString label =
-            QDateTime::fromMSecsSinceEpoch((qint64)t).toString("HH:mm:ss");
+        const QString label = axis_time(t, m_clock_origin, true);
         p.setPen(QPen(QColor(0xff, 0xff, 0xff)));
         QRect box(m_hoverX - 30, y + h + 4, 60, 14);
         if (box.left() < 0) box.moveLeft(0);
@@ -323,8 +347,8 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // these separate is how an operator prepares before an event rather than
     // having playback start the moment enough has arrived.
     auto* startRow = new QHBoxLayout();
-    m_start = new QPushButton(tr_("Dock.Load"), this);
-    m_start->setToolTip(tr_("Dock.LoadHint"));
+    m_start = new QPushButton(tr_("Dock.FollowLive"), this);
+    m_start->setToolTip(tr_("Dock.FollowLiveHint"));
     m_play  = new QPushButton(tr_("Dock.Play"), this);
     m_stop  = new QPushButton(tr_("Dock.Stop"), this);
     startRow->addWidget(m_start);
@@ -474,7 +498,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_settingsBtn, &QPushButton::clicked,
             this, &DecoderDock::onOpenSettings);
 
-    m_settings = new QDialog(this);
+    m_settings = new SettingsDialog(this);
     m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));
     auto* dlgRoot = new QVBoxLayout(m_settings);
 
@@ -522,6 +546,9 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("SecretKey"), m_secret);
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_roomId);
+    m_siteName = new QLineEdit(storeBox);
+    m_siteName->setToolTip(tr_("Dock.SiteNameHint"));
+    form->addRow(tr_("Dock.SiteName"), m_siteName);
     form->addRow(tr_("Prebuffer"), m_prebuffer);
     m_startBufferS = new QSpinBox(storeBox);
     m_startBufferS->setRange(0, 300);
@@ -533,6 +560,41 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_bufferMins->setSuffix(tr_("Dock.Minutes"));
     m_bufferMins->setToolTip(tr_("BufferMinutesHint"));
     form->addRow(tr_("BufferMinutes"), m_bufferMins);
+    m_pollMs = new QSpinBox(storeBox);
+    m_pollMs->setRange(500, 10000);
+    m_pollMs->setSingleStep(500);
+    m_pollMs->setSuffix(" ms");
+    m_pollMs->setToolTip(tr_("Dock.PollHint"));
+    form->addRow(tr_("PollInterval"), m_pollMs);
+    m_keepBehind = new QSpinBox(storeBox);
+    m_keepBehind->setRange(10, 2000);
+    m_keepBehind->setSingleStep(10);
+    m_keepBehind->setToolTip(tr_("Dock.KeepBehindHint"));
+    form->addRow(tr_("KeepBehind"), m_keepBehind);
+    m_cacheDir = new QLineEdit(storeBox);
+    m_cacheDir->setToolTip(tr_("Dock.CacheDirHint"));
+    // The effective default, in grey: an operator should be able to see where
+    // the video is going without having to set anything.
+    m_cacheDir->setPlaceholderText(default_cache_dir());
+    {
+        auto* wrap = new QWidget(storeBox);
+        auto* hl = new QHBoxLayout(wrap);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(m_cacheDir, 1);
+        m_cacheBrowse = new QPushButton(tr_("Dock.Browse"), wrap);
+        hl->addWidget(m_cacheBrowse);
+        connect(m_cacheBrowse, &QPushButton::clicked, this, [this] {
+            const QString typed = m_cacheDir->text().trimmed();
+            const QString dir = QFileDialog::getExistingDirectory(
+                this, tr_("Dock.CacheDir"),
+                typed.isEmpty() ? default_cache_dir() : typed);
+            if (!dir.isEmpty()) {
+                m_cacheDir->setText(dir);
+                m_dirty = true;
+            }
+        });
+        form->addRow(tr_("Dock.CacheDir"), wrap);
+    }
     storePageLayout->addWidget(storeBox);
 
     // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
@@ -569,48 +631,43 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
 
     dlgRoot->addWidget(tabs, 1);            // the tabs take the stretch
 
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Close | QDialogButtonBox::Apply, m_settings);
     dlgRoot->addWidget(buttons, 0);         // …and the buttons never scroll
-    connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::accept);
+    // Closing does NOT apply. Opening this dialog to look, then closing it,
+    // must leave a live event exactly as it was. The old shape saved and
+    // reconfigured unconditionally after exec(), so merely looking at the
+    // settings could tear down and rebuild a running receive session. Only
+    // Apply commits (Start reads the fields itself).
+    connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::reject);
+    connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
+            this, &DecoderDock::onApplySettings);
 
-    {
-        const DecoderSettings cfg = decoder_settings();
-        // Empty storage_provider means this was saved before the provider
-        // dropdown existed: fall back to guessing from the raw fields rather
-        // than defaulting blindly to R2, so an upgrade never misrepresents a
-        // working AWS/Backblaze/Wasabi/Custom setup as something it isn't.
-        auto provider = cfg.storage_provider.empty()
-            ? multisite::detect_provider(cfg.endpoint_host, cfg.r2_account_id)
-            : multisite::provider_from_key(cfg.storage_provider);
-        const int idx = m_provider->findData(
-            QString::fromStdString(multisite::provider_key(provider)));
-        m_provider->setCurrentIndex(idx >= 0 ? idx : 0);
-        m_accountId->setText(QString::fromStdString(cfg.r2_account_id));
-        m_endpoint->setText(QString::fromStdString(cfg.endpoint_host));
-        m_bucket->setText(QString::fromStdString(cfg.bucket));
-        m_keyId->setText(QString::fromStdString(cfg.access_key_id));
-        m_secret->setText(QString::fromStdString(cfg.secret_access_key));
-        m_region->setText(QString::fromStdString(cfg.region));
-        m_roomId->setText(QString::fromStdString(cfg.room_id));
-        m_prebuffer->setValue(cfg.prebuffer_segments);
-        m_startBufferS->setValue(cfg.start_buffer_seconds);
-        m_bufferMins->setValue(cfg.buffer_minutes);
-        m_lanHost->setText(QString::fromStdString(cfg.lan_host));
-        m_lanPortField->setValue(cfg.lan_port);
-        m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
-        updateProviderFields();
-    }
+    // Keeping the provider's fields in step is a display concern, so it stays
+    // live; nothing here saves.
     connect(m_provider, &QComboBox::currentIndexChanged,
             this, &DecoderDock::updateProviderFields);
-    connect(m_provider, &QComboBox::currentIndexChanged,
-            this, &DecoderDock::onSaveSettings);
-    for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId,
-                          m_secret, m_region, m_roomId, m_lanHost, m_lanToken })
-        connect(e, &QLineEdit::editingFinished, this,
-                &DecoderDock::onSaveSettings);
-    for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins, m_lanPortField })
-        connect(sb, &QSpinBox::editingFinished, this,
-                &DecoderDock::onSaveSettings);
+
+    // Closing with unapplied edits asks first (see settings_dialog.h). That is
+    // the other half of "closing is not a commit": closing must not silently
+    // throw away what was typed either.
+    m_settings->is_dirty = [this] { return m_dirty; };
+    m_settings->apply_changes = [this] { onApplySettings(); };
+    // textEdited, not textChanged: only a person's typing counts, and the
+    // setText in loadIntoFields must not. The spin boxes and the dropdown have
+    // no such distinction, so they are guarded by m_loading instead.
+    for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
+                          m_region, m_roomId, m_siteName, m_cacheDir,
+                          m_lanHost, m_lanToken })
+        connect(e, &QLineEdit::textEdited, this, [this] { m_dirty = true; });
+    for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins,
+                          m_pollMs, m_keepBehind, m_lanPortField })
+        connect(sb, &QSpinBox::valueChanged, this,
+                [this](int) { if (!m_loading) m_dirty = true; });
+    connect(m_provider, &QComboBox::currentIndexChanged, this,
+            [this](int) { if (!m_loading) m_dirty = true; });
+
+    loadIntoFields();
 
     root->addStretch(1);
 
@@ -648,8 +705,53 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     refresh();
 }
 
+void DecoderDock::loadIntoFields() {
+    m_loading = true;   // the setText/setValue below are not the operator's edits
+    const DecoderSettings cfg = decoder_settings();
+    // Empty storage_provider means this was saved before the provider dropdown
+    // existed: fall back to guessing from the raw fields rather than defaulting
+    // blindly to R2, so an upgrade never misrepresents a working
+    // AWS/Backblaze/Wasabi/Custom setup as something it isn't.
+    auto provider = cfg.storage_provider.empty()
+        ? multisite::detect_provider(cfg.endpoint_host, cfg.r2_account_id)
+        : multisite::provider_from_key(cfg.storage_provider);
+    const int idx = m_provider->findData(
+        QString::fromStdString(multisite::provider_key(provider)));
+    m_provider->setCurrentIndex(idx >= 0 ? idx : 0);
+    m_accountId->setText(QString::fromStdString(cfg.r2_account_id));
+    m_endpoint->setText(QString::fromStdString(cfg.endpoint_host));
+    m_bucket->setText(QString::fromStdString(cfg.bucket));
+    m_keyId->setText(QString::fromStdString(cfg.access_key_id));
+    m_secret->setText(QString::fromStdString(cfg.secret_access_key));
+    m_region->setText(QString::fromStdString(cfg.region));
+    m_roomId->setText(QString::fromStdString(cfg.room_id));
+    m_siteName->setText(QString::fromStdString(cfg.site_name));
+    m_prebuffer->setValue(cfg.prebuffer_segments);
+    m_startBufferS->setValue(cfg.start_buffer_seconds);
+    m_bufferMins->setValue(cfg.buffer_minutes);
+    m_pollMs->setValue(cfg.poll_interval_ms);
+    m_keepBehind->setValue(cfg.keep_behind_segments);
+    m_cacheDir->setText(QString::fromStdString(cfg.cache_dir));
+    m_lanHost->setText(QString::fromStdString(cfg.lan_host));
+    m_lanPortField->setValue(cfg.lan_port);
+    m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
+    updateProviderFields();
+    m_loading = false;
+    m_dirty = false;
+}
+
+void DecoderDock::onApplySettings() {
+    onSaveSettings();
+    decoder_reconfigure_all();   // apply now, without closing the dialog
+}
+
 void DecoderDock::onOpenSettings() {
     if (!m_settings) return;
+
+    // Show what is actually saved. The dialog is built once and reused, so
+    // without this it would show whatever was left in the fields — including
+    // edits that were never applied.
+    loadIntoFields();
 
     // Fit the screen it is about to open on, not the one it was built on.
     //
@@ -666,13 +768,16 @@ void DecoderDock::onOpenSettings() {
         // area has its title bar under the menu bar on macOS and is then
         // impossible to move.
         m_settings->setMaximumHeight((int)(avail.height() * 0.9));
+        m_settings->setMaximumWidth((int)(avail.width() * 0.9));
         if (m_settings->height() > m_settings->maximumHeight())
             m_settings->resize(m_settings->width(), m_settings->maximumHeight());
+        if (m_settings->width() > m_settings->maximumWidth())
+            m_settings->resize(m_settings->maximumWidth(), m_settings->height());
     }
 
     m_settings->exec();
-    onSaveSettings();
-    decoder_reconfigure_all();   // apply straight away
+    // Deliberately nothing after exec(): closing is not a commit. Apply
+    // commits, and a close leaves the running session untouched.
 }
 
 void DecoderDock::updateProviderFields() {
@@ -714,13 +819,23 @@ void DecoderDock::onSaveSettings() {
     cfg.access_key_id     = m_keyId->text().trimmed().toStdString();
     cfg.secret_access_key = m_secret->text().trimmed().toStdString();
     cfg.room_id           = m_roomId->text().trimmed().toStdString();
+    // The feed name is now the only place this machine learns which room to
+    // follow (the source properties no longer carry one), so an empty field
+    // must not be allowed to leave every source asking for a nameless room.
+    // Same guard the remote-control page applies.
+    if (cfg.room_id.empty()) cfg.room_id = "main-auditorium";
+    cfg.site_name         = m_siteName->text().trimmed().toStdString();
     cfg.prebuffer_segments = m_prebuffer->value();
     cfg.start_buffer_seconds = m_startBufferS->value();
     cfg.buffer_minutes     = m_bufferMins->value();
+    cfg.poll_interval_ms   = m_pollMs->value();
+    cfg.keep_behind_segments = m_keepBehind->value();
+    cfg.cache_dir          = m_cacheDir->text().trimmed().toStdString();
     cfg.lan_host           = m_lanHost->text().trimmed().toStdString();
     cfg.lan_port           = m_lanPortField->value();
     cfg.lan_auth_token     = m_lanToken->text().trimmed().toStdString();
     set_decoder_settings(cfg);
+    m_dirty = false;
 }
 
 void DecoderDock::onStart() {
@@ -752,8 +867,12 @@ void DecoderDock::onJumpMarker() {
     decoder_jump_to_marker(id.toStdString());
 }
 
-void DecoderDock::onSeek(long long wall_ms) {
-    decoder_seek_time(wall_ms);
+void DecoderDock::onSeek(long long media_ms) {
+    // The bar hands back MEDIA time now; the session seeks by segment.
+    if (m_mediaSegMs <= 0) return;
+    long long seq = media_ms / m_mediaSegMs;
+    if (seq < 0) seq = 0;
+    decoder_seek((unsigned long long)seq);
 }
 
 // ── Recordings ───────────────────────────────────────────────────────────────
@@ -969,6 +1088,13 @@ void DecoderDock::refresh() {
     // something visible long before the network has finished answering it.
     // Every branch is a state of this decoder — nothing about the main site
     // appears here, which is the whole point of the split.
+    // Nothing is on air yet, so the only thing an operator can act on is how
+    // much of the buffer is actually down against the gate that Play is waiting
+    // for. Rounded to seconds: the raw double flickers, and nobody reads past
+    // the whole second.
+    const int bufGate = s.start_buffer_s;
+    const int bufHave = (int)(s.buffered_span_s + 0.5);
+
     if (s.stopped) {
         m_playback->setText(tr_("Dock.Pb.Stopped"));
         m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
@@ -976,7 +1102,9 @@ void DecoderDock::refresh() {
         m_playback->setText(tr_("Dock.Loading"));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else if (s.seek_target_ms > 0 || s.buffering) {
-        m_playback->setText(tr_("Dock.Buffering"));
+        m_playback->setText(bufGate > 0
+                                ? tr_("Dock.BufferingProgress").arg(bufHave).arg(bufGate)
+                                : tr_("Dock.Buffering"));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else if (s.paused) {
         // Previously only reachable while the room was live, because it lived
@@ -989,9 +1117,17 @@ void DecoderDock::refresh() {
         m_playback->setStyleSheet("color: #8fd3b4; font-weight: bold;");
     } else {
         // Configured and buffering ahead, but not on air: what Load leaves
-        // behind, waiting for Play on cue.
-        m_playback->setText(tr_("Dock.Pb.Ready"));
-        m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
+        // behind, waiting for Play on cue. Say how far the buffer has actually
+        // got — "Ready" on its own is indistinguishable from a link that has
+        // stalled, and the operator's next move (wait, or press Play anyway)
+        // depends on the difference.
+        if (bufGate > 0 && bufHave < bufGate) {
+            m_playback->setText(tr_("Dock.FillingBuffer").arg(bufHave).arg(bufGate));
+            m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
+        } else {
+            m_playback->setText(tr_("Dock.Pb.Ready"));
+            m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
+        }
     }
 
     // ── What the MAIN SITE is doing ──────────────────────────────────────────
@@ -1047,14 +1183,34 @@ void DecoderDock::refresh() {
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
+    // Media time is the axis: segment number x one segment, so a position is
+    // the place on screen rather than a stored clock time. The two disagree on
+    // an event whose encoder restarted, and only the segment agrees with the
+    // picture.
+    const double seg_s = s.segment_duration_s > 0.1 ? s.segment_duration_s : 6.0;
+    m_mediaSegMs = (long long)(seg_s * 1000.0 + 0.5);
+    m_posClockOriginMs = (long long)s.started_ms;
+    const auto media = [this](unsigned long long seq) {
+        return (long long)seq * m_mediaSegMs;
+    };
+
     m_posValid    = true;
     m_posFixed    = true;
     m_posAnimate  = false;
     m_posVod      = false;
     m_posBoundMs  = 0;
     m_posTooltip  = QString();
-    m_posBaseMs     = (long long)s.playhead_ms;
+    m_posBaseMs     = media(s.playhead_seq);
     m_posBaseWallMs = (long long)QDateTime::currentMSecsSinceEpoch();
+
+    // Anchor the interpolation to the on-screen segment. Media time advances at
+    // 1x, so wall time since this anchor is what makes the bar glide rather
+    // than step once per segment.
+    if (s.playhead_seq != m_mediaAnchorSeq) {
+        m_mediaAnchorSeq    = s.playhead_seq;
+        m_mediaAnchorMs     = m_posBaseMs;
+        m_mediaAnchorWallMs = m_posBaseWallMs;
+    }
 
     if (s.stopped) {
         // First, ahead of everything else: a stopped source is not downloading,
@@ -1072,6 +1228,12 @@ void DecoderDock::refresh() {
     } else if (s.loading) {
         m_posText  = tr_("Dock.LoadingRecording");
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
+    } else if (!s.playing && bufGate > 0 && bufHave < bufGate) {
+        // Load pressed, buffer still filling, nothing on air yet. This is the
+        // largest text on the dock, so the progress belongs here as much as in
+        // the state line — it is what the operator is watching while they wait.
+        m_posText  = tr_("Dock.FillingBuffer").arg(bufHave).arg(bufGate);
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
         // How far through, out of its total length — the way a media player
@@ -1081,12 +1243,11 @@ void DecoderDock::refresh() {
         m_posFixed     = false;
         m_posVod       = true;
         m_posAtEnd     = s.at_end;
-        m_posStartedMs = (long long)s.started_ms;
-        m_posTotalMs   = (long long)s.total_ms;
+        m_posStartedMs = 0;                       // elapsed, from the start
+        m_posTotalMs   = media(s.live_edge + 1);  // the whole recording
         // A recording cannot play past its own end, so interpolation must not
-        // walk past it either. Only a bound we actually know.
-        if (s.started_ms > 0 && s.total_ms > 0)
-            m_posBoundMs = (long long)s.started_ms + (long long)s.total_ms;
+        // walk past it either.
+        if (s.live_edge > 0) m_posBoundMs = m_posTotalMs;
         // Animate only while it is genuinely running: not held, and not
         // already sitting at the end.
         m_posAnimate = s.playing && !s.paused && !s.at_end;
@@ -1105,7 +1266,7 @@ void DecoderDock::refresh() {
         m_posVod     = false;
         m_posBehindS = s.behind_live_s;
         // The live edge is the furthest this can meaningfully go.
-        if (s.live_ms > 0) m_posBoundMs = (long long)s.live_ms;
+        if (s.live_edge > 0) m_posBoundMs = media(s.live_edge + 1);
         m_posAnimate = s.playing && !s.paused && !s.buffering;
     }
 
@@ -1115,10 +1276,14 @@ void DecoderDock::refresh() {
     // While live, the right edge is the live edge and the bar necessarily grows
     // with it.
     if (s.ended && s.end_ms > 0) {
-        m_timeline->setSpan(s.started_ms > 0 ? s.started_ms : s.earliest_ms,
-                            s.end_ms);
+        // A recording spans its whole length, labelled as elapsed time.
+        m_timeline->setSpan(0, media(s.live_edge + 1));
+        m_timeline->setClockOrigin(0);
     } else {
-        m_timeline->setSpan(s.earliest_ms, s.live_ms);
+        // Live: the left edge is what storage still holds, and the labels read
+        // as times of day.
+        m_timeline->setSpan(media(s.first_available), media(s.live_edge + 1));
+        m_timeline->setClockOrigin(m_posClockOriginMs);
     }
     // Which of the ordinary "nothing to draw yet" states this is. Only used
     // when the span is empty; the bar ignores it otherwise.
@@ -1127,10 +1292,15 @@ void DecoderDock::refresh() {
             ? (s.room_state == 1 /* offline */ ? tr_("Dock.TimelineOffline")
                                                : tr_("Dock.TimelineNothing"))
             : tr_("Dock.TimelineWaiting"));
-    m_timeline->setDownloaded(s.cached_spans);
+    {
+        std::vector<std::pair<long long, long long>> dl;
+        for (const auto& r : s.cached_seq_spans)
+            dl.emplace_back(media(r.first), media(r.second + 1));
+        m_timeline->setDownloaded(std::move(dl));
+    }
     {
         std::vector<long long> mt;
-        for (const auto& m : s.markers) if (m.at_ms > 0) mt.push_back(m.at_ms);
+        for (const auto& m : s.markers) mt.push_back(media(m.seq));
         m_timeline->setMarkers(std::move(mt));
     }
 
@@ -1141,7 +1311,16 @@ void DecoderDock::refresh() {
         const QString keep = m_markers->currentData().toString();
         m_markers->clear();
         for (const auto& m : s.markers) {
-            const QString when = m.at_ms > 0 ? clock_time(m.at_ms) : QString();
+            // A recording's cue times run 00:00 to the end of the event; live
+            // they are times of day. Same rule the playhead readout follows —
+            // "behind live" means nothing once there is no live edge.
+            const bool vod = s.ended || s.interrupted;
+            QString when;
+            if (m.at_ms > 0) {
+                when = (vod && s.started_ms > 0 && m.at_ms >= s.started_ms)
+                         ? position(m.at_ms - s.started_ms)
+                         : clock_time(m.at_ms);
+            }
             const QString label = when.isEmpty()
                 ? QString::fromStdString(m.label)
                 : when + "   " + QString::fromStdString(m.label);
@@ -1229,8 +1408,14 @@ void DecoderDock::refresh() {
         m_audio->setToolTip(QString());
     }
 
-    if (!s.last_error.empty()) {
-        m_error->setText(QString::fromStdString(s.last_error));
+    // A real error wins the red line, but a clock far from the store's earns
+    // the same attention: it is what puts this site's cue times out of step.
+    QString warn = QString::fromStdString(s.last_error);
+    const long long skew = s.clock_skew_ms;
+    if (warn.isEmpty() && (skew >= 5000 || skew <= -5000))
+        warn = tr_("Dock.ClockOut") + " (" + QString::number(skew / 1000) + " s)";
+    if (!warn.isEmpty()) {
+        m_error->setText(warn);
         m_error->show();
     } else {
         m_error->hide();
@@ -1275,8 +1460,7 @@ void DecoderDock::paintPosition() {
     }
 
     if (m_posVod) {
-        const long long elapsed =
-            (m_posStartedMs > 0 && head > m_posStartedMs) ? head - m_posStartedMs : 0;
+        const long long elapsed = head > m_posStartedMs ? head - m_posStartedMs : 0;
         const QString pos = position(elapsed) +
             (m_posTotalMs > 0 ? "  /  " + position(m_posTotalMs) : QString());
         if (m_posAtEnd) {
@@ -1287,28 +1471,31 @@ void DecoderDock::paintPosition() {
             m_behind->setText(pos);
         }
         // The clock time of the recorded moment stays available, just smaller.
-        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(head)));
+        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(m_posClockOriginMs + head)));
         return;
     }
 
     // Behind live. Only the clock time advances between samples; how far behind
     // we are does not, because the live edge is moving at the same rate.
     style("font-size: 18px; font-weight: 500; color: #e0a020;");
-    m_behind->setText(tr_("Dock.Showing").arg(clock_time(head))
+    m_behind->setText(tr_("Dock.Showing").arg(clock_time(m_posClockOriginMs + head))
                       + "  —  "
                       + tr_("Dock.BehindBy").arg(friendly_duration(m_posBehindS)));
     m_behind->setToolTip(QString());
 }
 
 long long DecoderDock::livePlayheadMs() const {
-    if (!m_posAnimate) return m_posBaseMs;
-    // A refresh period and a half. The rule itself lives in core and is tested
-    // there — see position_interp.h for why it is not written inline here.
-    static constexpr long long kMaxExtrapolationMs = 750;
-    return multisite::interpolate_position(
-        m_posBaseMs, m_posBaseWallMs,
-        (long long)QDateTime::currentMSecsSinceEpoch(),
-        m_posBoundMs, kMaxExtrapolationMs);
+    if (!m_posAnimate) return m_mediaAnchorMs ? m_mediaAnchorMs : m_posBaseMs;
+    // Media plays at 1x, so wall time since the segment was anchored is the
+    // media time advanced into it. Capped at one segment, so a stalled refresh
+    // cannot run the playhead past the segment it belongs to; bounded by the
+    // span so a recording cannot be drawn past its own end.
+    long long adv = (long long)QDateTime::currentMSecsSinceEpoch() - m_mediaAnchorWallMs;
+    if (adv < 0) adv = 0;
+    if (m_mediaSegMs > 0 && adv > m_mediaSegMs) adv = m_mediaSegMs;
+    long long head = m_mediaAnchorMs + adv;
+    if (m_posBoundMs > 0 && head > m_posBoundMs) head = m_posBoundMs;
+    return head;
 }
 
 } // namespace multisite_obs

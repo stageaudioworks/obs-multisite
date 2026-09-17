@@ -214,6 +214,11 @@ struct Marker {
     std::string type = "cue";
     std::string label;
     std::string id;
+    // Display name of the site that dropped this cue — "Main site", a campus
+    // name, whatever the operator called themselves. Empty means the main
+    // site: every cue written before authors existed, and any cue the encoder
+    // drops without a name of its own.
+    std::string author;
 };
 
 struct MarkerList {
@@ -231,6 +236,23 @@ std::string live_pointer_key(const std::string& room_id);
 std::string room_events_prefix(const std::string& room_id);
 std::string room_event_key(const std::string& room_id, const std::string& event_id);
 std::string event_prefix_for(const std::string& event_id);
+
+// ── Cues ─────────────────────────────────────────────────────────────────────
+// Cues live ONE OBJECT PER AUTHOR, so the encoder and every satellite can drop
+// cues for the same event without any of them overwriting another's. The
+// encoder keeps writing markers.json — its own file, and what older decoders
+// still read — while a satellite writes cues/{token}.json. A reader merges
+// both, so a cue dropped at any site reaches every site.
+std::string cues_prefix_for(const std::string& event_id);
+// A URL-safe token for a site name, so "Campus B (north)" becomes a stable,
+// repeatable object key. An empty or wholly-unsafe name falls back to "site".
+std::string cue_author_token(const std::string& display_name);
+std::string cue_object_key(const std::string& event_id,
+                           const std::string& display_name);
+// Merge cue lists into one, oldest first: by at_ms, then seq, then id, so the
+// order is stable when two cues share a millisecond. A cue id appearing in more
+// than one list is kept once.
+MarkerList merge_markers(std::vector<MarkerList> parts);
 
 // Recover the event id from a room-index key or a listing's common prefix,
 // whichever form the caller has. Returns "" if the string is neither.

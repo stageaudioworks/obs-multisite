@@ -479,8 +479,20 @@ async function refreshEvents(force) {
                   >Download</a>
                ${dests.length ? `
                  <select class="inline" data-rbdest="${esc(e.event_id)}">${options}</select>
-                 <button data-rb="${esc(e.event_id)}">Replay to it</button>` : ''}
-             </div>`}
+                 <button data-rb="${esc(e.event_id)}">Replay to it</button>
+                 <button class="ghost" data-rbcues="${esc(e.event_id)}">Cues&hellip;</button>` : ''}
+             </div>
+             ${dests.length ? `
+             <div class="row" data-rbcuepanel="${esc(e.event_id)}" hidden>
+               <label>From</label>
+               <select class="inline" data-rbstart="${esc(e.event_id)}">
+                 <option value="">the beginning</option>
+               </select>
+               <label>To</label>
+               <select class="inline" data-rbend="${esc(e.event_id)}">
+                 <option value="">the end</option>
+               </select>
+             </div>` : ''}`}
       </div>`;
     }).join('');
 
@@ -488,15 +500,60 @@ async function refreshEvents(force) {
       b.onclick = async () => {
         const id = b.dataset.rb;
         const sel = host.querySelector(`[data-rbdest="${CSS.escape(id)}"]`);
+        const start = host.querySelector(`[data-rbstart="${CSS.escape(id)}"]`);
+        const end = host.querySelector(`[data-rbend="${CSS.escape(id)}"]`);
         b.disabled = true;
         try {
           await api('POST', '/api/rebroadcast', {
             event_id: id,
             destination_id: Number(sel.value),
+            // Two cues, as in and out points, turn the replay into an excerpt.
+            // Blank means "the whole recording", which is what it always did.
+            start_cue: start ? start.value : '',
+            end_cue: end ? end.value : '',
           });
           refreshRebroadcast();
         } catch (ex) { alert(ex.message); }
         b.disabled = false;
+      };
+    });
+
+    // The in/out pickers fetch their cues the first time they are opened, so
+    // the events list costs nothing extra until an operator asks for a range.
+    host.querySelectorAll('[data-rbcues]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.dataset.rbcues;
+        const panel = host.querySelector(`[data-rbcuepanel="${CSS.escape(id)}"]`);
+        if (!panel) return;
+        if (!panel.hidden) { panel.hidden = true; return; }
+        panel.hidden = false;
+        if (panel.dataset.loaded === '1') return;
+
+        const start = panel.querySelector(`[data-rbstart="${CSS.escape(id)}"]`);
+        const end = panel.querySelector(`[data-rbend="${CSS.escape(id)}"]`);
+        try {
+          const cues = await api('GET', '/api/events/cues?event=' + encodeURIComponent(id));
+          if (!cues.length) {
+            start.innerHTML = '<option value="">no cues in this event</option>';
+            end.innerHTML = '<option value="">no cues in this event</option>';
+          } else {
+            for (const c of cues) {
+              const when = c.at_ms
+                ? new Date(c.at_ms).toTimeString().slice(0, 5) + ' ' : '';
+              const who = c.author ? ' — ' + c.author : '';
+              const text = `${when}${c.label}${who}`;
+              start.insertAdjacentHTML('beforeend',
+                `<option value="${esc(c.id)}">${esc(text)}</option>`);
+              end.insertAdjacentHTML('beforeend',
+                `<option value="${esc(c.id)}">${esc(text)}</option>`);
+            }
+          }
+          panel.dataset.loaded = '1';
+        } catch (ex) {
+          const note = `<option value="">${esc(ex.message)}</option>`;
+          start.innerHTML = note;
+          end.innerHTML = note;
+        }
       };
     });
   } catch (e) {

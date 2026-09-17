@@ -13,6 +13,20 @@
 
 namespace multisite_obs {
 
+// One cue, wherever it came from: the name the operator typed, its id, who set
+// it, and the clock time it refers to. Shared by the encoder and decoder sides
+// so one Cues dock draws the same list whatever role this machine is.
+struct CueEntry {
+    std::string label;
+    std::string id;
+    std::string author;       // site name; empty reads as the main site
+    long long   at_ms = 0;
+    // The media segment it sits on. The timeline is drawn from THIS, not from
+    // at_ms: the two disagree on an event whose encoder restarted, and only the
+    // segment number agrees with what is on screen.
+    unsigned long long seq = 0;
+};
+
 // Implemented by the encoder output while broadcasting.
 struct EncoderStats {
     std::string event_id;
@@ -41,12 +55,18 @@ struct EncoderStats {
     int         lan_port = 0;
     unsigned long long lan_cached_segments = 0;
     std::string lan_error;
+
+    // This machine's clock against the store's, from the HTTP Date header — 0
+    // when nothing has been observed. A large value means THIS box is the one
+    // that is out; see Transport::server_clock_skew_ms.
+    long long   clock_skew_ms = 0;
 };
 
 struct EncoderControls {
     virtual ~EncoderControls() = default;
     virtual void drop_marker(const std::string& label) = 0;
-    virtual std::string marker_labels() const = 0;   // comma-separated
+    // The cues this event has, merged across every site that has set one.
+    virtual void cues(std::vector<CueEntry>& out) const = 0;
     virtual void log_status() = 0;
     // Live figures for the dock: queue depth, retries, link health.
     virtual EncoderStats stats() const = 0;
@@ -93,6 +113,9 @@ struct DecoderControls {
     virtual void log_status() = 0;
     virtual void snapshot(DecoderSnapshot& out) const = 0;
     virtual void jump_to_marker(const std::string& id) = 0;
+    // Drop a cue with an operator-typed name (shared cues). Fails with a
+    // reason when this box has no site name or nowhere to write it.
+    virtual void add_cue(const std::string& label, std::string& error) = 0;
     virtual void seek(unsigned long long seq) = 0;
     // Re-read settings (including the machine-wide storage config) and
     // restart. Needed when credentials are entered in the dock after a source
@@ -146,7 +169,21 @@ struct DecoderSnapshot {
     int         link_health = 0;
     bool        link_known = false;
     unsigned long long head = 0, live_edge = 0, first_available = 0;
+    // The segment of the frame actually ON SCREEN, when the host knows it. The
+    // timeline is anchored to this so its playhead is always the picture.
+    unsigned long long playhead_seq = 0;
+    // One segment's nominal length, the multiplier that turns a segment number
+    // into the media time the bar draws.
+    double      segment_duration_s = 6.0;
     double      behind_live_s = 0.0, buffered_ahead_s = 0.0;
+    // How much of the buffer is actually down, against the start gate that must
+    // be met before Play will go to air. Before playback there is no head to
+    // measure ahead of, so buffered_ahead_s reads zero and the dock had nothing
+    // to show but a static "Ready" while the link was clearly working. The span
+    // is the longest contiguous run on disk, in seconds, so it grows as the
+    // buffer fills whether the event is live or a recording.
+    double      buffered_span_s = 0.0;
+    int         start_buffer_s = 0;
     bool        paused = false;
     size_t      cached = 0;
     std::string current_marker;
@@ -197,9 +234,11 @@ struct DecoderSnapshot {
     // Contiguous downloaded ranges as clock times, so the timeline can show
     // exactly what is on disk.
     std::vector<std::pair<long long, long long>> cached_spans;
-    // label, id, and the clock time the marker refers to
-    struct MarkerEntry { std::string label; std::string id; long long at_ms; };
-    std::vector<MarkerEntry> markers;
+    // …and the same ranges as SEGMENT numbers, which is what the timeline
+    // draws: clock times and segment numbers disagree on a restarted event.
+    std::vector<std::pair<unsigned long long, unsigned long long>> cached_seq_spans;
+    // label, id, who set it, and the clock time the marker refers to
+    std::vector<CueEntry> markers;
     // What the main site says each audio channel carries, when it publishes a
     // packed multi-channel feed.
     std::vector<std::string> channel_labels;
@@ -218,6 +257,11 @@ struct DecoderSnapshot {
     // so it describes what just happened, not a sticky mode.
     bool        lan_configured = false;
     bool        lan_active = false;
+
+    // This machine's clock against the store's, from the HTTP Date header — 0
+    // when nothing has been observed. A large value means THIS box is the one
+    // that is out.
+    long long   clock_skew_ms = 0;
 };
 bool decoder_snapshot(DecoderSnapshot& out);
 void decoder_pause_all();
@@ -232,6 +276,17 @@ void decoder_set_delay(double seconds);
 void decoder_set_locked(bool locked);
 void decoder_jump_to_marker(const std::string& id);
 void decoder_seek(unsigned long long seq);
+
+// ── Cues ─────────────────────────────────────────────────────────────────────
+// One merged list for the Cues dock, whichever role this machine is. Prefer the
+// encoder's own view while broadcasting; fall back to the decoder's merged view
+// (which already includes cues from every site). Returns false when neither is
+// present, so the dock can say "no event" rather than show an empty list.
+bool encoder_cues(std::vector<CueEntry>& out);
+bool decoder_cues(std::vector<CueEntry>& out);
+// Drop a cue: to the encoder while broadcasting (it owns the event), otherwise
+// through the active decoder's own site object. `error` explains a refusal.
+bool decoder_add_cue(const std::string& label, std::string& error);
 
 // Event list, from the same source the dock's snapshot follows.
 void decoder_refresh_events();

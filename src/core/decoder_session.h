@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -49,6 +50,21 @@ enum class PlayState { Stopped, Playing, Paused };
 struct DecoderConfig {
     std::string room_id = "main-auditorium";
     std::string cache_dir;
+    // This box's own name — "Campus B", "Main site" — stamped on every cue it
+    // drops, so every other site can see who set one. Empty disables cue
+    // authoring: the dock says so rather than failing on a click.
+    std::string author_name;
+    // Whether this box may write a cue. True when the transport can accept a
+    // write (a scoped cloud credential) or a LAN hub is configured; a
+    // read-only satellite leaves it false.
+    bool        can_author_cues = false;
+    // Publishes a cue when this box has no bucket of its own — a LAN satellite,
+    // where the encoder accepts it on the satellite's behalf (see
+    // LanObjectServer / Session::add_cue_from). Called INSTEAD of writing the
+    // bucket directly, and returns the hub's merged cue list as JSON. Empty
+    // means this box writes its own cue object.
+    std::function<bool(const std::string& author, const std::string& label,
+                       std::string& merged_json, std::string& error)> cue_hub;
     // Segments to buffer before playback starts. Higher = more resilient.
     int    prebuffer_segments = 2;
     // Seconds of programme that must be banked (contiguously cached) before
@@ -72,6 +88,14 @@ struct DecoderConfig {
     // this.
     int    stale_after_ms = 600000;      // 10 minutes
     int    max_download_retries = 5;
+    // Hold an event that has finished while it was being watched, rather than
+    // following live.json on to whatever the room does next. On by default,
+    // because being pulled out of a recording someone is part-way through is
+    // worse than being told the next event has started — the operator gets the
+    // offer (live_elsewhere) and presses Return to live. An unattended box that
+    // exists to relay the room continuously wants the opposite, so the
+    // appliance turns this off.
+    bool   hold_finished_event = true;
     // Play this specific event instead of whatever live.json names. Set when
     // an operator picks a past event from the event list; empty means
     // "follow the room", which is the live behaviour.
@@ -158,6 +182,20 @@ public:
     // Cues published by the main site (markers.json), refreshed on poll.
     std::vector<Marker> markers() const;
 
+    // Drop a cue with an operator-typed name at the current live edge. Writes
+    // only THIS box's own cue object (one writer per object, so no other
+    // site's cues can be clobbered) and reflects it locally at once, rather
+    // than making the dock wait for the next poll. Returns false with `error`
+    // set when there is no site name, no live event, or the write fails.
+    // `operator_seq` is the media segment the host is SHOWING. That is the
+    // honest answer to "here", and the only reliable one after a seek: the
+    // media clock is re-pinned to a fresh offset when playback jumps, so a
+    // clock reading names a place inconsistently. `operator_at_ms` is a wall
+    // time, used when the host has no segment number; 0 for both means the
+    // session's own head.
+    bool add_cue(const std::string& label, std::string& error,
+                 uint64_t operator_seq = 0, int64_t operator_at_ms = 0);
+
     // Move playback to a marker. Returns false if the marker is unknown or its
     // segment is no longer retained.
     bool jump_to_marker(const std::string& marker_id);
@@ -217,6 +255,11 @@ public:
     // playback could continue with no network at all.
     double buffered_ahead_s() const;
 
+    // The configured start gate: seconds of programme that must be on disk
+    // before Play will go to air. Exposed so the UI can show the buffer filling
+    // against a real target rather than an open-ended spinner.
+    int start_buffer_seconds() const { return m_cfg.start_buffer_seconds; }
+
     // The contiguous cached ranges, as [first,last] sequence pairs, so a UI can
     // draw what is actually on disk rather than approximate it.
     std::vector<std::pair<uint64_t, uint64_t>> cached_ranges() const;
@@ -262,6 +305,12 @@ private:
 
     std::string m_event_id;
     std::string m_pinned_event_id;     // guarded by m_mtx
+    // Set once when the event being watched is seen to finish without having
+    // been pinned, so that the next event starting does not steal the playback.
+    // Cleared when the loaded event changes and set by unpin(), so it fires
+    // exactly at the moment of ending and never fights an operator who has
+    // deliberately asked to follow the room again.
+    bool        m_end_hold_done = false;
     std::string m_live_event_id;       // what live.json last named
     std::atomic<bool> m_room_is_live{false};   // …and whether it was advancing
     std::atomic<RoomState> m_room{RoomState::Unknown};

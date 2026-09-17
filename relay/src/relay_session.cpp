@@ -25,9 +25,11 @@ constexpr int64_t kDrainQuietMs = 2000;
 } // namespace
 
 RelaySession::RelaySession(Destination dest, RoomFeeder& feeder,
-                           bool from_beginning)
+                           bool from_beginning, uint64_t start_seq,
+                           uint64_t end_seq)
     : m_dest(std::move(dest)), m_feeder(feeder),
-      m_from_beginning(from_beginning) {
+      m_from_beginning(from_beginning),
+      m_start_seq(start_seq), m_end_seq(end_seq) {
     m_enabled = m_dest.enabled;
 }
 
@@ -142,6 +144,8 @@ void RelaySession::run() {
         in.output_ever_accepted = m_ever_accepted;
         in.awaits_receiver = is_listener(dest);
         in.from_beginning = m_from_beginning;
+        in.start_seq = m_start_seq;
+        in.end_seq   = m_end_seq;
 
         // A child that exited on its own must be reported to the machine
         // before it decides anything, so the backoff is applied.

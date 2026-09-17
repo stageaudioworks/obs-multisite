@@ -140,6 +140,16 @@ public:
                       const std::function<bool(const uint8_t*, size_t)>& sink,
                       std::string& error) const;
 
+    // The cues of the event the feeder is currently following (live or pinned),
+    // merged across every author. Empty before anything has been read.
+    std::vector<multisite::Marker> markers() const;
+
+    // The cues of a specific past event, read straight from the store. Cloud
+    // only — a LAN hub only ever holds the event in progress — and used by the
+    // rebroadcast UI to offer in and out points before a replay starts.
+    std::vector<multisite::Marker> event_cues(const std::string& event_id,
+                                              std::string& error) const;
+
     // A one-off credential and connectivity check, so a mistyped key is
     // reported when it is entered rather than when an event starts.
     std::string check_storage();

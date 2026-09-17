@@ -328,6 +328,53 @@ int main() {
               "and closes cleanly at the end of the recording");
     }
 
+    // ── A rebroadcast bounded by two cues ────────────────────────────────────
+    // Two cues chosen as in and out points make the recording an excerpt: it
+    // starts at the first and closes at the second, whatever the room is still
+    // doing. Zero means "no bound", which is the behaviour tested just above.
+    {
+        RelayMachine m;
+        auto in = live_at(0, 100);
+        in.room = RoomState::Ended;
+        in.from_beginning = true;
+        in.start_seq = 5;                  // the in-point cue
+        in.end_seq   = 7;                  // the out-point cue
+        auto d = m.step(in);
+        CHECK(d.action == RelayAction::Spawn && m.head() == 5,
+              "a bounded rebroadcast starts at its in-point cue");
+
+        in.child_alive = true;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::FeedSegment && d.seq == 5,
+              "and sends the in-point segment first");
+
+        in.now_ms = 6000;  m.step(in);      // 6
+        in.now_ms = 12000; m.step(in);      // 7 — the out-point segment itself
+        in.now_ms = 18000;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::CloseInput,
+              "then closes at the out-point, not at the end of the recording");
+    }
+
+    // An out-point ends the excerpt while the event is still live, too — the
+    // whole point of choosing one.
+    {
+        RelayMachine m;
+        auto in = live_at(0, 100);
+        in.from_beginning = true;
+        in.end_seq = 3;
+        m.step(in);                         // spawn at 0
+        in.child_alive = true;
+        m.step(in);                         // 0
+        in.now_ms = 6000;  m.step(in);      // 1
+        in.now_ms = 12000; m.step(in);      // 2
+        in.now_ms = 18000; m.step(in);      // 3
+        in.now_ms = 24000;
+        auto d = m.step(in);                // 4 > 3
+        CHECK(d.action == RelayAction::CloseInput,
+              "an out-point closes even while the room is still live");
+    }
+
     // ── Editing a destination ────────────────────────────────────────────────
     // An edit rebuilds the stream, but it is not a fault: it must not be
     // counted as a reconnection, must not serve a backoff, and must take up

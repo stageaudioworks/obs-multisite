@@ -79,6 +79,13 @@ public:
     // nothing about whether LAN itself is working.
     bool last_get_was_primary() const { return m_primary_healthy.load(); }
 
+    // The store's clock, never the LAN server's: the LAN endpoint's Date header
+    // is the encoder's own clock — the very thing being checked — so it is not
+    // a reference. Only the cloud leg can answer this.
+    int64_t server_clock_skew_ms() const override {
+        return m_secondary.server_clock_skew_ms();
+    }
+
 private:
     Transport& m_primary;    // LAN
     Transport& m_secondary;  // cloud

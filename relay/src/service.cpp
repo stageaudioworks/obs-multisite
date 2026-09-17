@@ -232,13 +232,55 @@ std::string Service::check_event_is_finished(const std::string& event_id) {
     return "That event is no longer in storage.";
 }
 
+std::vector<multisite::Marker> Service::event_cues(const std::string& event_id,
+                                                   std::string& error) const {
+    const auto storage = m_cfg.storage();
+    if (storage.bucket.empty()) {
+        error = "Storage has not been set up yet.";
+        return {};
+    }
+    // A throwaway feeder, used only for its store readers. Nothing is started,
+    // so no download thread runs and the cache directory it names is never
+    // written to.
+    FeederConfig fc;
+    fc.storage = storage;
+    fc.room_id = m_cfg.room().room_id;
+    fc.cache_dir = (::getenv("RELAY_CACHE_DIR")
+                        ? std::string(::getenv("RELAY_CACHE_DIR"))
+                        : std::string("/data/cache")) + "/cues";
+    RoomFeeder probe(fc);
+    return probe.event_cues(event_id, error);
+}
+
 std::string Service::start_rebroadcast(const std::string& event_id,
-                                       int64_t dest_id) {
+                                       int64_t dest_id,
+                                       const std::string& start_cue,
+                                       const std::string& end_cue) {
     const std::string problem = check_event_is_finished(event_id);
     if (!problem.empty()) return problem;
 
     auto dest = m_cfg.destination(dest_id);
     if (!dest) return "That destination no longer exists.";
+
+    // Resolve the in and out cues to segment numbers BEFORE taking the lock:
+    // this reads the store, and the setup below holds the lock throughout.
+    uint64_t start_seq = 0, end_seq = 0;
+    if (!start_cue.empty() || !end_cue.empty()) {
+        std::string cue_error;
+        const auto cues = event_cues(event_id, cue_error);
+        if (!cue_error.empty()) return cue_error;
+        auto resolve = [&](const std::string& id, uint64_t& out) {
+            for (const auto& m : cues)
+                if (m.id == id) { out = m.seq; return true; }
+            return false;
+        };
+        if (!start_cue.empty() && !resolve(start_cue, start_seq))
+            return "That in-point cue is no longer in the event.";
+        if (!end_cue.empty() && !resolve(end_cue, end_seq))
+            return "That out-point cue is no longer in the event.";
+        if (start_seq > 0 && end_seq > 0 && start_seq > end_seq)
+            return "The in-point is after the out-point.";
+    }
 
     const auto storage = m_cfg.storage();
     const auto room = m_cfg.room();
@@ -272,10 +314,12 @@ std::string Service::start_rebroadcast(const std::string& event_id,
     d.enabled = true;
     d.delay_s = 0;                  // a rebroadcast has no live edge to sit behind
     m_rebroadcast = std::make_unique<RelaySession>(d, *m_rebroadcast_feeder,
-                                                   /*from_beginning=*/true);
+                                                   /*from_beginning=*/true,
+                                                   start_seq, end_seq);
     m_rebroadcast->start_thread();
     m_rebroadcast_event = event_id;
-    rlog_info("rebroadcasting %s to \"%s\"", event_id.c_str(), d.name.c_str());
+    rlog_info("rebroadcasting %s to \"%s\"%s", event_id.c_str(), d.name.c_str(),
+              (start_seq > 0 || end_seq > 0) ? " (an excerpt)" : "");
     return {};
 }
 

@@ -46,14 +46,6 @@ std::vector<DecoderControls*> g_decoders;
 // Hotkey ids, so they can be unregistered on unload.
 std::vector<obs_hotkey_id> g_hotkeys;
 
-std::vector<std::string> split_csv(const std::string& s) {
-    std::vector<std::string> out;
-    std::string cur;
-    for (char c : s) { if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c; }
-    if (!cur.empty()) out.push_back(cur);
-    return out;
-}
-
 } // namespace
 
 void register_encoder_controls(EncoderControls* e) {
@@ -156,6 +148,33 @@ void decoder_seek(unsigned long long seq) {
     for (auto* d : g_decoders) d->seek(seq);
 }
 
+// ── Cues ─────────────────────────────────────────────────────────────────────
+bool encoder_cues(std::vector<CueEntry>& out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!g_encoder) return false;
+    g_encoder->cues(out);
+    return true;
+}
+
+bool decoder_cues(std::vector<CueEntry>& out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return false;
+    DecoderSnapshot s;
+    g_decoders.front()->snapshot(s);      // the dock follows the first source
+    out = std::move(s.markers);
+    return true;
+}
+
+bool decoder_add_cue(const std::string& label, std::string& error) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) {
+        error = "no decoder source is present";
+        return false;
+    }
+    g_decoders.front()->add_cue(label, error);
+    return error.empty();
+}
+
 // The event list belongs to one source, not all of them: it is a list of what
 // THIS room recorded, and the dock follows the first source exactly as the
 // snapshot does.
@@ -195,13 +214,20 @@ struct MarkerSlot { int index; };
 static MarkerSlot g_slots[4] = { {0}, {1}, {2}, {3} };
 
 static std::string marker_label_for(int index) {
-    // Labels come from the encoder's own settings so they match what the
-    // satellite will display.
-    std::lock_guard<std::mutex> lk(g_mtx);
-    if (g_encoder) {
-        auto labels = split_csv(g_encoder->marker_labels());
-        if (index < (int)labels.size() && !labels[index].empty())
-            return labels[index];
+    // The names come from the event's own cues — the same names the Cues dock
+    // shows as one-press buttons — so the hotkeys and the dock agree with no
+    // separate list to configure. Deliberately NOT under g_mtx: encoder_cues()
+    // takes that lock itself.
+    std::vector<CueEntry> cues;
+    if (encoder_cues(cues)) {
+        std::vector<std::string> names;
+        for (const auto& c : cues) {
+            if (c.label.empty()) continue;
+            bool seen = false;
+            for (const auto& n : names) if (n == c.label) { seen = true; break; }
+            if (!seen) names.push_back(c.label);
+        }
+        if (index < (int)names.size()) return names[index];
     }
     return "Marker " + std::to_string(index + 1);
 }

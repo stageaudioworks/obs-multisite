@@ -3,6 +3,7 @@
 #include "../vendor/nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -324,7 +325,8 @@ std::string MarkerList::to_json() const {
     json arr = json::array();
     for (const auto& mk : markers)
         arr.push_back({ {"seq", mk.seq}, {"at_ms", mk.at_ms},
-                        {"type", mk.type}, {"label", mk.label}, {"id", mk.id} });
+                        {"type", mk.type}, {"label", mk.label}, {"id", mk.id},
+                        {"author", mk.author} });
     return json({ {"protocol_version", protocol_version},
                   {"markers", arr} }).dump();
 }
@@ -340,10 +342,73 @@ MarkerList MarkerList::from_json(const std::string& s) {
             m.type  = mk.value("type", "cue");
             m.label = mk.value("label", "");
             m.id    = mk.value("id", "");
+            m.author = mk.value("author", "");
             ml.markers.push_back(m);
         }
     }
     return ml;
+}
+
+// ── Cues ─────────────────────────────────────────────────────────────────────
+std::string cues_prefix_for(const std::string& event_id) {
+    return event_prefix_for(event_id) + "cues/";
+}
+
+std::string cue_author_token(const std::string& display_name) {
+    std::string t;
+    bool last_dash = false;
+    for (char c : display_name) {
+        const unsigned char u = (unsigned char)c;
+        if (std::isalnum(u)) {
+            t.push_back((char)std::tolower(u));
+            last_dash = false;
+        } else if (c == ' ' || c == '-' || c == '_' || c == '.' || c == '/') {
+            if (!t.empty() && !last_dash) { t.push_back('-'); last_dash = true; }
+        }
+        // Anything else (quotes, brackets, non-ASCII) is dropped rather than
+        // turned into a separator: a name with punctuation in it should not
+        // leave a trail of dashes in the object key.
+    }
+    while (!t.empty() && t.back() == '-') t.pop_back();
+    if (t.empty()) t = "site";
+    return t;
+}
+
+std::string cue_object_key(const std::string& event_id,
+                           const std::string& display_name) {
+    return cues_prefix_for(event_id) + cue_author_token(display_name) + ".json";
+}
+
+MarkerList merge_markers(std::vector<MarkerList> parts) {
+    std::vector<Marker> all;
+    for (auto& p : parts)
+        for (auto& m : p.markers) all.push_back(m);
+    // By the EVENT's own position first, then wall time, then id.
+    //
+    // seq is what makes this clock-independent: it is the segment the cue was
+    // dropped at, counted by the encoder, so it means the same thing at every
+    // site. Ordering by at_ms first would let one box whose clock is a minute
+    // out drag its cue to the wrong place on everybody else's timeline —
+    // exactly the failure a shared cue list must not have. at_ms stays as the
+    // tie-break within a segment (and as the displayed time), so two cues
+    // dropped at the same moment still order deterministically.
+    std::stable_sort(all.begin(), all.end(),
+                     [](const Marker& a, const Marker& b) {
+                         if (a.seq   != b.seq)   return a.seq   < b.seq;
+                         if (a.at_ms != b.at_ms) return a.at_ms < b.at_ms;
+                         return a.id < b.id;
+                     });
+    MarkerList out;
+    for (auto& m : all) {
+        if (!m.id.empty()) {
+            bool dup = false;
+            for (const auto& e : out.markers)
+                if (e.id == m.id) { dup = true; break; }
+            if (dup) continue;
+        }
+        out.markers.push_back(m);
+    }
+    return out;
 }
 
 } // namespace multisite

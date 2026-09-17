@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "settings_dialog.h"
+
 class QLabel;
 class QPushButton;
 class QComboBox;
@@ -40,6 +42,11 @@ public:
     void setPlayhead(long long ms);
     void setDownloaded(std::vector<std::pair<long long, long long>> spans);
     void setMarkers(std::vector<long long> times_ms);
+    // The axis is MEDIA time (segment-anchored), so the bar can only be drawn
+    // from what is on screen. Labels need to know whether that reads as a time
+    // of day: `wall_ms_of_media_zero` is the event's start, and 0 means this is
+    // a recording and the labels are elapsed instead.
+    void setClockOrigin(long long wall_ms_of_media_zero) { m_clock_origin = wall_ms_of_media_zero; }
     // Why the bar has nothing to show, when it has nothing to show. An empty
     // trough looked identical whether no source existed, nothing had been
     // loaded yet, or something had genuinely failed — which is exactly how a
@@ -62,6 +69,7 @@ private:
     long long timeAt(int x) const;
 
     long long m_earliest = 0, m_live = 0, m_head = 0;
+    long long m_clock_origin = 0;   // wall time of media 0; 0 = a recording
     QString   m_placeholder;
     std::vector<std::pair<long long, long long>> m_downloaded;
     std::vector<long long> m_markers;
@@ -81,6 +89,7 @@ private slots:
     void paintPosition();
     void onStart();
     void onSaveSettings();
+    void onApplySettings();
     void onOpenSettings();
     // Shows only the storage fields the selected provider actually needs
     // (PROJECT-SCOPE.md §8.6) — the same dropdown as the encoder dock.
@@ -141,6 +150,19 @@ private:
     bool      m_posVod   = false;     // finished recording: elapsed / total
     bool      m_posAtEnd = false;
     long long m_posStartedMs = 0, m_posTotalMs = 0;
+    // Wall time of media 0, so a live playhead's media position can be shown as
+    // a time of day. 0 on a recording, which shows elapsed instead.
+    long long m_posClockOriginMs = 0;
+    // One segment, in milliseconds: the unit that turns a segment number into
+    // the media time the timeline draws.
+    long long m_mediaSegMs = 6000;
+    // Where the playhead interpolation is anchored: the on-screen segment and
+    // when the dock first saw it. Media time advances at 1x, so wall time since
+    // the anchor fills the gap between refreshes — otherwise the playhead sits
+    // still and then jumps a whole segment.
+    unsigned long long m_mediaAnchorSeq = 0;
+    long long m_mediaAnchorMs = 0;
+    long long m_mediaAnchorWallMs = 0;
     double    m_posBehindS = 0;
 
     // The interpolated playhead right now, or the plain sample when not
@@ -150,6 +172,11 @@ private:
     // Rebuilds the recordings list from the current listing. Separate from
     // refresh() only because that function is already long.
     void refreshEvents(const DecoderSnapshot& s);
+
+    // Fills every settings widget from what is saved, so opening Settings
+    // always shows the truth rather than whatever was last typed and left
+    // unapplied. Called at construction and on every open.
+    void loadIntoFields();
 
     QLabel* m_room = nullptr;
     // What the main site is doing (LIVE, BROADCAST ENDED, OFFLINE…).
@@ -205,9 +232,18 @@ private:
     QLineEdit* m_secret = nullptr;
     QLineEdit* m_region = nullptr;
     QLineEdit* m_roomId = nullptr;
+    // What this box is called, stamped on the cues it drops (shared cues).
+    QLineEdit* m_siteName = nullptr;
     QSpinBox*  m_prebuffer = nullptr;
     QSpinBox*  m_startBufferS = nullptr;
     QSpinBox*  m_bufferMins = nullptr;
+    // Machine-wide receive tuning, moved here from the source properties so
+    // there is exactly one place to change it — the same rule storage already
+    // follows, applied to everything rather than only the credentials.
+    QSpinBox*  m_pollMs = nullptr;
+    QSpinBox*  m_keepBehind = nullptr;
+    QLineEdit* m_cacheDir = nullptr;
+    QPushButton* m_cacheBrowse = nullptr;
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — an empty host means
     // not configured, the same convention an empty bucket already uses
     // above; no separate on/off checkbox.
@@ -216,8 +252,14 @@ private:
     QLineEdit* m_lanToken = nullptr;
     // In a dialog rather than the dock, for the same reason as the encoder:
     // settings are set once, the dock is watched mid-event.
-    QDialog* m_settings = nullptr;
+    SettingsDialog* m_settings = nullptr;
     QPushButton* m_settingsBtn = nullptr;
+    // Whether the fields hold edits that have not been applied, so closing the
+    // dialog can offer to apply them rather than discarding them silently.
+    bool m_dirty = false;
+    // True while loadIntoFields() is filling the widgets, so the change signals
+    // it raises are not mistaken for the operator's edits.
+    bool m_loading = false;
 };
 
 } // namespace multisite_obs

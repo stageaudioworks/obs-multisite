@@ -185,6 +185,7 @@ bool Session::start_new(const std::vector<uint8_t>& init,
     m_next_seq = 0;
     m_spool->begin_event(m_event_id, 0);
     m_markers = MarkerList{};
+    m_guest_markers = MarkerList{};
     return begin_common(init, video, tracks);
 }
 
@@ -331,6 +332,16 @@ void Session::publish_live(const std::string& status) {
 
 void Session::heartbeat() { publish_live("live"); }
 
+void Session::set_author_name(const std::string& name) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_author_name = name;
+}
+
+std::vector<Marker> Session::markers() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_markers.markers;
+}
+
 void Session::add_marker(const std::string& label, const std::string& type) {
     std::string json;
     {
@@ -340,6 +351,7 @@ void Session::add_marker(const std::string& label, const std::string& type) {
         mk.at_ms = now_ms();
         mk.type  = type;
         mk.label = label;
+        mk.author = m_author_name;      // empty reads as the main site
         mk.id    = make_event_id(mk.at_ms);
         m_markers.markers.push_back(mk);
         json = m_markers.to_json();
@@ -349,7 +361,65 @@ void Session::add_marker(const std::string& label, const std::string& type) {
     // LAN-only satellite (cloud delivery disabled — see null_transport.h)
     // has no cloud copy of markers.json to fall back on, so without this a
     // marker jump simply never works for one at all, not just serves late.
+    //
+    // Fired with the MERGED list — the encoder's own cues plus any a LAN
+    // satellite has handed in — so a campus sees cues set at another campus.
+    publish_lan_markers();
+}
+
+void Session::publish_lan_markers() {
+    std::string json;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        json = merge_markers({ m_markers, m_guest_markers }).to_json();
+    }
     if (m_on_markers_published) m_on_markers_published(json);
+}
+
+bool Session::add_cue_from(const std::string& author, const std::string& label,
+                           std::string& error) {
+    if (label.empty()) { error = "a cue needs a name"; return false; }
+
+    Marker mk;
+    std::string event_id;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        event_id  = m_event_id;
+        mk.seq    = m_next_seq;          // the live edge, same as an encoder cue
+        mk.at_ms  = now_ms();
+        mk.type   = "cue";
+        mk.label  = label;
+        mk.id     = make_event_id(mk.at_ms);
+        mk.author = author;
+    }
+
+    // Persist the author's OWN cue object, so a cloud reader merges it exactly
+    // as it would one the site wrote itself. Read-modify-write of that one
+    // object only — the same single-writer property the whole cue layout rests
+    // on. A LAN-only encoder's NullTransport put() simply succeeds and nothing
+    // leaves the machine, which is the intended behaviour there.
+    const std::string key = cue_object_key(event_id, author);
+    MarkerList mine;
+    auto g = m_tx.get(key);
+    if (g.success) {
+        try {
+            mine = MarkerList::from_json(std::string(g.body.begin(), g.body.end()));
+        } catch (...) {
+            // An unreadable file of this author's is replaced, not appended to.
+        }
+    }
+    mine.markers.push_back(mk);
+    if (!put_json(key, mine.to_json())) {
+        error = m_last_error.empty() ? "the cue could not be stored" : m_last_error;
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_guest_markers.markers.push_back(mk);
+    }
+    publish_lan_markers();
+    return true;
 }
 
 bool Session::end(std::chrono::milliseconds drain_deadline) {

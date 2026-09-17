@@ -32,6 +32,9 @@ void DecoderSession::pin_event(const std::string& event_id) {
 void DecoderSession::unpin() {
     std::lock_guard<std::mutex> lk(m_mtx);
     m_pinned_event_id.clear();
+    // Following the room again is an explicit choice: do not immediately
+    // re-hold a finished event the operator has just let go of.
+    m_end_hold_done = true;
 }
 std::string DecoderSession::pinned_event() const {
     std::lock_guard<std::mutex> lk(m_mtx);
@@ -140,6 +143,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
             m_markers = MarkerList{};
             m_markers_checked_ms = 0;
             m_saw_live = false;     // a new event has not been seen live yet
+            m_end_hold_done = false;   // ...and it has not been seen to end yet
             ++m_discontinuity;      // new event: new init segment and timeline
         }
         event_id = m_event_id;
@@ -195,22 +199,52 @@ RoomState DecoderSession::poll(int64_t now_override) {
         return m_room;
     }
 
-    // 4. Markers (small, and only every few seconds), also unlocked.
+    // 4. Cues (small, and only every few seconds), also unlocked.
+    //
+    // One object per author: the encoder writes markers.json, and a satellite
+    // that drops a cue writes its own cues/{site}.json (see add_cue). Read both
+    // and merge, so a cue set at any site reaches every site. A listing that
+    // fails — a LAN-only satellite, or a key without ListBucket — simply leaves
+    // the encoder's markers.json, which is all a decoder saw before cues could
+    // be authored at a satellite at all.
     MarkerList markers;
     bool have_markers = false;
     if (need_markers) {
+        std::vector<MarkerList> parts;
+
         auto mk = m_tx.get(prefix + "markers.json");
         m_link.observe(link_reachable_result(mk.success, mk.http_status), now);
         if (mk.success) {
             try {
-                markers = MarkerList::from_json(
-                    std::string(mk.body.begin(), mk.body.end()));
-                have_markers = true;
+                parts.push_back(MarkerList::from_json(
+                    std::string(mk.body.begin(), mk.body.end())));
             } catch (...) {
                 // A malformed markers file must not disturb playback.
             }
         }
-        // A 404 simply means no markers have been dropped yet.
+
+        auto ls = m_tx.list(prefix + "cues/", "", "", 1000);
+        if (ls.success) {
+            for (const auto& e : ls.keys) {
+                if (e.key.size() < 6 ||
+                    e.key.compare(e.key.size() - 5, 5, ".json") != 0)
+                    continue;
+                auto cg = m_tx.get(e.key);
+                if (!cg.success) continue;
+                try {
+                    parts.push_back(MarkerList::from_json(
+                        std::string(cg.body.begin(), cg.body.end())));
+                } catch (...) {
+                    // One site's unreadable cue file must not hide the others.
+                }
+            }
+        }
+
+        if (!parts.empty()) {
+            markers = merge_markers(std::move(parts));
+            have_markers = true;
+        }
+        // No cue object at all simply means none has been dropped yet.
     }
 
     // 5. event.json for the start time, if the manifest lacks it (older
@@ -268,6 +302,23 @@ RoomState DecoderSession::poll(int64_t now_override) {
     m_room_is_live = (!live.event_id.empty() && live.status == "live" &&
                       (m_cfg.stale_after_ms <= 0 ||
                        now - live.updated_at_ms <= (int64_t)m_cfg.stale_after_ms));
+
+    // An event that has FINISHED while it was being watched must not be yanked
+    // away by the next one starting in the room.
+    //
+    // Choosing an event pins it, and the docs promise a pinned recording is
+    // never stolen. Following the room's live feed and then watching it end was
+    // the same commitment in practice, but the session stayed unpinned — so
+    // when live.json moved on to the next event, the target changed and play
+    // jumped out of the recording the operator was part-way through. Hold it
+    // exactly as if it had been pinned: live_elsewhere() then reports the new
+    // event and the dock offers the switch instead of taking it. Done ONCE, at
+    // the moment of ending, so Return to live still follows the room afterwards.
+    if (m_cfg.hold_finished_event && is_vod(m_room.load())) {
+        if (!m_end_hold_done && m_pinned_event_id.empty() && !m_event_id.empty())
+            m_pinned_event_id = m_event_id;
+        m_end_hold_done = true;
+    }
     return m_room;
 }
 
@@ -621,6 +672,128 @@ bool DecoderSession::jump_to_marker(const std::string& marker_id) {
     }
     if (!found) return false;
     return seek(target);          // seek() bounds-checks and raises a jump
+}
+
+bool DecoderSession::add_cue(const std::string& label, std::string& error,
+                             uint64_t operator_seq, int64_t operator_at_ms) {
+    std::string author;
+    std::string prefix;
+    uint64_t    seq = 0;
+    bool        have_hub = false;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        author = m_cfg.author_name;
+        if (author.empty()) { error = "no site name is set"; return false; }
+        if (!m_cfg.can_author_cues) {
+            error = "this box is set to receive only";
+            return false;
+        }
+        if (m_event_id.empty()) { error = "no event is loaded"; return false; }
+        prefix = event_prefix();
+        // Where the operator is WATCHING, not the live edge.
+        //
+        // On a recorded event the live edge IS the end of it, so stamping the
+        // live edge put every cue dropped while watching a past event at the
+        // end. "Here" is the playhead — which is also right live, where a
+        // campus sitting behind the live edge means its own position and not
+        // the encoder's. Not yet positioned (nothing served) falls back to the
+        // live edge, which is the best answer there is.
+        seq = m_head_set.load() ? m_head.load() : m_latest_seq.load();
+
+        if (operator_seq > 0) {
+            // The host said which segment is on screen. Exact, and independent
+            // of the media clock — which is re-pinned to a fresh offset when
+            // playback jumps, so a clock reading names a place inconsistently.
+            seq = operator_seq;
+        } else if (operator_at_ms > 0) {
+            // Otherwise a wall time, when one is offered: the segment that time
+            // falls IN — the greatest start at or before it — falling back to
+            // the event's own arithmetic when the rolling manifest does not
+            // reach back that far.
+            uint64_t best = 0;
+            bool found = false;
+            for (const auto& s : m_manifest.segments) {
+                if (s.at_ms > 0 && s.at_ms <= operator_at_ms &&
+                    (!found || s.seq > best)) {
+                    best = s.seq;
+                    found = true;
+                }
+            }
+            if (found) {
+                seq = best;
+            } else {
+                const int64_t started = m_started_at_ms.load();
+                const double dur = m_segment_duration_s.load();
+                if (started > 0 && dur > 0.1 && operator_at_ms > started)
+                    seq = (uint64_t)((operator_at_ms - started) / (dur * 1000.0));
+            }
+        }
+        have_hub = static_cast<bool>(m_cfg.cue_hub);
+    }
+
+    // The wall-clock time of the CONTENT at that position, so a cue set on a
+    // recording carries the event's own time and not today's. Live, this is
+    // within a segment of now, which is what the encoder's own cues carry.
+    int64_t at_ms = operator_at_ms > 0 ? operator_at_ms : wall_clock_ms(seq);
+    if (at_ms <= 0) at_ms = now_ms();
+
+    // A LAN satellite hands the cue to the encoder, which owns the event and
+    // writes it under this site's name — so the box stays read-only and needs
+    // no bucket credentials at all.
+    if (have_hub) {
+        std::string merged_json;
+        if (!m_cfg.cue_hub(author, label, merged_json, error)) return false;
+        MarkerList merged;
+        bool parsed = false;
+        try {
+            merged = MarkerList::from_json(merged_json);
+            parsed = true;
+        } catch (...) {
+            // The hub accepted the cue but its list came back unreadable. The
+            // cue is set; keep what we had rather than blanking the list.
+        }
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (parsed) m_markers = std::move(merged);
+        return true;
+    }
+
+    const std::string key = prefix + "cues/" + cue_author_token(author) + ".json";
+
+    // Read this box's OWN cue object, append, write it back — never anyone
+    // else's. That is the property the per-author layout exists to give: this
+    // read-modify-write cannot race another site's cue, so no cue is ever
+    // clobbered by a second author.
+    MarkerList mine;
+    auto g = m_tx.get(key);
+    m_link.observe(link_reachable_result(g.success, g.http_status), now_ms());
+    if (g.success) {
+        try {
+            mine = MarkerList::from_json(std::string(g.body.begin(), g.body.end()));
+        } catch (...) {
+            // An unreadable file of our own is replaced, not appended to.
+        }
+    }
+    Marker mk;
+    mk.seq    = seq;                     // the playhead, clamped to the event
+    mk.at_ms  = at_ms;
+    mk.type   = "cue";
+    mk.label  = label;
+    mk.id     = make_event_id(mk.at_ms);
+    mk.author = author;
+    mine.markers.push_back(mk);
+
+    const std::string body = mine.to_json();
+    auto p = m_tx.put(key, std::vector<uint8_t>(body.begin(), body.end()),
+                      "application/json", {});
+    if (!p.success) {
+        error = p.error.empty() ? "the cue could not be written" : p.error;
+        return false;
+    }
+
+    // Show it here at once, rather than up to a poll later.
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_markers = merge_markers({ m_markers, mine });
+    return true;
 }
 
 std::optional<Marker> DecoderSession::current_marker() const {

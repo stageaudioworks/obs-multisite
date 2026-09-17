@@ -1,27 +1,53 @@
 # .clang-tidy — the checks worth failing a build over.
 #
-# Deliberately a short list rather than the whole catalogue. A analyser that
+# Deliberately a short list rather than the whole catalogue. An analyser that
 # reports three hundred style opinions gets switched off within a week, and
 # then catches nothing at all; these are the families that map onto faults
 # this project has actually shipped.
 #
-#   bugprone-unused-return-value  End Broadcast published nothing for six days
-#                                 because put_bytes()'s result was discarded
-#                                 and end() signed off regardless (BUGS.md).
+#   bugprone-*                    Use-after-move, dangling handles, discarded
+#                                 results, sizeof mistakes, misplaced widening
+#                                 casts. bugprone-unused-return-value is here
+#                                 because End Broadcast published nothing for
+#                                 six days when put_bytes()'s result was
+#                                 thrown away (BUGS.md).
 #   concurrency-*                 Thirteen files here spawn threads.
 #   clang-analyzer-*              Path-sensitive: null derefs, leaks, dead
 #                                 stores across branches.
-#   bugprone-*                    Use-after-move, dangling handles, sizeof
-#                                 mistakes, misplaced widening casts.
 #   performance-*                 Mostly needless copies. Cheap to honour.
 #
 # Excluded on purpose:
 #   readability-*, modernize-*    Opinion, not correctness. The tree is
 #                                 internally consistent already and churn
 #                                 would bury the findings that matter.
-#   *-magic-numbers               This code is full of deliberate constants
-#                                 (ports, timeouts, segment counts), each
-#                                 already explained in a comment beside it.
+#   *-magic-numbers               Deliberate constants (ports, timeouts,
+#                                 segment counts), each explained by a comment
+#                                 beside it.
+#   bugprone-empty-catch          Swallowing a malformed document and carrying
+#                                 on is this project's stated policy — a bad
+#                                 markers.json must not stop an event playing.
+#   bugprone-command-processor    popen() is how this code reaches timedatectl
+#                                 and the sound card; every argument is a
+#                                 literal built here, never an operator's text.
+#   bugprone-multi-level-
+#     implicit-pointer-conversion FFmpeg's own idiom: av_freep(&frame->data)
+#                                 passes a T** as void* on purpose, and there
+#                                 is no version of that call that is not this
+#                                 shape.
+#   concurrency-mt-unsafe         getenv/strerror/popen on single-threaded
+#                                 start-up and teardown paths. The check cannot
+#                                 see that, so it reports thread-safety that is
+#                                 not in question.
+#   clang-analyzer-optin.*        Opt-in advice, not default analysis. Its
+#                                 struct-padding check wants fields reordered
+#                                 for cache lines, which is churn in structs
+#                                 that hold configuration and status — read
+#                                 once, never in a hot loop.
+#
+# NOTE: the explanations above live HERE, not beside the entries below. A '#'
+# inside the YAML folded scalar is literal text, not a comment, and it silently
+# swallows the entry that follows it — which is how the first attempt at these
+# exclusions appeared to do nothing at all.
 Checks: >
   bugprone-*,
   concurrency-*,
@@ -32,13 +58,29 @@ Checks: >
   misc-unused-using-decls,
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
-  -bugprone-branch-clone
+  -bugprone-branch-clone,
+  -bugprone-empty-catch,
+  -bugprone-command-processor,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -concurrency-mt-unsafe,
+  -clang-analyzer-optin.*
 
 # Only our own code. Findings in vendor/nlohmann or a system header are not
 # ours to fix and would drown everything that is.
 HeaderFilterRegex: '.*/src/(core|obs|appliance)/.*'
+# …and vendor has to be excluded separately, because an include written as
+# "src/appliance/../vendor/nlohmann/json.hpp" matches the regex above — the
+# path as the compiler sees it really does contain /src/appliance/.
+ExcludeHeaderFilterRegex: '.*/vendor/.*'
 
-# Advisory to begin with. The point of the first run is to find out what is
-# there; promoting individual checks to errors is a decision to make against
-# a real list rather than in advance of one.
-WarningsAsErrors: ''
+# The checks held as errors. Everything above still runs and is still printed;
+# this is the subset a build fails on, chosen because the tree is clean for
+# them and each maps onto a fault shape this project cares about. Promoted from
+# advisory after a triage run rather than in advance of one.
+WarningsAsErrors: >-
+  clang-analyzer-*,
+  misc-unused-using-decls,
+  bugprone-implicit-widening-of-multiplication-result,
+  bugprone-switch-missing-default-case,
+  bugprone-assignment-in-if-condition,
+  bugprone-throwing-static-initialization

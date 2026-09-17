@@ -60,10 +60,9 @@ static constexpr char S_BUCKET[]   = "bucket";
 static constexpr char S_KEYID[]    = "access_key_id";
 static constexpr char S_SECRET[]   = "secret_access_key";
 static constexpr char S_REGION[]   = "region";
+// Still read — never written — for a scene saved before the feed name moved to
+// the machine-wide decoder settings; see the one-time migration in src_update.
 static constexpr char S_ROOM[]     = "room_id";
-static constexpr char S_POLL_MS[]  = "poll_interval_ms";
-static constexpr char S_PREBUF[]   = "prebuffer_segments";
-static constexpr char S_KEEP[]     = "keep_behind_segments";
 static constexpr char S_ATRACK[]   = "audio_track";   // 0-based
 static constexpr char S_TILE[]     = "tile_index";    // 0-based, reading order
 // Which output a tile is sent to, if any. 0 means "none" so that adding a tile
@@ -242,6 +241,11 @@ struct SourceCtx : DecoderControls {
     // being delivered, so it advances continuously rather than jumping once
     // per segment — which is why the displayed time appeared frozen.
     std::atomic<long long> playing_at_ms{0};
+    // The media segment of the frame currently going to air, from the frame
+    // itself. A cue is placed with this rather than with a clock reading: the
+    // media clock is re-pinned to a fresh offset on every seek, so a time names
+    // a place inconsistently (see DecoderSession::add_cue).
+    std::atomic<uint64_t>  on_screen_seq{0};
     // Converting a frame's pts into a clock reading.
     //
     // This used to pair the wall time of whichever fragment the FEED thread
@@ -401,6 +405,7 @@ struct SourceCtx : DecoderControls {
     void log_status() override;
     void snapshot(DecoderSnapshot& out) const override;
     void jump_to_marker(const std::string& id) override;
+    void add_cue(const std::string& label, std::string& error) override;
     void seek(unsigned long long seq) override;
     void reconfigure() override;
     void play() override;
@@ -801,6 +806,7 @@ static void deliver_loop(SourceCtx* ctx) {
                                         frame.color_matrix,
                                         frame.color_range_min,
                                         frame.color_range_max);
+            ctx->on_screen_seq = item.video.seq;
             obs_source_output_video(ctx->source, &frame);
             ctx->frames_out++;
 
@@ -1398,8 +1404,13 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
 
         // push_fragment blocks when the decoder is full — deliberately not
-        // under any lock.
-        if (auto dec = get_decoder(ctx)) dec->push_fragment(seg->media);
+        // under a lock. It returns false only when the decoder has stopped
+        // consuming (BUGS.md entry 0); say so rather than freezing silently.
+        if (auto dec = get_decoder(ctx)) {
+            if (!dec->push_fragment(seg->media, seg->seq))
+                mlog_warn("source: decoder stopped consuming video (%s)",
+                          dec->error().c_str());
+        }
         ctx->pushed_media_ns += (uint64_t)(seg->duration_s * 1e9);
     }
     mlog_info("source: feed loop exiting");
@@ -1521,6 +1532,33 @@ static void src_update(void* data, obs_data_t* s) {
         }
     }
 
+    // One-time migration for the feed name, with the same reasoning and shape
+    // as storage above: a room typed into an older scene becomes the machine
+    // default unless the dock already names a different one, and is then
+    // cleared from the scene so it can never shadow the dock again.
+    {
+        const char* own_room = obs_data_get_string(s, S_ROOM);
+        const std::string scene_room = (own_room && *own_room) ? own_room : "";
+        if (!scene_room.empty()) {
+            const bool dock_is_default =
+                shared.room_id.empty() || shared.room_id == "main-auditorium";
+            if (dock_is_default && scene_room != shared.room_id) {
+                DecoderSettings upd = shared;
+                upd.room_id = scene_room;
+                set_decoder_settings(upd);
+                shared = decoder_settings();
+                mlog_info("source: moved this scene's feed name '%s' into the "
+                          "machine-wide decoder settings (Multisite Decoder "
+                          "dock → Settings)", scene_room.c_str());
+            } else if (!dock_is_default && scene_room != shared.room_id) {
+                mlog_info("source: discarding feed name '%s' saved in this "
+                          "scene; the decoder dock's '%s' is used instead",
+                          scene_room.c_str(), shared.room_id.c_str());
+            }
+            obs_data_set_string(s, S_ROOM, "");
+        }
+    }
+
     S3Config s3;
     s3.endpoint_host     = shared.endpoint_host;
     s3.r2_account_id     = shared.r2_account_id;
@@ -1529,21 +1567,19 @@ static void src_update(void* data, obs_data_t* s) {
     s3.secret_access_key = shared.secret_access_key;
     s3.region            = shared.region;
 
-    // Room and playback tuning stay per-source: two sources may legitimately
-    // watch different rooms, and buffering can differ per machine. They fall
-    // back to the dock's values when a source has not set its own.
-    auto pick = [](const char* own, const std::string& fallback) {
-        return (own && *own) ? std::string(own) : fallback;
-    };
-
+    // Room and receive tuning are machine-wide as well, and for the same reason
+    // storage is: a second editable copy of one value per scene meant a dock
+    // edit could be silently overridden by whatever the scene had saved. Every
+    // source on this machine follows the dock's feed name and takes its safety
+    // buffer, poll interval and rewind depth from the dock too. The one-time
+    // migration above has already lifted a feed name saved in an older scene.
     DecoderConfig dc;
-    dc.room_id              = pick(obs_data_get_string(s, S_ROOM), shared.room_id);
-    dc.prebuffer_segments   = (int)obs_data_get_int(s, S_PREBUF);
-    dc.keep_behind_segments = (int)obs_data_get_int(s, S_KEEP);
+    dc.room_id              = shared.room_id;
+    dc.prebuffer_segments   = shared.prebuffer_segments;
+    dc.keep_behind_segments = shared.keep_behind_segments;
     dc.buffer_minutes       = shared.buffer_minutes;
-    // Edited on the settings page, like buffer_minutes — not per-source.
     dc.start_buffer_seconds = shared.start_buffer_seconds;
-    ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
+    ctx->poll_interval_ms   = shared.poll_interval_ms;
     ctx->audio_track        = (int)obs_data_get_int(s, S_ATRACK);
 
     if (!shared.configured()) {
@@ -1552,20 +1588,22 @@ static void src_update(void* data, obs_data_t* s) {
         return;
     }
 
-    // A room typed into a source becomes the machine default, so the next
-    // source and the next OBS session already have it.
-    if (dc.room_id != shared.room_id && !dc.room_id.empty()) {
-        DecoderSettings upd = shared;
-        upd.room_id              = dc.room_id;
-        upd.prebuffer_segments   = dc.prebuffer_segments;
-        upd.poll_interval_ms     = ctx->poll_interval_ms;
-        upd.keep_behind_segments = dc.keep_behind_segments;
-        set_decoder_settings(upd);
+    // Where downloaded segments are cached: the dock's setting when given,
+    // otherwise the fixed location under OBS's plugin config this has always
+    // used.
+    dc.cache_dir = shared.cache_dir;
+    if (dc.cache_dir.empty()) {
+        char* cachedir = obs_module_config_path("cache");
+        dc.cache_dir = cachedir ? cachedir : "./multisite_cache";
+        bfree(cachedir);
     }
 
-    char* cachedir = obs_module_config_path("cache");
-    dc.cache_dir = cachedir ? cachedir : "./multisite_cache";
-    bfree(cachedir);
+    // Cues: who this box is, and whether it may drop one. A box can author only
+    // when it knows its own name and has somewhere to put the cue; a read-only
+    // credential fails the write loudly rather than silently, so this does not
+    // need to guess the key's scope.
+    dc.author_name     = shared.site_name;
+    dc.can_author_cues = !shared.site_name.empty() && shared.configured();
 
     {
         // Cloud, LAN, both, or — since shared.configured() already checked
@@ -1581,6 +1619,19 @@ static void src_update(void* data, obs_data_t* s) {
             lcfg.port       = shared.lan_port;
             lcfg.auth_token = shared.lan_auth_token;
             lan_tx = std::make_shared<LanTransport>(lcfg);
+        }
+
+        if (lan_tx && !tx) {
+            // A cue goes to the encoder's hub only when there is NO bucket to
+            // write to. With cloud configured the cue is written directly, so a
+            // configured-but-unreachable LAN host — a box tested at home, an
+            // encoder that is switched off — can never take cue authoring down
+            // with it.
+            dc.cue_hub = [lan_tx](const std::string& author,
+                                  const std::string& label,
+                                  std::string& merged, std::string& error) {
+                return lan_tx->publish_cue(author, label, merged, error);
+            };
         }
 
         Transport* active = nullptr;
@@ -1672,14 +1723,10 @@ static void src_destroy(void* data) {
 }
 
 static void src_defaults(obs_data_t* s) {
-    obs_data_set_default_string(s, S_ROOM, "main-auditorium");
     obs_data_set_default_int(s, S_ATRACK, 0);
-    // No default for the storage fields: they are no longer edited here, and a
-    // default would make every source look as though it carried a value to
-    // migrate.
-    obs_data_set_default_int(s, S_POLL_MS, 3000);
-    obs_data_set_default_int(s, S_PREBUF, 2);
-    obs_data_set_default_int(s, S_KEEP, 200);
+    // No defaults for storage, feed name or the receive tuning: none of them
+    // are edited here any more, and a default would make every source look as
+    // though it carried a value to migrate.
 }
 
 // ── DecoderControls: one implementation, shared by buttons and hotkeys ───────
@@ -1787,6 +1834,14 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.room_id = room_id_for_display;
     out.paused  = paused.load();
     out.audio_channels = audio_channels.load();
+    {
+        // This box's clock against the store's, from the Date header on traffic
+        // we are already making. Reported so the dock can warn before a skewed
+        // clock causes confusion; 0 means "not observed yet".
+        std::shared_ptr<S3Transport> tx;
+        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+        if (tx) out.clock_skew_ms = (long long)tx->server_clock_skew_ms();
+    }
     std::shared_ptr<DecoderSession> sess;
     { std::lock_guard<std::mutex> lk(obj_mtx); sess = session; }
     if (!sess) return;
@@ -1807,6 +1862,12 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.head             = sess->playback_head();
     out.live_edge        = sess->live_edge();
     out.first_available  = sess->earliest_available();
+    // The segment on screen, when the host knows it; the serving head
+    // otherwise. The timeline is anchored to this, so its playhead is the
+    // picture and not a clock reading a seek may have re-pinned.
+    out.playhead_seq = on_screen_seq.load();
+    if (out.playhead_seq == 0) out.playhead_seq = sess->playback_head();
+    out.segment_duration_s = sess->segment_duration_s();
     // Behind live, continuously rather than a segment at a time. Both ends are
     // now real times: the playhead comes from the media clock, and the live
     // edge is carried forward from the last time it was seen to move. The
@@ -1815,6 +1876,17 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     // than running away and reporting a delay that is not there.
     out.behind_live_s    = sess->behind_live_s();      // fallback below
     out.buffered_ahead_s = sess->buffered_ahead_s();
+    out.start_buffer_s   = sess->start_buffer_seconds();
+    {
+        // Longest contiguous run of cached segments. This is the number that
+        // grows while the start buffer fills — the pre-Play state where a head
+        // has not been seated yet and buffered_ahead_s is still zero.
+        double best = 0.0;
+        for (const auto& r : sess->cached_ranges())
+            if (r.second >= r.first)
+                best = std::max(best, (double)(r.second - r.first + 1));
+        out.buffered_span_s = best * sess->segment_duration_s();
+    }
     out.cached           = sess->cache().count();
     out.last_error       = sess->last_error();
     out.link_health      = (int)sess->link_health();
@@ -1877,6 +1949,8 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
             const int64_t a = sess->wall_clock_ms(r.first);
             const int64_t b = sess->wall_clock_ms(r.second);
             if (a > 0 && b >= a) out.cached_spans.emplace_back(a, b);
+            // The same range as segment numbers, which is what the bar draws.
+            out.cached_seq_spans.emplace_back(r.first, r.second);
         }
     }
     out.live_ms     = sess->live_wall_ms();
@@ -1907,7 +1981,12 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
 
     if (auto cur = sess->current_marker()) out.current_marker = cur->label;
     for (const auto& m : sess->markers())
-        out.markers.push_back({ m.label, m.id, (long long)m.at_ms });
+        // The clock time of the cue's CONTENT, derived from the event timeline
+        // rather than from whoever dropped it — the same thing the Pi player
+        // reports. A satellite whose clock is out then still draws its cue at
+        // the right place on every other site's timeline.
+        out.markers.push_back({ m.label, m.id, m.author,
+                                (long long)sess->wall_clock_ms(m.seq), m.seq });
 }
 
 void SourceCtx::event_listing(EventListing& out) const {
@@ -1972,6 +2051,17 @@ void SourceCtx::jump_to_marker(const std::string& id) {
     paused = false;
     mlog_info("source: jumped to marker (segment %llu)",
               (unsigned long long)sess->playback_head());
+}
+
+void SourceCtx::add_cue(const std::string& label, std::string& error) {
+    auto sess = get_session(this);
+    if (!sess) { error = "no event is loaded"; return; }
+    // Writes this box's own cue object (or hands it to the encoder over LAN),
+    // then folds it in locally — see DecoderSession::add_cue. The on-screen
+    // SEGMENT goes with it: the media clock is re-pinned on every seek, so a
+    // clock reading names a place inconsistently, while the segment number is
+    // the place the operator is actually looking at.
+    sess->add_cue(label, error, on_screen_seq.load());
 }
 
 void SourceCtx::resume_downloads() {
@@ -2313,14 +2403,12 @@ static void fill_audio_tracks(obs_property_t* list,
 static obs_properties_t* src_props(void* data) {
     obs_properties_t* p = obs_properties_create();
 
-    // Storage settings deliberately do NOT appear here. They are machine-wide
-    // and edited in the decoder dock; having a second editable copy per scene
-    // meant a dock edit could be silently overridden by a value saved in the
-    // scene file, with nothing on screen to explain it.
+    // Storage, feed name and receive tuning deliberately do NOT appear here.
+    // They are machine-wide and edited in the decoder dock; having a second
+    // editable copy per scene meant a dock edit could be silently overridden by
+    // a value saved in the scene file, with nothing on screen to explain it.
     obs_properties_add_text(p, "storage_note",
                             obs_module_text("StorageInDock"), OBS_TEXT_INFO);
-
-    obs_properties_add_text(p, S_ROOM,     obs_module_text("RoomID"),       OBS_TEXT_DEFAULT);
 
     // Which track this source carries. Everything the main site sends arrives
     // in the same fragment, so choosing here costs no extra bandwidth — add a
@@ -2336,10 +2424,6 @@ static obs_properties_t* src_props(void* data) {
         }
         fill_audio_tracks(at, layout);
     }
-    obs_properties_add_int_slider(p, S_PREBUF, obs_module_text("Prebuffer"), 0, 10, 1);
-    obs_properties_add_int_slider(p, S_POLL_MS, obs_module_text("PollInterval"), 500, 10000, 500);
-    obs_properties_add_int_slider(p, S_KEEP, obs_module_text("KeepBehind"), 10, 2000, 10);
-
     obs_properties_add_button(p, "btn_pause",  obs_module_text("Pause"),      on_pause);
     obs_properties_add_button(p, "btn_resume", obs_module_text("Resume"),     on_resume);
     obs_properties_add_button(p, "btn_live",   obs_module_text("JumpToLive"), on_jump_live);

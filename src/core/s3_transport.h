@@ -121,6 +121,10 @@ public:
     // The resolved base URL (scheme + host + bucket), for logging. No secrets.
     std::string base_url() const;
 
+    // This machine's clock against the store's, from the Date header on
+    // ordinary traffic. A large value means this box is the one that is out.
+    int64_t server_clock_skew_ms() const override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> d;

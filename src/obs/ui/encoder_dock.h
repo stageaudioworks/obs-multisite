@@ -9,6 +9,8 @@
 //
 #include <QWidget>
 
+#include "settings_dialog.h"
+
 class QLineEdit;
 class QSpinBox;
 class QDoubleSpinBox;
@@ -35,7 +37,7 @@ private slots:
     // event. See PROJECT-SCOPE.md §5.1.
     void onEndAndStartFresh();
     void onSaveSettings();
-    void onMarker(int index);
+    void onApplySettings();
     void onManageStorage();
     void updateAudioFields();
     // Shows only the storage fields the selected provider actually needs
@@ -78,6 +80,13 @@ private:
     QLineEdit* m_secret = nullptr;
     QLineEdit* m_region = nullptr;
     QLineEdit* m_room = nullptr;
+    // What this machine calls itself, stamped on the cues it drops. The same
+    // field the decoder has — the Cues dock is the same on either end.
+    QLineEdit* m_siteName = nullptr;
+    // Where the durable store-and-forward queue lives. The encoder's cache
+    // folder, the counterpart to the decoder's.
+    QLineEdit* m_cacheDir = nullptr;
+    QPushButton* m_cacheBrowse = nullptr;
     QCheckBox* m_tags = nullptr;
     QLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;
@@ -101,7 +110,6 @@ private:
     QSpinBox* m_tracks = nullptr;
     QLineEdit* m_trackLabels = nullptr;
     QLineEdit* m_channelLabels = nullptr;
-    QLineEdit* m_markerLabels = nullptr;
     // How this feed is composited, if it carries more than one picture.
     QComboBox* m_tileLayout = nullptr;
     // These only apply in particular audio setups, so they are shown
@@ -116,7 +124,6 @@ private:
     QPushButton* m_manageStorage = nullptr;
     QPushButton* m_goLive = nullptr;
     QPushButton* m_end = nullptr;
-    QPushButton* m_markers[4] = { nullptr, nullptr, nullptr, nullptr };
     QLabel* m_state = nullptr;
     QLabel* m_uptime = nullptr;
     QLabel* m_confirmed = nullptr;
@@ -137,8 +144,14 @@ private:
     // Settings live in a modal dialog rather than in the dock: they are
     // configured once, while the dock is what an operator watches mid-event.
     // Keeping them inline made the dock taller than the screen.
-    QDialog* m_settings = nullptr;
+    SettingsDialog* m_settings = nullptr;
     QPushButton* m_settingsBtn = nullptr;
+    // Whether the fields hold edits that have not been applied, so closing the
+    // dialog can offer to apply them rather than discarding them silently.
+    bool m_dirty = false;
+    // True while loadIntoFields() is filling the widgets, so the change signals
+    // it raises are not mistaken for the operator's edits.
+    bool m_loading = false;
 };
 
 } // namespace multisite_obs

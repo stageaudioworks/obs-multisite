@@ -199,6 +199,7 @@ const char* status_text(int code) {
     case 413: return "Payload Too Large";
     case 500: return "Internal Server Error";
     case 503: return "Service Unavailable";
+    default: break;
     }
     return "OK";
 }
@@ -222,8 +223,8 @@ const char* content_type_for_impl(const std::string& path) {
 
 // A request body is a settings form, never an upload. Anything larger is a
 // mistake or an attack, and reading it would only waste the machine's memory.
-constexpr size_t kMaxBody = 256 * 1024;
-constexpr size_t kMaxHeaderBytes = 32 * 1024;
+constexpr size_t kMaxBody = size_t{256} * 1024;
+constexpr size_t kMaxHeaderBytes = size_t{32} * 1024;
 
 bool write_all(sock_t fd, const void* data, size_t len) {
     const char* p = static_cast<const char*>(data);

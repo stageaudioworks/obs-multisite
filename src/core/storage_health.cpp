@@ -55,7 +55,7 @@ std::string cloudflare_colo(const std::string& cf_ray) {
 void RateMeter::add(uint64_t bytes, double seconds) {
     // 64 kB and 50 ms: below either, the measurement is dominated by latency
     // and connection setup rather than the link's actual capacity.
-    if (bytes < 64 * 1024 || seconds < 0.05) return;
+    if (bytes < uint64_t{64} * 1024 || seconds < 0.05) return;
     const double rate = (double)bytes / seconds;
     if (m_samples == 0) m_rate = rate;
     else                m_rate = m_alpha * rate + (1.0 - m_alpha) * m_rate;

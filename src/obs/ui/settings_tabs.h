@@ -17,12 +17,30 @@
 // when the page fits, and on a very small display it is the difference between
 // awkward and unusable.
 //
+#include <QScrollArea>
+#include <QSize>
 #include <QString>
 
 class QWidget;
 class QTabWidget;
 
 namespace multisite_obs {
+
+// A scroll area that is allowed to be SMALLER than what it holds.
+//
+// QScrollArea with widgetResizable(true) still reports the inner widget's
+// minimum size as its own, so neither a dock nor a settings dialog built on it
+// can be shrunk below its content. That is how the decoder dock came to be
+// taller than OBS with the window already at full height, and why a settings
+// dialog had to be dragged past the edges of the screen to reach its buttons.
+// Returning a zero minimum hint lets the window be whatever size the operator
+// has and lets the content scroll — which is what a scroll area was for.
+class ShrinkableScrollArea : public QScrollArea {
+public:
+    explicit ShrinkableScrollArea(QWidget* parent = nullptr)
+        : QScrollArea(parent) {}
+    QSize minimumSizeHint() const override { return QSize(0, 0); }
+};
 
 // Wraps `content` in a scroll area and adds it to `tabs` under `title`.
 // `content` is reparented, so the caller can build it against any parent.

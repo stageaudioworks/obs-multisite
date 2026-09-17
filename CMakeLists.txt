@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs_multisite VERSION 0.1.20 LANGUAGES CXX)
+project(obs_multisite VERSION 0.1.21 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,6 +76,7 @@ add_library(multisite_core STATIC
     src/core/event_catalog.cpp
     src/core/storage_manager.cpp
     src/core/storage_providers.cpp
+    src/core/http_date.cpp
     src/core/lan_object_server.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
@@ -200,6 +201,18 @@ add_test(NAME storage_health COMMAND test_storage_health)
 add_executable(test_storage_providers tests/test_storage_providers.cpp)
 target_link_libraries(test_storage_providers PRIVATE multisite_core)
 add_test(NAME storage_providers COMMAND test_storage_providers)
+
+# Cues: one object per author, plus the site-name token and the merge that make
+# a cue dropped at any site reach every site. Pure functions (model.cpp).
+add_executable(test_cues tests/test_cues.cpp)
+target_link_libraries(test_cues PRIVATE multisite_core)
+add_test(NAME cues COMMAND test_cues)
+
+# Reading the store's own clock out of an HTTP Date header: the second opinion
+# on the time of day that needs no NTP client.
+add_executable(test_http_date tests/test_http_date.cpp)
+target_link_libraries(test_http_date PRIVATE multisite_core)
+add_test(NAME http_date COMMAND test_http_date)
 
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.
@@ -794,6 +807,7 @@ if(BUILD_OBS_PLUGIN)
         target_sources(obs-multisite PRIVATE
             src/obs/ui/encoder_dock.cpp
             src/obs/ui/decoder_dock.cpp
+            src/obs/ui/cues_dock.cpp
             src/obs/ui/storage_dialog.cpp
             src/obs/ui/role_selector.cpp
             src/obs/ui/settings_tabs.cpp

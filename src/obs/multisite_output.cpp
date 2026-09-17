@@ -44,6 +44,8 @@ static constexpr char S_KEYID[]     = "access_key_id";
 static constexpr char S_SECRET[]    = "secret_access_key";
 static constexpr char S_REGION[]    = "region";
 static constexpr char S_ROOM[]      = "room_id";
+static constexpr char S_SITENAME[]  = "site_name";
+static constexpr char S_CACHE[]     = "cache_dir";
 static constexpr char S_EVENTNAME[] = "event_name";
 static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
@@ -59,7 +61,6 @@ static constexpr char S_CHANLBL[]   = "channel_labels";
 // ultrawide picture as well as a plausible 2x1, and nothing in the video
 // distinguishes them.
 static constexpr char S_LAYOUT[]    = "tile_layout";
-static constexpr char S_MARKERS[]   = "marker_labels";
 // Set only by the dock, for one Go Live, never by the settings dialog (there
 // is deliberately no obs_properties_add_* for it, so it never appears as a
 // persisted setting). True means the operator explicitly chose "start new"
@@ -98,7 +99,6 @@ struct PendingFragment {
 // Exposes marker drops to the hotkeys and Tools menu while broadcasting.
 struct OutputCtx : EncoderControls {
     obs_output_t* output = nullptr;
-    std::string marker_label_csv;
     // S3Transport when cloud delivery is on, NullTransport when it's off (see
     // null_transport.h) — held through the abstract interface because Session
     // only ever needs a Transport&, and only self_test()/base_url() (below)
@@ -159,6 +159,8 @@ struct OutputCtx : EncoderControls {
     S3Config      pending_s3;
     SessionConfig pending_sc;
     std::string   pending_labels, pending_chan_labels, pending_layout;
+    // What this machine calls itself, stamped on every cue it drops.
+    std::string   pending_site_name;
     // The operator's explicit choice from the dock, for this Go Live only —
     // never persisted (see S_FORCE_NEW).
     bool          pending_force_new_event = false;
@@ -166,6 +168,9 @@ struct OutputCtx : EncoderControls {
     bool          pending_lan_enabled = false;
     int           pending_lan_port = 9080;
     std::string   pending_lan_token;
+    // Where retained LAN objects are kept. Resolved in out_start() from the
+    // same cache setting as the spool, so the two live in one place.
+    std::string   pending_lan_cache_dir;
     // Off means: skip S3Transport entirely and use a NullTransport instead
     // (see null_transport.h) — every segment still flows through the same
     // spool/retry/manifest pipeline, it just never leaves this machine.
@@ -192,7 +197,7 @@ struct OutputCtx : EncoderControls {
 
     // EncoderControls — driven by hotkeys and the Tools menu.
     void drop_marker(const std::string& label) override;
-    std::string marker_labels() const override;
+    void cues(std::vector<CueEntry>& out) const override;
     void log_status() override;
     EncoderStats stats() const override;
 };
@@ -375,7 +380,12 @@ void OutputCtx::drop_marker(const std::string& label) {
               (unsigned long long)session->status().last_enqueued + 1);
 }
 
-std::string OutputCtx::marker_labels() const { return marker_label_csv; }
+void OutputCtx::cues(std::vector<CueEntry>& out) const {
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mtx));
+    if (!session) return;
+    for (const auto& m : session->markers())
+        out.push_back({ m.label, m.id, m.author, (long long)m.at_ms });
+}
 
 void OutputCtx::log_status() {
     std::lock_guard<std::mutex> lk(mtx);
@@ -419,6 +429,7 @@ EncoderStats OutputCtx::stats() const {
         es.storage_host       = s3->host();
         es.upload_bytes_per_s = s3->observed_upload_bytes_per_s();
         es.upload_samples     = s3->upload_samples();
+        es.clock_skew_ms      = (long long)s3->server_clock_skew_ms();
     }
     return es;
 }
@@ -445,8 +456,6 @@ static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_LAYOUT, "1x1");
     obs_data_set_default_bool(s, S_TAGS, false);
     obs_data_set_default_bool(s, S_CLOUD_ENABLED, true);
-    obs_data_set_default_string(s, S_MARKERS,
-        "Sermon Start,Offering,Go to local,Dismissal");
 }
 
 static obs_properties_t* out_props(void*) {
@@ -482,8 +491,6 @@ static obs_properties_t* out_props(void*) {
         obs_property_set_long_description(tg,
                                           obs_module_text("SendExpiryTagHint"));
     }
-    obs_properties_add_text(p, S_MARKERS, obs_module_text("MarkerLabels"),
-                            OBS_TEXT_DEFAULT);
     return p;
 }
 
@@ -653,6 +660,9 @@ static bool complete_start(OutputCtx* ctx) {
         ctx->transport = std::make_unique<multisite::NullTransport>();
     }
     ctx->session   = std::make_unique<Session>(ctx->pending_sc, *ctx->transport);
+    // Who this machine is, for the cues it drops — the same field a satellite
+    // sets (see DecoderSettings), and empty reads as the main site.
+    ctx->session->set_author_name(ctx->pending_site_name);
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — wired before the
     // resume/start_new call below, because begin_common() fires the
@@ -665,9 +675,10 @@ static bool complete_start(OutputCtx* ctx) {
         lan_cfg.port = ctx->pending_lan_port;
         lan_cfg.auth_token = ctx->pending_lan_token;
         lan_cfg.room_id = ctx->pending_sc.room_id;
-        char* lan_dir = obs_module_config_path("lan_cache");
-        std::string lan_cache_dir = lan_dir ? lan_dir : "./multisite_lan_cache";
-        bfree(lan_dir);
+        // Resolved in out_start() from the same cache setting as the spool.
+        std::string lan_cache_dir = ctx->pending_lan_cache_dir.empty()
+                                        ? "./multisite_lan_cache"
+                                        : ctx->pending_lan_cache_dir;
         ctx->lan_server = std::make_unique<multisite::LanObjectServer>(
             lan_cfg, lan_cache_dir);
         std::string lan_err;
@@ -707,6 +718,21 @@ static bool complete_start(OutputCtx* ctx) {
             ctx->session->set_markers_published_callback(
                 [raw](const std::string& json) {
                     if (raw->lan_server) raw->lan_server->on_markers_published(json);
+                });
+            // The LAN cue hub: a satellite with no bucket hands its cue here,
+            // and the encoder writes it under that site's own name (see
+            // Session::add_cue_from) — so the satellite stays read-only and
+            // every site still sees the cue. The Session pointer is taken
+            // under the ctx lock and used without it: add_cue_from does
+            // network I/O, and holding the lock across that would stall the UI
+            // thread's stats() and drop_marker().
+            ctx->lan_server->set_cue_callback(
+                [raw](const std::string& author, const std::string& label,
+                      std::string& error) -> bool {
+                    Session* s = nullptr;
+                    { std::lock_guard<std::mutex> lk(raw->mtx); s = raw->session.get(); }
+                    if (!s) { error = "the event is not live"; return false; }
+                    return s->add_cue_from(author, label, error);
                 });
         } else {
             // Cloud upload is completely unaffected by this failing — LAN
@@ -843,13 +869,13 @@ static bool out_start(void* data) {
 
     SessionConfig sc;
     sc.room_id            = obs_data_get_string(s, S_ROOM);
+    ctx->pending_site_name = obs_data_get_string(s, S_SITENAME);
     sc.event_name         = obs_data_get_string(s, S_EVENTNAME);
     sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
     std::string labels     = obs_data_get_string(s, S_TRACKLBL);
     std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
     sc.send_expiry_tag     = obs_data_get_bool(s, S_TAGS) ||
                              obs_data_get_bool(s, S_TAGS_OLD);
-    ctx->marker_label_csv  = obs_data_get_string(s, S_MARKERS);
     // Read before the release below, not after it. This was being read from
     // `s` further down, past the point where our reference had been given up.
     const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
@@ -872,10 +898,32 @@ static bool out_start(void* data) {
         return false;
     }
 
-    // Durable spool lives beside OBS's own config.
-    char* cfgdir = obs_module_config_path("spool");
-    sc.spool_dir = cfgdir ? cfgdir : "./multisite_spool";
-    bfree(cfgdir);
+    // Durable spool: where an operator chose, else beside OBS's own config.
+    // The controller resolves its resume peek from the same setting, so the two
+    // cannot disagree about where the queue is.
+    const std::string cache_override = obs_data_get_string(s, S_CACHE);
+    if (!cache_override.empty()) {
+        sc.spool_dir = cache_override;
+    } else {
+        char* cfgdir = obs_module_config_path("spool");
+        sc.spool_dir = cfgdir ? cfgdir : "./multisite_spool";
+        bfree(cfgdir);
+    }
+
+    // Retained LAN objects go UNDER the chosen cache folder rather than beside
+    // OBS's config. An operator who has told us where video goes should not
+    // then have to hunt for a second folder when the disk fills; the default
+    // (nothing configured) stays where it has always been.
+    if (!cache_override.empty()) {
+        std::string root = cache_override;
+        while (!root.empty() && (root.back() == '/' || root.back() == '\\'))
+            root.pop_back();
+        ctx->pending_lan_cache_dir = root + "/lan_cache";
+    } else {
+        char* lan_dir = obs_module_config_path("lan_cache");
+        ctx->pending_lan_cache_dir = lan_dir ? lan_dir : "./multisite_lan_cache";
+        bfree(lan_dir);
+    }
 
     if (!obs_output_can_begin_data_capture(ctx->output, 0)) return false;
     if (!obs_output_initialize_encoders(ctx->output, 0))     return false;

@@ -127,7 +127,8 @@ struct Status {
     int         audio_channels = 0;
     std::vector<std::string> channel_labels;
 
-    struct MarkerEntry { std::string label; std::string id; long long at_ms; };
+    struct MarkerEntry { std::string label; std::string id; std::string author;
+                         long long at_ms; };
     std::vector<MarkerEntry> markers;
     std::string current_marker;
 
@@ -250,6 +251,11 @@ public:
     // status poll several times a minute should use.
     StorageHealth storage_health(bool probe);
 
+    // How far this box's clock is from the store's, in milliseconds, measured
+    // from the HTTP Date header on ordinary traffic. 0 means "nothing observed
+    // yet", not "in step".
+    long long clock_skew_ms() const;
+
     // ── Operator controls (the same set the Qt dock offers) ──────────────────
     void play();
     void stop_playback();
@@ -261,6 +267,10 @@ public:
     void jog(double seconds);
     void set_delay_from_live(double seconds);
     void jump_to_marker(const std::string& id);
+    // Drop a cue with an operator-typed name, under this box's site name.
+    // Fails with a reason when the box is locked, has no site name, or has
+    // nowhere to write the cue.
+    bool add_cue(const std::string& label, std::string& error);
     void pin_event(const std::string& event_id);
     void unpin_event();
     void set_locked(bool locked);
@@ -383,6 +393,14 @@ private:
     // PTP master must not print the same sentence every few seconds.
     std::string m_aes67_last_action;
     uint64_t    m_aes67_last_log_ns = 0;
+    // Last PTP state the probe saw, so the periodic status line can report the
+    // lock accuracy WITHOUT taking m_aes67_mtx — the probe holds that across
+    // HTTP calls, and a status line must never wait on the network. This is the
+    // number BUGS.md entry 1 is missing: how tightly a Pi's interface actually
+    // holds the clock over a long event.
+    std::atomic<bool>   m_aes67_ptp_known{false};
+    std::atomic<bool>   m_aes67_ptp_locked{false};
+    std::atomic<double> m_aes67_ptp_jitter{0.0};
 
     // Playout clock: due time = base + (media pts − first media pts).
     std::atomic<uint64_t> m_playout_base_ns{0};
@@ -412,6 +430,9 @@ private:
     // Clock reading of the frame currently on screen, advanced per frame so
     // the displayed time moves continuously rather than once per segment.
     std::atomic<long long> m_playing_at_ms{0};
+    // The segment of the frame currently going to the output. Used to place a
+    // cue exactly, without depending on the media clock (see DecoderSession).
+    std::atomic<uint64_t>  m_on_screen_seq{0};
     std::atomic<long long> m_seg_starts_at_ms{0};
     std::atomic<int64_t>   m_seg_first_pts_ns{-1};
     std::atomic<int64_t>   m_skip_until_pts_ns{-1};

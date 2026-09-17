@@ -156,6 +156,14 @@ public:
     // interest in the distinction should see the optimistic, harmless
     // answer rather than have to override this just to get "yes".
     virtual bool last_request_reached_server() const { return true; }
+
+    // How far this machine's clock is from the store's, in milliseconds,
+    // measured from the HTTP Date header on ordinary traffic. 0 means "nothing
+    // observed yet". A storage provider's servers are NTP-disciplined, so this
+    // is a second opinion on the time of day that needs no NTP client, no
+    // extra request and no privilege — and a large value means THIS box's clock
+    // is the one that is wrong.
+    virtual int64_t server_clock_skew_ms() const { return 0; }
 };
 
 } // namespace multisite
