@@ -297,6 +297,9 @@ private:
     bool m_loading = false;
     // Fill-rate sampling for the "ready in ~Ns" estimate. Two of the dock's own
     // readings, so it is what is visibly happening rather than a claim.
+    // What the operator just asked to load, so the wait can name it rather than
+    // saying "loading" about something anonymous.
+    QString   m_loadingName;
     double    m_fillPrevS = -1.0;
     long long m_fillPrevWallMs = 0;
     double    m_fillRateS = 0.0;

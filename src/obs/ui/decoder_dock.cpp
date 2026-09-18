@@ -31,6 +31,7 @@
 #include <QFileDialog>
 #include <QLabel>
 #include <QKeyEvent>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -1084,8 +1085,33 @@ void DecoderDock::onLoadEvent() {
     if (!item) return;
     const QString id = item->data(Qt::UserRole).toString();
     if (id.isEmpty()) return;
+
+    // Replacing what is on air is worth one question. Loading buffers and does
+    // not go to air, so the cost is not "the wrong event plays" — it is that the
+    // picture STOPS and does not come back until Play, which is not what anyone
+    // wants to discover mid-service.
+    DecoderSnapshot now;
+    if (decoder_snapshot(now) && (now.playing || now.paused) &&
+        !now.event_id.empty() && now.event_id != id.toStdString()) {
+        const auto answer = QMessageBox::question(
+            this, tr_("Dock.ReplaceTitle"),
+            tr_("Dock.ReplaceText").arg(item->text()),
+            QMessageBox::Cancel | QMessageBox::Ok, QMessageBox::Cancel);
+        if (answer != QMessageBox::Ok) return;
+    }
+
     // Loading buffers; it does not go to air. Play is a separate, deliberate
     // press — the same rule as loading the live feed.
+    m_loadingName = item->text();
+    // Acknowledge the click HERE, not on the next 500 ms tick: a small
+    // recording loads fast enough that the loading state could come and go
+    // between two ticks, which is exactly the "I pressed Load and nothing
+    // happened" this is for.
+    m_playback->setText(tr_("Dock.LoadingNamed").arg(m_loadingName));
+    m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    m_posText  = tr_("Dock.LoadingNamed").arg(m_loadingName);
+    m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
+    paintPosition();
     decoder_pin_event(id.toStdString());
 }
 
@@ -1357,7 +1383,11 @@ void DecoderDock::refresh() {
         m_playback->setText(tr_("Dock.Pb.Stopped"));
         m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
     } else if (s.loading) {
-        m_playback->setText(tr_("Dock.Loading"));
+        // Name it. "LOADING…" about something anonymous does not tell an
+        // operator whether their click landed on the right row.
+        m_playback->setText(m_loadingName.isEmpty()
+                                ? tr_("Dock.Loading")
+                                : tr_("Dock.LoadingNamed").arg(m_loadingName));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else if (s.seek_target_ms > 0) {
         // Heading somewhere. The position line above names where, so this only
@@ -1464,6 +1494,10 @@ void DecoderDock::refresh() {
         return (long long)seq * m_mediaSegMs;
     };
 
+    // The load is over: stop naming it, so a later wait cannot show a stale
+    // name from a click that has long since finished.
+    if (!s.loading) m_loadingName.clear();
+
     m_posValid    = true;
     m_posFixed    = true;
     m_posAnimate  = false;
@@ -1496,7 +1530,9 @@ void DecoderDock::refresh() {
         m_posText  = tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms));
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.loading) {
-        m_posText  = tr_("Dock.LoadingRecording");
+        m_posText  = m_loadingName.isEmpty()
+                         ? tr_("Dock.LoadingRecording")
+                         : tr_("Dock.LoadingNamed").arg(m_loadingName);
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (!s.playing && !s.ready_to_play && s.gate_s > 0.0) {
         // Load pressed, buffer still filling, nothing on air yet. This is the
