@@ -1374,6 +1374,64 @@ which is how this survived as long as it did.
 
 ---
 
+---
+
+## Duplicated derivations (sweep, 2026-09-18)
+
+Not bugs yet — this is the shape that produced twelve faults in one stretch, and
+these are the places it is still present. Each is *one question answered in more
+than one place*, so each can drift. The medicine is always the same: expose the
+authority's answer and delete the second copy.
+
+### D1. "Is this played as a recording?" — five answers
+
+Authority: `DecoderSession::plays_as_recording_locked()` (`is_vod` OR pinned).
+
+Second copies:
+
+- the OBS dock's own condition for the span and the clock:
+  `s.ended || s.interrupted || !s.pinned_event_id.empty()` — written by hand in
+  two places in `decoder_dock.cpp` (the timeline span and the position text);
+- the OBS source's status strings (the `BROADCAST ENDED — playing out the
+  recording` family in `multisite_source.cpp`);
+- the appliance's status strings (`player.cpp`, same family);
+- the appliance page's mapping (`EVENT = {LIVE, RECORDING, INTERRUPTED}` in
+  `web/app.js`).
+
+The dock's copy is the dangerous one: it decides what the timeline spans. It is
+correct today and was WRONG for an interrupted pinned event until this session —
+which is the whole argument. Fix: put the session's own classification in the
+snapshot (`plays_as_recording`) and use it in all four places. That also removes
+the need for the dock to know pinned-or-interrupted at all.
+
+### D2. Segment length — two fallbacks
+
+`DecoderSession` owns `m_segment_duration_s` (manifest hint, else the configured
+value, else 6.0). The dock re-derives its own from the snapshot and applies its
+own fallback: `s.segment_duration_s > 0.1 ? s.segment_duration_s : 6.0`
+(`decoder_dock.cpp:1507`). Two fallbacks for one number.
+
+Harmless while both say 6.0, which is why it has not bitten — and this is exactly
+how the media-vs-wall timeline faults started. Fix: the snapshot's
+`segment_duration_s` should already BE the session's answer with its fallback
+applied, and the dock should not re-apply one.
+
+### D3. Values handed out that nothing consumes
+
+`s.start_buffer_s` is still in the snapshot after readiness moved to the session
+(`gate_s`/`ready_buffer_s`), and the dock no longer uses it. Dead data of this
+kind is an invitation: it is what the *next* person reaches for when they want to
+show progress, which is how the "84 s of 60 s" readout happened in the first
+place. Either remove it or document it as legacy.
+
+### D4. The queue caps are counts, not durations
+
+`kMaxQueuedVideo` is 12 frames and `kMaxQueuedAudio` 48 — about 0.4 s and 1 s of
+programme, so the two streams do not hold equivalent amounts. Not a duplication,
+but the same family of error (a quantity compared across two things that are not
+commensurate) and it is what lets a resumed queue be unbalanced. Worth deciding
+whether these should be expressed in time.
+
 ## Design questions raised but not decided (not bugs — separate from the above)
 
 Kept here only as pointers so they aren't lost; each needs a decision, not
