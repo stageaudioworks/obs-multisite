@@ -1476,6 +1476,43 @@ int main() {
               "from its first segment, not two segments in");
     }
 
+    std::printf("== 29. A cue jump lands on the cue's moment ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTCUEJUMPCUEJUMPCU");
+        enc.publish_start();
+        for (int i = 0; i < 8; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d29").string();
+        cfg.prebuffer_segments = 0; cfg.start_buffer_seconds = 0;
+        cfg.author_name = "Test site";       // a cue needs an author to be accepted
+        cfg.can_author_cues = true;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 30 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.start(), "playing");
+
+        // Three seconds into the SECOND segment: the moment matters, not the
+        // segment it happens to fall in.
+        const int64_t at = enc.started_at_ms + 9000;
+        std::string err;
+        dec.add_cue("Three in", err, 0, at);
+
+        std::string id;
+        for (const auto& m : dec.markers())
+            if (m.label == "Three in") id = m.id;
+        CHECK(!id.empty(), "the cue was accepted");
+
+        CHECK(dec.jump_to_marker(id), "and the jump lands");
+        dec.pump_downloads(8);        // the landing segment must be on disk
+        auto seg = dec.next_segment();
+        CHECK(seg.has_value(), "a segment is ready to play");
+        CHECK(seg->seq == 1, "the segment containing the cue");
+        CHECK(seg->skip_to_ms == 3000,
+              "and playback begins three seconds into it, not at its start");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");

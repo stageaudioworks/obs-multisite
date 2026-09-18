@@ -762,13 +762,28 @@ std::vector<Marker> DecoderSession::markers() const {
 
 bool DecoderSession::jump_to_marker(const std::string& marker_id) {
     uint64_t target = 0;
+    int64_t  at = 0;
     bool found = false;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         for (const auto& mk : m_markers.markers)
-            if (mk.id == marker_id) { target = mk.seq; found = true; break; }
+            if (mk.id == marker_id) { target = mk.seq; at = mk.at_ms; found = true; break; }
     }
     if (!found) return false;
+
+    // Land where the cue was PLACED, not at the start of the segment it happened
+    // to fall in.
+    //
+    // A cue is dropped at a moment — a word, a beat — and the marker records
+    // that moment (`at_ms`) as well as the segment it landed in. Seeking to the
+    // segment alone put the picture up to a segment early, which is what
+    // "selecting a cue doesn't land exactly on the right time" was: the exact
+    // position was in hand and being thrown away.
+    //
+    // The sub-segment machinery already exists for time seeks — segments are the
+    // unit of TRANSFER, not of seeking — so a cue is simply a time someone
+    // chose. The segment seek remains the fallback for a cue carrying no time.
+    if (at > 0 && seek_to_wall_ms(at) != 0) return true;
     return seek(target);          // seek() bounds-checks and raises a jump
 }
 
