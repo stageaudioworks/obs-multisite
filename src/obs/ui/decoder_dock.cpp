@@ -1563,11 +1563,17 @@ void DecoderDock::refresh() {
         m_posFixed     = false;
         m_posVod       = true;
         m_posAtEnd     = s.at_end;
-        m_posStartedMs = 0;                       // elapsed, from the start
-        m_posTotalMs   = media(s.live_edge + 1);  // the whole recording
+        // Elapsed is measured from the recording's OWN first segment, not from
+        // media zero. Storage may no longer hold its opening seconds — the
+        // encoder's spool drops the oldest under pressure, and retention does it
+        // deliberately — so a recording whose first available segment is #2
+        // would otherwise open at 0:12 and look like it had skipped a start
+        // rather than like the opening was gone.
+        m_posStartedMs = media(s.first_available);
+        m_posTotalMs   = media(s.live_edge + 1) - m_posStartedMs;
         // A recording cannot play past its own end, so interpolation must not
         // walk past it either.
-        if (s.live_edge > 0) m_posBoundMs = m_posTotalMs;
+        if (s.live_edge > 0) m_posBoundMs = media(s.live_edge + 1);
         // Animate only while it is genuinely running: not held, and not
         // already sitting at the end.
         m_posAnimate = s.playing && !s.paused && !s.at_end;
