@@ -1672,21 +1672,26 @@ than deleted.
      control-objects-first stage: an event that is only half in the second
      bucket cannot be played from it, so a partial mirror is not insurance at
      all. There is a threshold here, not a gradient.
-  2. **The manifest is published on the ACTIVE target's acknowledgement** — the
-     primary while it is working. The slower of the two links therefore never
-     sets the pace, and §4.7's invariant stays exactly what it is today. The
-     second target's manifest can lag its media by a moment, which is what its
-     checksums are for, and what makes the copy provable rather than hopeful.
+  2. **Both targets are written independently, and the manifest is published on
+     the preferred available target's acknowledgement.** Each target gets its
+     own upload stream and its own confirmed position; publication waits only
+     for the preferred target that is currently working — the primary while it
+     is up. So the slower link never sets the pace, *and* the event does not
+     stall when one of them is down. Writing to both and publishing on whichever
+     is preferred-and-available is the whole mechanism; there is no separate
+     "mirror" step whose trigger could be the wrong target.
   3. **The decoder reads the primary, and the second target only for an object
      the primary cannot serve.** On a metered provider that egress is a real
      cost and a working primary should carry the load; it is the same
      per-request fallback the LAN path already uses (§8.7), and for the same
      reason — one object missing is not the target being down.
-  4. **If one target fails mid-event, the other keeps receiving**, so the event
-     completes whole in the survivor and only the failed target has a hole. The
-     spool cannot make that promise by itself: it rides out an outage, not a
-     provider that never comes back, and the provider that never comes back is
-     the account-lockout case this exists for.
+  4. **If one target fails mid-event, the other keeps receiving** — which falls
+     out of (2) rather than needing its own machinery: the failed target's
+     confirmed position simply stops advancing while the survivor carries the
+     event to its end. The hole the failed target is left with is recorded and
+     shown. This is the point of the whole phase: the spool alone rides out an
+     outage, but it cannot survive a provider that never comes back, and the
+     provider that never comes back is the account-lockout case.
   5. **Completeness is proved, not assumed.** The protocol already carries a
      checksum per segment, so the two targets can be compared — after an event,
      and on demand — and every object present in one and not the other is named.
@@ -1703,40 +1708,47 @@ than deleted.
   behind that reference — that is how LAN-vs-cloud fallback was added without
   `DecoderSession` learning it exists (§8.7). Redundancy is the same shape:
 
-  - **Writes (encoder).** Both targets receive every object as the event runs, so
-    mirroring is a property of the write path and belongs *under* `Session` and
-    `RetryUploader`, not inside them. Segments are the part that needs care:
-    `RetryUploader` deletes a spool file the moment the active target confirms it
-    (§4.7), so a second copy cannot be a second reader of the same spool. On
-    confirmation the segment is **moved into a mirror backlog** rather than
-    deleted, and a mirror worker uploads it to the other target and only then
-    removes it. That keeps "confirmed" meaning exactly what it means today, gives
-    the mirror its own retry and back-pressure, and leaves the live feed's
-    latency untouched. The small objects (`live.json`, `event.json`,
-    `manifest.json`, `cues/*.json`) ride the same backlog; they are tiny, but they
-    are what makes an event findable at all, so they must not be the ones left
-    behind.
+  - **Writes (encoder).** Both targets are written from one spool, so the spool
+    stops being "what the bucket has not confirmed" and becomes "what at least
+    one target has not confirmed": it tracks a confirmed position **per target**,
+    and removes a segment's files only once *both* have it. That single change is
+    what makes (4) true without a second copy of anything — a segment confirmed
+    by the primary but not yet by the second simply stays on disk, and the
+    second's uploader picks it up whenever it can. Under the disk cap the oldest
+    unconfirmed segment is still dropped, and the hole that leaves is per
+    target and is named, because a mirror that silently fell behind would be
+    worse than none.
+    Publication (the manifest) follows the preferred target that is currently
+    working, so `Session` needs only to ask "which target may I publish on",
+    not to know there are two.
+    The small objects (`live.json`, `event.json`, `manifest.json`,
+    `cues/*.json`) go to both directly — they are tiny, and they are what makes
+    an event findable at all, so they must not be the ones left behind.
   - **Reads (decoder and appliance).** A second `FallbackTransport`, composed
     from two `S3Transport`s rather than LAN and cloud, chosen per request for
     the same reason: one object missing from the first target is not the target
     being down. Reading the primary by default is also what keeps the second
     provider's egress bill at zero in the ordinary case.
+    One consequence to design for: when the encoder has failed over, the
+    primary's `manifest.json` stops advancing but still answers 200. A decoder
+    reading it would call the event interrupted rather than fall back, so the
+    live object has to name both targets and the decoder has to prefer the one
+    that is actually advancing.
 
   **Slices, so each step is reviewable:**
 
   1. ✅ **The decision above, and the settings surface** — the second target's
      fields in both docks and the machine-wide store behind them. Nothing writes
      anywhere different yet.
-  2. **Everything to both** — the write path sends media and the control objects
-     to both targets as the event runs, publishing the manifest on the active
-     target's acknowledgement.
-  3. **Survivor completeness** — a target that fails mid-event stops being
-     written to, the other carries the event to its end, and the hole left in
-     the failed target is recorded and shown rather than discovered later.
-  4. **Read fallback** — the decoder and the appliance prefer the primary and
-     fall back per object to the second; *Manage storage…* says which target an
-     event is in.
-  5. **Verification** — compare the two targets by checksum and report what is
+  2. **Everything to both** — a confirmed position per target in the spool, a
+     second upload stream draining it, publication following the preferred
+     available target, and the control objects written to both directly. Survivor
+     completeness is a property of this step, not a step of its own.
+  3. **Read fallback** — the decoder and the appliance prefer the primary and
+     fall back per object to the second; `live.json` names both, and the decoder
+     prefers whichever is actually advancing; *Manage storage…* says which
+     target an event is in.
+  4. **Verification** — compare the two targets by checksum and report what is
      in one and not the other, after an event and on demand.
 
 - **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or
