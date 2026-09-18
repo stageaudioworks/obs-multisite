@@ -40,6 +40,19 @@ struct SecondaryTarget {
     }
 };
 
+// A measured burst into the second bucket — the only way to learn spare
+// capacity, since the live stream only ever produces at its own bitrate and so
+// can never show what is left over (PROJECT-SCOPE.md §10 Phase 9).
+//
+// Puts a payload of `bytes`, times it, then removes it. Blocking, and it is
+// real traffic: call it OFF the UI thread and never automatically.
+struct UplinkTestResult {
+    bool        ok = false;
+    double      mbps = 0.0;
+    std::string error;
+};
+UplinkTestResult secondary_uplink_test(size_t bytes = 8u << 20);
+
 SecondaryTarget secondary_target();
 void set_secondary_target(const SecondaryTarget& t);
 

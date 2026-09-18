@@ -17,6 +17,8 @@
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class QLabel;
+class QPushButton;
 
 namespace multisite_obs {
 
@@ -45,6 +47,10 @@ private:
     QLineEdit* m_keyId     = nullptr;
     QLineEdit* m_secret    = nullptr;
     QLineEdit* m_region    = nullptr;
+    // The measured burst (Phase 9): the only way to know spare capacity before
+    // an event, since the live stream only produces at its own bitrate.
+    QPushButton* m_test = nullptr;
+    QLabel*      m_testResult = nullptr;
 
     // loadFromStore() sets fields programmatically; those setText calls must
     // not read as the operator editing something.

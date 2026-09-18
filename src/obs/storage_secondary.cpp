@@ -3,10 +3,14 @@
 
 #include "plugin_log.h"
 
+#include "../core/s3_transport.h"
+
 #include <obs-module.h>
 #include <util/platform.h>
 
+#include <chrono>
 #include <mutex>
+#include <vector>
 
 namespace multisite_obs {
 
@@ -79,6 +83,53 @@ void set_secondary_target(const SecondaryTarget& t) {
                   t.bucket.c_str());
     else
         mlog_info("second bucket off — nothing is mirrored");
+}
+
+UplinkTestResult secondary_uplink_test(size_t bytes) {
+    UplinkTestResult out;
+    const SecondaryTarget t = secondary_target();
+    if (!t.configured()) {
+        out.error = "no second bucket is configured";
+        return out;
+    }
+
+    multisite::S3Config cfg;
+    cfg.endpoint_host     = t.endpoint_host;
+    cfg.r2_account_id     = t.r2_account_id;
+    cfg.bucket            = t.bucket;
+    cfg.access_key_id     = t.access_key_id;
+    cfg.secret_access_key = t.secret_access_key;
+    cfg.region            = t.region;
+    multisite::S3Transport tx(cfg);
+
+    // Incompressible-ish and cheap to build: the point is to move bytes, not to
+    // be clever. A repeated pattern would be compressed by a proxy and measure
+    // the proxy instead of the link.
+    std::vector<uint8_t> payload(bytes);
+    uint32_t x = 0x9e3779b9u;
+    for (size_t i = 0; i < bytes; ++i) {
+        x = x * 1664525u + 1013904223u;
+        payload[i] = (uint8_t)(x >> 24);
+    }
+
+    const std::string key = "multisite-uplink-test.bin";
+    const auto t0 = std::chrono::steady_clock::now();
+    multisite::PutResult r = tx.put(key, payload, "application/octet-stream", {});
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0).count();
+
+    // Clean up whatever landed, even on a failure part-way through.
+    tx.remove(key);
+
+    if (!r.success) {
+        out.error = "upload failed: HTTP " + std::to_string(r.http_status) +
+                    (r.error.empty() ? "" : " " + r.error);
+        return out;
+    }
+    if (ms <= 0) { out.ok = true; out.mbps = 0.0; return out; }  // too fast to time
+    out.ok = true;
+    out.mbps = ((double)bytes * 8.0 / 1e6) / ((double)ms / 1000.0);
+    return out;
 }
 
 } // namespace multisite_obs

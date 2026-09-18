@@ -9,8 +9,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QLabel>
 #include <QLineEdit>
+#include <QMetaObject>
+#include <QPointer>
+#include <QPushButton>
 #include <QStandardItemModel>
+
+#include <thread>
 
 namespace multisite_obs {
 
@@ -65,6 +71,51 @@ SecondaryTargetBox::SecondaryTargetBox(QWidget* parent)
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret, m_region })
         connect(e, &QLineEdit::textEdited, this,
                 [this] { if (!m_loading) emit changed(); });
+
+    // ── The measured burst ──────────────────────────────────────────────────
+    // Operator-initiated and nothing else. It is a burst of real traffic, and a
+    // venue's link is not ours to fill uninvited; but it is also the ONLY way
+    // to know spare capacity before an event, because the live stream never
+    // produces more than its own bitrate and so can never reveal what is left.
+    m_test = new QPushButton(tr_("Dock.TestUplink"), this);
+    m_test->setToolTip(tr_("Dock.TestUplinkHint"));
+    m_testResult = new QLabel(QString(), this);
+    m_testResult->setWordWrap(true);
+    form->addRow(QString(), m_test);
+    form->addRow(QString(), m_testResult);
+
+    connect(m_test, &QPushButton::clicked, this, [this] {
+        if (!secondary_target().configured()) {
+            m_testResult->setText(tr_("Dock.TestUplinkNone"));
+            m_testResult->setStyleSheet(QString());
+            return;
+        }
+        m_test->setEnabled(false);
+        m_testResult->setStyleSheet(QString());
+        m_testResult->setText(tr_("Dock.TestUplinkRunning"));
+        // Off the UI thread, and guarded: the dialog outlives the click but the
+        // test does not have to, and reporting into a destroyed widget would be
+        // a crash for the sake of a progress line.
+        QPointer<SecondaryTargetBox> self(this);
+        std::thread([self] {
+            const UplinkTestResult r = secondary_uplink_test();
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, r] {
+                if (!self) return;
+                self->m_test->setEnabled(true);
+                if (!r.ok) {
+                    self->m_testResult->setText(
+                        tr_("Dock.TestUplinkFailed") + " (" +
+                        QString::fromStdString(r.error) + ")");
+                    self->m_testResult->setStyleSheet("color: #e5484d;");
+                } else {
+                    self->m_testResult->setText(tr_("Dock.TestUplinkResult")
+                                                    .arg(QString::number(r.mbps, 'f', 1)));
+                    self->m_testResult->setStyleSheet("color: #35c489;");
+                }
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
 
     updateEnabled();
     updateProviderFields();
