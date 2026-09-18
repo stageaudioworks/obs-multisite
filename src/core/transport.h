@@ -164,6 +164,15 @@ public:
     // extra request and no privilege — and a large value means THIS box's clock
     // is the one that is wrong.
     virtual int64_t server_clock_skew_ms() const { return 0; }
+
+    // Which of two equivalent ends to read from, for a transport that has two
+    // (the redundancy read path, PROJECT-SCOPE.md §10 Phase 9). A no-op
+    // everywhere else, and deliberately part of this interface rather than a
+    // dynamic_cast: the decoder has to be able to say "the end I was reading
+    // has stopped advancing, use the other one" without knowing what kind of
+    // transport it holds.
+    virtual void prefer_secondary(bool /*on*/) {}
+    virtual bool preferring_secondary() const { return false; }
 };
 
 } // namespace multisite

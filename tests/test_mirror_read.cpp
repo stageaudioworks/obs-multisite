@@ -164,6 +164,34 @@ int main() {
         CHECK(tx.primary_reachable(), "and still healthy after a 404");
     }
 
+    std::printf("== 7. Told to prefer the second bucket, it goes first ==\n");
+    {
+        FakeStore primary("primary"), second("second");
+        primary.put_object("k", "from-primary");
+        second.put_object("k", "from-second");
+        MirrorReadTransport tx(primary, second);
+
+        CHECK(!tx.preferring_secondary(), "it starts on the primary");
+        tx.prefer_secondary(true);
+        CHECK(tx.preferring_secondary(), "and can be moved to the other end");
+
+        GetResult r = tx.get("k");
+        CHECK(r.success && std::string(r.body.begin(), r.body.end()) == "from-second",
+              "the second bucket is now asked first");
+        CHECK(tx.last_read_was_secondary(), "reported as a secondary read");
+
+        // A failover that turns out to be the wrong call must degrade into the
+        // old behaviour, not into an unreadable event.
+        FakeStore p3("primary"), s3("second");
+        p3.put_object("only-primary", "x");
+        MirrorReadTransport tx3(p3, s3);
+        tx3.prefer_secondary(true);
+        GetResult r3 = tx3.get("only-primary");
+        CHECK(r3.success,
+              "and an object the second bucket lacks still comes from the primary");
+        CHECK(!tx3.last_read_was_secondary(), "reported as a primary read");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "MIRROR READ TESTS PASSED"
                                       : "MIRROR READ TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

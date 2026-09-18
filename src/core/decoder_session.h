@@ -337,6 +337,14 @@ private:
     std::atomic<double>   m_segment_duration_s{6.0};
     std::atomic<int64_t>  m_started_at_ms{0};
     std::atomic<bool>     m_saw_live{false};
+    // The write-side failover case (PROJECT-SCOPE.md §10 Phase 9): the target
+    // being read has stopped advancing, but it still answers 200, so no
+    // per-request fallback would ever fire. Set by poll() when it sees a
+    // stalled manifest, acted on by the NEXT poll — which then reads the other
+    // end and finds out whether that was the right call. Once only: a genuinely
+    // stalled event must not flap between ends.
+    std::atomic<bool>     m_manifest_stalled{false};
+    std::atomic<bool>     m_switched_target{false};
     std::atomic<uint64_t> m_head{0};
     std::atomic<bool>     m_head_set{false};
     bool     m_init_sent = false;

@@ -167,6 +167,9 @@ struct SourceCtx : DecoderControls {
     // alone when there is no cloud leg, or `transport` alone when there is
     // no LAN leg — see build_transports() below.
     std::shared_ptr<FallbackTransport> fallback;
+    // The two-cloud read path, when a second bucket is configured — kept so the
+    // dock can say which end is being read (Phase 9).
+    std::shared_ptr<MirrorReadTransport> mirror_read;
     std::shared_ptr<DecoderSession> session;
     std::shared_ptr<CmafDecoder>    decoder;
     mutable std::mutex              obj_mtx;
@@ -1689,6 +1692,7 @@ static void src_update(void* data, obs_data_t* s) {
         ctx->transport     = tx;
         ctx->lan_transport = lan_tx;
         ctx->fallback      = fb;
+        ctx->mirror_read   = mirror_tx;
         ctx->session       = ses;
         ctx->catalog       = cat;
     }
@@ -1947,6 +1951,10 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         // just assume "configured" means "working".
         out.lan_active = fb ? fb->last_get_was_primary()
                              : (lan_tx && lan_tx->last_request_reached_server());
+        // Which end the reads are actually coming from, when there are two.
+        std::shared_ptr<MirrorReadTransport> mread;
+        { std::lock_guard<std::mutex> lk(obj_mtx); mread = mirror_read; }
+        out.reading_secondary = mread && mread->preferring_secondary();
     }
     out.loading        = loading_event.load();
     out.seek_target_ms = seek_target_ms.load();

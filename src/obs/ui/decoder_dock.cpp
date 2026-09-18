@@ -1521,6 +1521,11 @@ void DecoderDock::refresh() {
         if (s.lan_configured)
             text += s.lan_active ? "  ·  " + tr_("Dock.ViaLan")
                                   : "  ·  " + tr_("Dock.ViaCloud");
+        // And which BUCKET, when there are two: the reads moved because the end
+        // that was being read stopped advancing, which an operator needs to know
+        // rather than infer from a manifest they cannot see.
+        if (s.reading_secondary)
+            text += "  ·  " + tr_("Dock.ViaSecond");
         multisite_ui::set_value(m_storage, text);
     }
     m_buffered->setToolTip(tr_("Dock.BufferedHint"));

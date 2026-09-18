@@ -30,7 +30,15 @@ public:
     MirrorReadTransport(Transport& primary, Transport& secondary)
         : m_primary(primary), m_secondary(secondary) {}
 
+    // When the caller has decided the primary has stopped advancing, reads go
+    // the other way round. Not a health judgement — the caller makes that, and
+    // it is the only thing that can: a primary that answers 200 with a stale
+    // manifest looks perfectly healthy to a transport.
+    void prefer_secondary(bool on) override { m_prefer_secondary = on; }
+    bool preferring_secondary() const override { return m_prefer_secondary.load(); }
+
     GetResult get(const std::string& key) override {
+        if (m_prefer_secondary.load()) return get_secondary_first(key);
         GetResult r = m_primary.get(key);
         if (r.success) {
             note_primary_reachable(true);
@@ -103,12 +111,25 @@ public:
     bool primary_reachable() const { return m_primary_ok.load(); }
 
 private:
+    GetResult get_secondary_first(const std::string& key) {
+        GetResult r = m_secondary.get(key);
+        if (r.success) { m_served_secondary = true; return r; }
+        // The other direction still falls ALL the way back, so a failover that
+        // turns out to be the wrong call degrades into the old behaviour rather
+        // than into an unreadable event.
+        GetResult r2 = m_primary.get(key);
+        m_served_secondary = false;
+        note_primary_reachable(r2.success || m_primary.last_request_reached_server());
+        return r2;
+    }
+
     void note_primary_reachable(bool ok) { m_primary_ok = ok; }
 
     Transport& m_primary;
     Transport& m_secondary;
     std::atomic<bool> m_served_secondary{false};
     std::atomic<bool> m_primary_ok{true};
+    std::atomic<bool> m_prefer_secondary{false};
 };
 
 } // namespace multisite

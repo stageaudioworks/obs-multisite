@@ -79,6 +79,18 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // protects state only, and is never held across I/O.
     const int64_t now = now_override ? now_override : now_ms();
 
+    // If the last poll found the manifest stalled without the event having
+    // ended, the end being read has stopped being written to — which is what a
+    // write-side failover looks like from here: 200s and a manifest that never
+    // moves again. Nothing below this can detect it (every request succeeds),
+    // so the decision is taken here and the transport is told which end to
+    // prefer. Exactly once, so a properly stalled event does not flap.
+    if (m_manifest_stalled.load() && !m_switched_target.load() &&
+        !m_tx.preferring_secondary()) {
+        m_tx.prefer_secondary(true);
+        m_switched_target = true;
+    }
+
     // 1. Which event is live in this room? Read even when an event is pinned:
     //    the answer is not what to play, but it is what tells an operator
     //    watching a recording that an event has started.
@@ -286,6 +298,12 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // Reporting it as Offline (as this once did) made a crashed event
     // permanently unwatchable, since nothing offline can be played.
     const int64_t age = now - m_manifest_updated_ms;
+    // Recorded for the next poll to act on. An ENDED event is not stalled — it
+    // is finished, and switching ends for it would be wrong and would also lose
+    // the recording.
+    m_manifest_stalled = (m_manifest.status != "ended" &&
+                          m_manifest_updated_ms > 0 &&
+                          age > m_cfg.stale_after_ms);
     if (m_manifest.status == "ended") {
         m_room = RoomState::Ended;
     } else if (m_manifest_updated_ms > 0 && age > m_cfg.stale_after_ms) {
@@ -314,7 +332,14 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // exactly as if it had been pinned: live_elsewhere() then reports the new
     // event and the dock offers the switch instead of taking it. Done ONCE, at
     // the moment of ending, so Back to live still follows the room afterwards.
-    if (m_cfg.hold_finished_event && is_vod(m_room.load())) {
+    // ENDED only — NOT is_vod(), which also covers Interrupted, and that
+    // distinction is load-bearing once there are two buckets: an interrupted
+    // manifest is exactly the shape a write-side failover leaves behind on the
+    // end that was abandoned, so holding it here would pin the session to the
+    // stale copy and defeat the switch to the end that is still being written.
+    // A genuinely stopped encoder still holds, because its event ends up Ended
+    // or its live pointer simply stops naming a new one.
+    if (m_cfg.hold_finished_event && m_room.load() == RoomState::Ended) {
         if (!m_end_hold_done && m_pinned_event_id.empty() && !m_event_id.empty())
             m_pinned_event_id = m_event_id;
         m_end_hold_done = true;

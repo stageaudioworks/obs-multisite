@@ -262,6 +262,10 @@ struct DecoderSnapshot {
     // of the LAN retention window falls back to cloud for that one alone),
     // so it describes what just happened, not a sticky mode.
     bool        lan_configured = false;
+    // Reads are coming from the SECOND bucket, because the end that was being
+    // read stopped advancing (PROJECT-SCOPE.md §10 Phase 9). Only ever set on a
+    // machine with a second bucket configured.
+    bool        reading_secondary = false;
     bool        lan_active = false;
 
     // This machine's clock against the store's, from the HTTP Date header — 0

@@ -72,6 +72,48 @@ public:
     }
 };
 
+
+// Two stores behind one Transport, with a preference the caller can flip — the
+// shape the decoder sees once an encoder has failed over: one end keeps
+// answering 200 with a manifest that has stopped moving.
+class SwitchingStore : public Transport {
+public:
+    SwitchingStore(FakeStore& primary, FakeStore& second)
+        : m_primary(primary), m_second(second) {}
+
+    void prefer_secondary(bool on) override {
+        if (on && !m_prefer_secondary) ++switch_count;
+        m_prefer_secondary = on;
+    }
+    bool preferring_secondary() const override { return m_prefer_secondary; }
+
+    PutResult put(const std::string& key, const std::vector<uint8_t>& body,
+                  const std::string& ct,
+                  const std::map<std::string,std::string>& tags) override {
+        return m_primary.put(key, body, ct, tags);
+    }
+    GetResult get(const std::string& key) override {
+        if (m_prefer_secondary) {
+            GetResult r = m_second.get(key);
+            if (r.success) return r;
+        }
+        GetResult r = m_primary.get(key);
+        if (r.success || !m_prefer_secondary) return r;
+        return m_second.get(key);
+    }
+    ListResult list(const std::string& prefix, const std::string& d,
+                    const std::string& tok, int max) override {
+        return m_prefer_secondary ? m_second.list(prefix, d, tok, max)
+                                  : m_primary.list(prefix, d, tok, max);
+    }
+
+    int switch_count = 0;
+
+private:
+    FakeStore& m_primary;
+    FakeStore& m_second;
+    bool m_prefer_secondary = false;
+};
 // Publishes an event the way the encoder does, so the decoder sees realistic
 // objects (live.json, event.json, init.mp4, manifest.json, segments).
 struct FakeEncoder {
@@ -1225,6 +1267,49 @@ int main() {
         for (const auto& m : cl3.markers)
             if (m.label == "By segment") placed3 = (m.seq == 17);
         CHECK(placed3, "landing on exactly the segment the host named");
+    }
+
+    std::printf("== 22. A stalled primary, and a second bucket still being written\n");
+    {
+        // The write-side failover (PROJECT-SCOPE.md §10 Phase 9). The target
+        // being read keeps answering 200 with a manifest that will never move
+        // again, so no per-request fallback ever fires — only the session can
+        // see this, and only by comparing how far each end has got.
+        FakeStore primary, second;
+        FakeEncoder old_enc(primary, "r", "01EVENTSTALLEDSTALLEDSTA");
+        old_enc.publish_start();
+        for (int i = 0; i < 5; ++i) old_enc.publish_segment();
+
+        FakeEncoder new_enc(second, "r", "01EVENTMOVEDMOVEDMOVEDM");
+        new_enc.publish_start();
+        for (int i = 0; i < 3; ++i) new_enc.publish_segment();
+
+        SwitchingStore sw(primary, second);
+
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "d22").string();
+        cfg.stale_after_ms = 60000;
+
+        DecoderSession dec(cfg, sw);
+
+        // Far enough past the primary's last write that it reads as stalled.
+        const int64_t t1 = old_enc.clock_ms + cfg.stale_after_ms + 1;
+        CHECK(dec.poll(t1) == RoomState::Interrupted,
+              "the end being read has stopped advancing");
+        CHECK(!sw.preferring_secondary(),
+              "and nothing has moved yet — the decision is taken on the next poll");
+
+        // The next poll acts on it: the other end is asked, and answers.
+        CHECK(dec.poll(new_enc.clock_ms) == RoomState::Live,
+              "the other end is still live, and is now the one being read");
+        CHECK(sw.preferring_secondary(), "the session moved its reads across");
+        CHECK(dec.event_id() == "01EVENTMOVEDMOVEDMOVEDM",
+              "and it follows the event that is actually being written");
+
+        // Exactly once: a genuinely stalled event must not flap between ends.
+        dec.poll(new_enc.clock_ms);
+        CHECK(sw.switch_count == 1, "the move happened once, not once per poll");
     }
 
     fs::remove_all(base);
