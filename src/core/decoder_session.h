@@ -160,6 +160,29 @@ public:
 
     // ── Playback (timeslipping) ──────────────────────────────────────────────
     bool start();                      // begins once prebuffer is satisfied
+
+    // ── Where playback would begin, and what it is waiting for ───────────────
+    // ONE computation, shared by start() and by everything the operator is
+    // shown. The dock used to decide "ready" from the start-buffer setting and
+    // got it wrong for recordings, which need only their first segment — two
+    // answers to one question, and the display's was the wrong one.
+    struct StartPlan {
+        // "Geometry is meaningful" — live, or a finished recording. Kept apart
+        // from readiness on purpose: the gate and the buffered figure are worth
+        // showing from the moment an event is resolved, before the init segment
+        // has even landed, which is exactly when an operator starts watching.
+        bool     known    = false;
+        bool     has_init = false;
+        uint64_t want     = 0;    // the segment playback would begin at
+        uint64_t need     = 0;    // how many contiguous segments that requires
+        uint64_t have     = 0;    // how many are actually present from `want`
+        bool ready() const { return known && has_init && have >= need; }
+    };
+    StartPlan start_plan() const;
+    // The same answer, in the units an operator reads.
+    bool   can_start_now() const;
+    double start_gate_s() const;      // what the gate wants, in seconds
+    double ready_buffer_s() const;    // what is present towards it, in seconds
     void pause();                      // freezes the head; cache keeps filling
     void resume();                      // continues from the paused position
     void jump_to_live();               // snap the head to the live edge
@@ -362,6 +385,9 @@ private:
     // larger of the prebuffer cushion and the start_buffer_seconds window,
     // converted at the current segment duration.
     uint64_t start_reserve_segments() const;
+    // The plan, with m_mtx already held — start() reads it and then seats the
+    // head, so it cannot take the lock itself.
+    StartPlan start_plan_locked() const;
 
 };
 

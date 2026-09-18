@@ -1312,6 +1312,58 @@ int main() {
         CHECK(sw.switch_count == 1, "the move happened once, not once per poll");
     }
 
+    std::printf("== 25. Readiness is the session's answer, not the dock's ==\n");
+    {
+        // LIVE: the gate is the start-buffer window.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTREADYREADYREADYRE");
+        enc.publish_start();
+        for (int i = 0; i < 15; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d24").string();
+        cfg.prebuffer_segments = 0;
+        cfg.start_buffer_seconds = 60;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        CHECK(!dec.can_start_now(), "not ready before the gate is banked");
+        CHECK(dec.start_gate_s() >= 60.0 - 1e-6,
+              "and the gate it reports is the start-buffer window");
+
+        // The invariant the dock depends on: whenever it is told Ready, Play
+        // really works. Two answers to one question is how the old dock came to
+        // advertise Ready for something that would refuse to start.
+        for (int i = 0; i < 40 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.can_start_now(), "ready once the whole window is contiguous");
+        CHECK(dec.ready_buffer_s() >= dec.start_gate_s() - 1e-6,
+              "with the buffered figure at least the gate");
+        CHECK(dec.start(), "and Ready means Play works — the invariant");
+    }
+    {
+        // A FINISHED RECORDING: one segment is the whole requirement, so it
+        // must not be shown a 60-second countdown it does not have to wait for.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTFINISHEDFINISHED");
+        enc.publish_start();
+        for (int i = 0; i < 3; ++i) enc.publish_segment();
+        enc.end();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d25").string();
+        cfg.prebuffer_segments = 0;
+        cfg.start_buffer_seconds = 60;      // the same setting as the live case
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        for (int i = 0; i < 10 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.can_start_now(),
+              "a finished recording is ready once its first segment is");
+        CHECK(dec.start_gate_s() <= 6.0 + 1e-6,
+              "and its gate is one segment, not the 60 s the setting names");
+        CHECK(dec.start(), "so Play works immediately");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");

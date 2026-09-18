@@ -481,41 +481,74 @@ uint64_t DecoderSession::start_reserve_segments() const {
     return std::max((uint64_t)std::max(0, m_cfg.prebuffer_segments), by_time);
 }
 
+DecoderSession::StartPlan DecoderSession::start_plan_locked() const {
+    StartPlan p;
+    const RoomState rs = m_room.load();
+    if (rs != RoomState::Live && !is_vod(rs)) return p;      // nothing to plan
+    p.known    = true;
+    p.has_init = m_cache->has_init();
+
+    if (m_head_set.load()) {
+        // Already seated: whatever the buffer did to get here, playback is
+        // running from a position that exists.
+        p.want = m_head.load();
+        p.need = p.have = 1;
+        return p;
+    }
+
+    if (is_vod(rs)) {
+        // A finished recording is video-on-demand: start at the beginning, and
+        // one segment is the whole requirement. Starting near the end (which is
+        // what treating it as live does) lands twelve seconds from the close.
+        p.want = m_first_available_seq.load();
+        p.need = 1;
+    } else {
+        // Live: sit `reserve` segments behind the edge and wait for that whole
+        // window to be contiguous. This is what stops the picture chasing the
+        // live edge — it banks a full start-buffer window before the first
+        // frame instead of starting a couple of segments behind and stalling.
+        const uint64_t reserve = start_reserve_segments();
+        p.want = (m_latest_seq.load() > reserve) ? (m_latest_seq.load() - reserve)
+                                                 : m_first_available_seq.load();
+        p.need = std::max<uint64_t>(1, reserve);
+    }
+    p.want = std::max(p.want, m_first_available_seq.load());
+
+    const auto idx = m_cache->cached_seqs();
+    for (uint64_t s = p.want; idx.count(s); ++s) ++p.have;
+    return p;
+}
+
+DecoderSession::StartPlan DecoderSession::start_plan() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return start_plan_locked();
+}
+
+bool DecoderSession::can_start_now() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return start_plan_locked().ready();
+}
+
+double DecoderSession::start_gate_s() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const StartPlan p = start_plan_locked();
+    if (!p.known) return 0.0;
+    return (double)p.need * m_segment_duration_s.load();
+}
+
+double DecoderSession::ready_buffer_s() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const StartPlan p = start_plan_locked();
+    if (!p.known) return 0.0;
+    return (double)p.have * m_segment_duration_s.load();
+}
+
 bool DecoderSession::start() {
     std::lock_guard<std::mutex> lk(m_mtx);
-    const RoomState rs = m_room.load();
-    if (rs != RoomState::Live && !is_vod(rs)) return false;
-    if (!m_cache->has_init()) return false;
-
+    const StartPlan p = start_plan_locked();
+    if (!p.ready()) return false;           // buffer still accumulating
     if (!m_head_set.load()) {
-        uint64_t want;
-        if (is_vod(rs)) {
-            // A recording that has already finished is video-on-demand: start
-            // at the beginning. Starting near the end (which is what treating
-            // it as "live" does) means loading a finished event and landing
-            // twelve seconds from the close. The whole recording already
-            // exists, so it cannot stall the way a live edge can.
-            want = m_first_available_seq.load();
-        } else {
-            // Live: sit `reserve` segments behind the edge, and don't go to
-            // air until that many are contiguously cached. This is what stops
-            // the picture chasing the live edge — the buffer accumulates for
-            // a full start-buffer window before the first frame, instead of
-            // starting a couple of segments behind and stalling after one.
-            const uint64_t reserve = start_reserve_segments();
-            want = (m_latest_seq.load() > reserve) ? (m_latest_seq.load() - reserve)
-                                                   : m_first_available_seq.load();
-        }
-        want = std::max(want, m_first_available_seq.load());
-        // A recording needs only its first segment; live needs the whole
-        // reserve present as a contiguous run ahead of `want`.
-        const uint64_t need = is_vod(rs) ? 1
-                                         : std::max<uint64_t>(1, start_reserve_segments());
-        const auto idx = m_cache->cached_seqs();
-        uint64_t have = 0;
-        for (uint64_t s = want; idx.count(s); ++s) ++have;
-        if (have < need) return false;      // buffer still accumulating
-        m_head = want;
+        m_head = p.want;
         m_head_set = true;
     }
     m_play = PlayState::Playing;

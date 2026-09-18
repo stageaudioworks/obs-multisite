@@ -209,6 +209,12 @@ struct DecoderSnapshot {
     bool        ended = false;
     bool        at_end = false;
     bool        was_live = false;   // seen live at some point since loading
+    // Ready to go to air, and what the wait is counting towards. Both come from
+    // DecoderSession's start plan, so the display cannot disagree with start() —
+    // it did, and mislabelled every finished recording.
+    bool        ready_to_play = false;
+    double      gate_s = 0.0;          // what the start gate wants, in seconds
+    double      ready_buffer_s = 0.0;  // what is present towards it, in seconds
     // The encoder died rather than ending: the recording is complete up to
     // that point and plays, but it stops where the encoder stopped.
     bool        interrupted = false;

@@ -881,13 +881,17 @@ int main() {
         std::snprintf(first, sizeof(first), "events/%s/segments/00000000.m4s",
                       ev.c_str());
 
+        // Wait for the state the assertions below actually check, not a proxy
+        // for it. Waiting on "the first segment is in both" and then asserting
+        // mirror_complete is a race — the last segment can still be in flight —
+        // and it is the same mistake §2 above already carries a note about.
         bool both = false, manifests = false;
         for (int i = 0; i < 400; ++i) {
             const std::string pm = primary.text("events/" + ev + "/manifest.json");
             const std::string mm = mirror.text("events/" + ev + "/manifest.json");
             if (primary.has(first) && mirror.has(first)) both = true;
             if (!pm.empty() && pm == mm) manifests = true;
-            if (both && manifests) break;
+            if (both && manifests && ses.status().mirror_complete) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
         CHECK(primary.has(first), "the segment reached the primary");

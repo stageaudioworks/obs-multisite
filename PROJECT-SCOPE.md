@@ -606,6 +606,57 @@ either — the operator presses **Back to live** to move on. (The Raspberry Pi
 appliance turns this off, because an unattended box is there to relay whatever
 the room does next; see `DecoderConfig::hold_finished_event`.)
 
+### Loading a recording: the workflow, and why the old one misled
+
+Loading one event while another is playing had no progress, no ready signal, and
+three quietly wrong readings. Written down before it was built, because the shape
+took a decision rather than a fix.
+
+**What was wrong.** `loading_event` (the flag behind "LOADING…") cleared as soon
+as *anything* was cached, not when the event was playable; the dock decided
+"ready" from the start-buffer setting, which is right for live and wrong for a
+recording — `DecoderSession::start()` needs a whole reserve window for a live
+event and exactly **one segment** for a finished one; and Play was enabled
+whenever nothing was on air, so pressing it too early declined silently and left
+an indefinite "BUFFERING…". Three readings that disagreed with each other and
+with the session.
+
+**The rule, now stated once.** Readiness is the session's to decide: a single
+`start_plan` inside `DecoderSession` computes where playback would start and how
+much must be present, and `start()` and the operator's display both read it. A
+number the UI derives separately is a number that will disagree.
+
+**The states, and what each says.** One line, one colour, no guessing:
+
+| state | the dock says | on air |
+|---|---|---|
+| Nothing loaded | as before | idle |
+| Loading | "Finding <name>…" | idle |
+| Preparing | "Preparing — 22 s of 60 s · ready in ~18 s" | idle |
+| Ready | "Ready to play" | idle |
+| On air | "PLAYING" | picture |
+| Blocked | the reason, named: not found / no access / unreachable / empty | idle |
+
+Two consequences of doing it this way: a finished recording reaches **Ready**
+almost at once (it needs one segment, and it should feel instant rather than show
+a 60-second countdown), and a failure is **named** rather than timing out into
+"I tried something". Play is enabled at Ready, and the reason is shown when it is
+not — an operator may still force it, but never by accident. **Cancel** abandons a
+load; **Back to live** remains the other exit.
+
+**What is on air while it loads is a decision, not an oversight.** Today the
+picture stops the moment a different event is loaded, which for a room full of
+people is dead air. Stop-and-hold is cheap and honest and is what is built first;
+**prepare-then-take** — keep the current event playing, load the next in the
+background, switch on a press — is the kinder answer and is materially bigger,
+because it needs either a second `DecoderSession` or a session that can hold two
+targets. It is deliberately left as its own phase.
+
+**Better errors are part of this, not a separate polish.** "Could not load" is
+not a diagnosis: a 404, a 403, a timeout and an empty event are four different
+faults with four different fixes, and each should be said in the operator's words
+rather than left to a status code.
+
 ## 8. User interface
 
 Two Qt docks, plus hotkeys. The core reliability and media path work with no UI
