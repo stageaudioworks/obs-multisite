@@ -264,6 +264,29 @@ handed to OBS and the queue depth, and `RESUMED` prints what it continued from.
 Without that figure the two candidate causes were indistinguishable and cost
 three rounds of guessing — keep it, and keep it honest.
 
+### 3. Clicking the timeline lands on the segment, not the moment
+
+**Status: OPEN, same fault as "a cue jump lands on its segment" above, which is
+fixed. This is the other call site.**
+
+Clicking the timeline lands up to one segment (6 s) from where the click was,
+because the dock converts the clicked time to a segment number and discards the
+remainder:
+
+  `long long seq = media_ms / m_mediaSegMs; decoder_seek(seq);`
+
+Segments are the unit of TRANSFER, not of seeking — the session sets
+`skip_to_ms` for a time seek, and the cue path now uses it (`jump_to_marker`).
+The click path needs the same, and the conversion should NOT be done in the dock:
+the dock has media time, and only the session knows the segment's own `at_ms`,
+which is what makes the offset right on an event whose clock restarted.
+
+The fix is a `seek_to_media_ms(media_ms)` in `DecoderSession` mirroring
+`seek_to_wall_ms`: find the segment, then `skip = media_ms - seq * seg`. The dock
+hands over the clicked time and nothing else. Test it the way the cue case is
+tested — assert `skip_to_ms`, not just the segment — because a segment-only
+assertion passes for both the bug and the fix.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —
@@ -1355,26 +1378,3 @@ a fix.
   player, simulcast portal/relay) — versions now all derive from one
   `PROJECT_VERSION`; names are still whatever the code happens to call
   them.
-
-### 3. Clicking the timeline lands on the segment, not the moment
-
-**Status: OPEN, same fault as "a cue jump lands on its segment" above, which is
-fixed. This is the other call site.**
-
-Clicking the timeline lands up to one segment (6 s) from where the click was,
-because the dock converts the clicked time to a segment number and discards the
-remainder:
-
-  `long long seq = media_ms / m_mediaSegMs; decoder_seek(seq);`
-
-Segments are the unit of TRANSFER, not of seeking — the session sets
-`skip_to_ms` for a time seek, and the cue path now uses it (`jump_to_marker`).
-The click path needs the same, and the conversion should NOT be done in the dock:
-the dock has media time, and only the session knows the segment's own `at_ms`,
-which is what makes the offset right on an event whose clock restarted.
-
-The fix is a `seek_to_media_ms(media_ms)` in `DecoderSession` mirroring
-`seek_to_wall_ms`: find the segment, then `skip = media_ms - seq * seg`. The dock
-hands over the clicked time and nothing else. Test it the way the cue case is
-tested — assert `skip_to_ms`, not just the segment — because a segment-only
-assertion passes for both the bug and the fix.
