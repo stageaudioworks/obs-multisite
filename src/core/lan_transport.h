@@ -85,6 +85,7 @@ public:
     // marker, a segment that aged out of the retention window) must not
     // read as "LAN is down" the way a connection failure genuinely should.
     bool last_request_reached_server() const override { return m_last_reached.load(); }
+    bool last_request_cancelled() const override { return m_cancel.load(); }
 
 private:
     LanTransportConfig m_cfg;

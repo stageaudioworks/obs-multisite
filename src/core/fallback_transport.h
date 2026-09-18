@@ -79,6 +79,13 @@ public:
     // nothing about whether LAN itself is working.
     bool last_get_was_primary() const { return m_primary_healthy.load(); }
 
+    // Our own cancellation, from either end — the caller only asks after a
+    // failure, and a failure we caused must not read as one of theirs.
+    bool last_request_cancelled() const override {
+        return m_primary.last_request_cancelled() ||
+               m_secondary.last_request_cancelled();
+    }
+
     // The store's clock, never the LAN server's: the LAN endpoint's Date header
     // is the encoder's own clock — the very thing being checked — so it is not
     // a reference. Only the cloud leg can answer this.

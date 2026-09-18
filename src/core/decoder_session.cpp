@@ -103,10 +103,16 @@ RoomState DecoderSession::poll(int64_t now_override) {
     LivePointer live;
     std::string live_error;
     auto lp = m_tx.get(live_pointer_key(m_cfg.room_id));
-    m_link.observe(link_reachable_result(lp.success, lp.http_status), now);
+    // A request we aborted ourselves is not the store failing.
+    if (!m_tx.last_request_cancelled())
+        m_link.observe(link_reachable_result(lp.success, lp.http_status), now);
     if (!lp.success) {
-        live_error = "live.json: HTTP " + std::to_string(lp.http_status) +
-                     " " + lp.error;
+        // Our own cancellation says nothing about the room. Record no error and
+        // leave the event unresolved rather than treating an empty body as a
+        // failed read.
+        if (!m_tx.last_request_cancelled())
+            live_error = "live.json: HTTP " + std::to_string(lp.http_status) +
+                         " " + lp.error;
     } else {
         try {
             live = LivePointer::from_json(
@@ -122,6 +128,9 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // live.json to know what to play.
     const std::string target = pinned.empty() ? live.event_id : pinned;
     if (target.empty()) {
+        // A cancelled read gives no answer, and no answer is not "offline" —
+        // stopping a source must not blank the room it was watching.
+        if (m_tx.last_request_cancelled()) return m_room.load();
         std::lock_guard<std::mutex> lk(m_mtx);
         m_live_event_id = live.event_id;
         m_room_is_live = false;
@@ -168,8 +177,14 @@ RoomState DecoderSession::poll(int64_t now_override) {
 
     // 3. Manifest, fetched without the lock.
     auto mf = m_tx.get(prefix + "manifest.json");
-    m_link.observe(link_reachable_result(mf.success, mf.http_status), now);
+    if (!m_tx.last_request_cancelled())
+        m_link.observe(link_reachable_result(mf.success, mf.http_status), now);
     if (!mf.success) {
+        // Same as live.json: an abort is not an answer, and the empty body that
+        // comes with it must not be handed to the parser — doing so threw, and
+        // the throw reported "manifest.json is not valid JSON" for a request we
+        // cancelled ourselves.
+        if (m_tx.last_request_cancelled()) return m_room.load();
         std::lock_guard<std::mutex> lk(m_mtx);
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "manifest.json: HTTP " + std::to_string(mf.http_status) +
                        " " + mf.error; }
@@ -225,6 +240,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
         std::vector<MarkerList> parts;
 
         auto mk = m_tx.get(prefix + "markers.json");
+        if (!m_tx.last_request_cancelled())
         m_link.observe(link_reachable_result(mk.success, mk.http_status), now);
         if (mk.success) {
             try {
@@ -265,6 +281,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     double  seg_hint = 0.0;
     if (started_at <= 0) {
         auto ev = m_tx.get(prefix + "event.json");
+        if (!m_tx.last_request_cancelled())
         m_link.observe(link_reachable_result(ev.success, ev.http_status), now);
         if (ev.success) {
             try {
@@ -408,8 +425,9 @@ int DecoderSession::pump_downloads(int max) {
     // ── unlocked from here ───────────────────────────────────────────────────
     if (need_init) {
         auto r = m_tx.get(prefix + "init.mp4");
-        m_link.observe(link_reachable_result(r.success, r.http_status));
-        if (!r.success) {
+        if (!m_tx.last_request_cancelled())
+            m_link.observe(link_reachable_result(r.success, r.http_status));
+        if (!r.success && !m_tx.last_request_cancelled()) {
             std::lock_guard<std::mutex> lk(m_mtx);
             { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "init.mp4: HTTP " + std::to_string(r.http_status) +
                            " " + r.error; }
@@ -426,11 +444,15 @@ int DecoderSession::pump_downloads(int max) {
         std::snprintf(name, sizeof(name), "%08llu",
                       (unsigned long long)w.first);
         auto r = m_tx.get(prefix + "segments/" + name + ".m4s");
-        m_link.observe(link_reachable_result(r.success, r.http_status));
+        if (!m_tx.last_request_cancelled())
+            m_link.observe(link_reachable_result(r.success, r.http_status));
         if (!r.success) {
             // A 404 usually just means "not published yet" — expected at the
-            // live edge, so it is not counted as a failure.
-            if (r.http_status != 404) {
+            // live edge, so it is not counted as a failure. Neither is our own
+            // cancellation: stopping a source aborts whatever is in flight, and
+            // counting that as a download failure is how a Stop button came to
+            // report itself as a broken connection.
+            if (r.http_status != 404 && !m_tx.last_request_cancelled()) {
                 ++dlfail;
                 err = "segment " + std::to_string(w.first) + ": HTTP " +
                       std::to_string(r.http_status) + " " + r.error;
@@ -823,7 +845,8 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
     // clobbered by a second author.
     MarkerList mine;
     auto g = m_tx.get(key);
-    m_link.observe(link_reachable_result(g.success, g.http_status), now_ms());
+    if (!m_tx.last_request_cancelled())
+        m_link.observe(link_reachable_result(g.success, g.http_status), now_ms());
     if (g.success) {
         try {
             mine = MarkerList::from_json(std::string(g.body.begin(), g.body.end()));

@@ -94,6 +94,9 @@ public:
     // Without that, a stopped source could never download again.
     void cancel_pending() override;
 
+    // Whether the last failure was our own cancellation rather than the store's.
+    bool last_request_cancelled() const override;
+
     // Clears the cancel flag so this transport can be used again. Call it
     // before issuing new requests, never while one is in flight: a request
     // already running would quietly lose its ability to be cancelled.

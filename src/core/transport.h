@@ -157,6 +157,14 @@ public:
     // answer rather than have to override this just to get "yes".
     virtual bool last_request_reached_server() const { return true; }
 
+    // True when the last request failed because WE aborted it — cancel_pending()
+    // on the way to stopping a source, or during a teardown. This is not a
+    // fault and must never be reported as one: a 0-status "Operation was aborted
+    // by an application callback" ended up on the dock as CONNECTION LOST with
+    // an error line, which told an operator their own Stop button was a network
+    // outage.
+    virtual bool last_request_cancelled() const { return false; }
+
     // How far this machine's clock is from the store's, in milliseconds,
     // measured from the HTTP Date header on ordinary traffic. 0 means "nothing
     // observed yet". A storage provider's servers are NTP-disciplined, so this

@@ -203,6 +203,25 @@ struct FakeEncoder {
     }
 };
 
+// A store whose in-flight requests can be aborted BY US — what stopping a
+// source does, and what must never be reported as the store failing.
+class CancellableStore : public FakeStore {
+public:
+    std::atomic<bool> cancelled{false};
+    void cancel_pending() override { cancelled = true; }
+    void resume_pending() override { cancelled = false; }
+    bool last_request_cancelled() const override { return cancelled.load(); }
+    GetResult get(const std::string& key) override {
+        if (cancelled.load()) {
+            GetResult r;
+            r.http_status = 0;
+            r.error = "Operation was aborted by an application callback";
+            return r;
+        }
+        return FakeStore::get(key);
+    }
+};
+
 int main() {
     fs::path base = fs::temp_directory_path() / "multisite_decoder_test";
     fs::remove_all(base);
@@ -1362,6 +1381,38 @@ int main() {
         CHECK(dec.start_gate_s() <= 6.0 + 1e-6,
               "and its gate is one segment, not the 60 s the setting names");
         CHECK(dec.start(), "so Play works immediately");
+    }
+
+    std::printf("== 26. Our own cancellation is not a fault ==\n");
+    {
+        CancellableStore store;
+        FakeEncoder enc(store, "r", "01EVENTCANCELCANCELCANC");
+        enc.publish_start();
+        for (int i = 0; i < 4; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d26").string();
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        CHECK(dec.link_health() == LinkHealth::Healthy, "healthy after a normal poll");
+        const RoomState before = dec.poll(enc.clock_ms);
+
+        // Stop cancels what is in flight. That must read as no answer, not as
+        // the store failing: the "errors" this produced were the operator's own
+        // Stop button reported back to them as a connection loss.
+        store.cancel_pending();
+        dec.poll(enc.clock_ms);
+        CHECK(dec.last_error().empty(),
+              "a cancelled request records no error");
+        CHECK(dec.link_health() != LinkHealth::Offline,
+              "and does not degrade the link");
+        CHECK(dec.poll(enc.clock_ms) == before,
+              "nor does it blank the room that was being watched");
+
+        // And the transport is usable again afterwards, as stop/play expects.
+        store.resume_pending();
+        dec.poll(enc.clock_ms);
+        CHECK(dec.last_error().empty(), "a normal poll after resuming is clean");
     }
 
     fs::remove_all(base);

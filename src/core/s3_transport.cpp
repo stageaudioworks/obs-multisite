@@ -373,6 +373,7 @@ std::string S3Transport::base_url() const {
 S3Transport::~S3Transport() = default;
 
 void S3Transport::cancel_pending() { d->cancel = true; }
+bool S3Transport::last_request_cancelled() const { return d->cancel.load(); }
 void S3Transport::resume_pending() { d->cancel = false; }
 
 std::string S3Transport::host() const { return d->host(); }

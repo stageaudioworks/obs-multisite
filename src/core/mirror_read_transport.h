@@ -108,6 +108,10 @@ public:
     // legitimately does not have must not read as the primary being down, which
     // is the same distinction FallbackTransport makes for LAN.
     bool last_read_was_secondary() const { return m_served_secondary.load(); }
+    bool last_request_cancelled() const override {
+        return m_primary.last_request_cancelled() ||
+               m_secondary.last_request_cancelled();
+    }
     bool primary_reachable() const { return m_primary_ok.load(); }
 
 private:
