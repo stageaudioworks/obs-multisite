@@ -96,6 +96,16 @@ static QString position(long long ms) {
     return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
 }
 
+// A short form of whatever the caller has to name. The recording rows carry the
+// name AND the date AND the length AND a state word, and putting all of that in
+// a label wide enough to hold it stretched the whole dock; the header and the
+// position line each want a glance, not a line.
+static QString short_name(const QString& text, int max_chars = 34) {
+    QString t = text.simplified();
+    if (t.size() <= max_chars) return t;
+    return t.left(max_chars - 1) + QChar(0x2026);   // …
+}
+
 // What the store said, in words an operator can act on. "HTTP 404 NoSuchKey"
 // and "HTTP 403 AccessDenied" read as the same sentence to a volunteer and are
 // fixed in completely different places.
@@ -1107,9 +1117,9 @@ void DecoderDock::onLoadEvent() {
     // recording loads fast enough that the loading state could come and go
     // between two ticks, which is exactly the "I pressed Load and nothing
     // happened" this is for.
-    m_playback->setText(tr_("Dock.LoadingNamed").arg(m_loadingName));
+    m_playback->setText(tr_("Dock.Loading"));
     m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
-    m_posText  = tr_("Dock.LoadingNamed").arg(m_loadingName);
+    m_posText  = tr_("Dock.LoadingNamed").arg(short_name(m_loadingName));
     m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     paintPosition();
     decoder_pin_event(id.toStdString());
@@ -1391,9 +1401,7 @@ void DecoderDock::refresh() {
         //
         // Name it, too: "LOADING…" about something anonymous does not tell an
         // operator whether their click landed on the right row.
-        m_playback->setText(m_loadingName.isEmpty()
-                                ? tr_("Dock.Loading")
-                                : tr_("Dock.LoadingNamed").arg(m_loadingName));
+        m_playback->setText(tr_("Dock.Loading"));
         m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else if (s.seek_target_ms > 0) {
         // Heading somewhere. The position line above names where, so this only
@@ -1538,7 +1546,7 @@ void DecoderDock::refresh() {
     } else if (s.loading && !s.ready_to_play) {
         m_posText  = m_loadingName.isEmpty()
                          ? tr_("Dock.LoadingRecording")
-                         : tr_("Dock.LoadingNamed").arg(m_loadingName);
+                         : tr_("Dock.LoadingNamed").arg(short_name(m_loadingName));
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (!s.playing && !s.ready_to_play && s.gate_s > 0.0) {
         // Load pressed, buffer still filling, nothing on air yet. This is the
@@ -1546,7 +1554,7 @@ void DecoderDock::refresh() {
         // the state line — it is what the operator is watching while they wait.
         m_posText  = preparing_text();
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
-    } else if (s.ended) {
+    } else if (s.ended || s.interrupted || !s.pinned_event_id.empty()) {
         // A finished recording: show where you are in it and how much is left.
         // How far through, out of its total length — the way a media player
         // reads. "Behind live" means nothing once the event has finished, and
@@ -1587,7 +1595,13 @@ void DecoderDock::refresh() {
     // to its true end — so the bar stops growing and the scale means something.
     // While live, the right edge is the live edge and the bar necessarily grows
     // with it.
-    if (s.ended && s.end_ms > 0) {
+    // A pinned event is a recording even when it is NOT cleanly ended: an
+    // interrupted one spans its own length like any other. Without that, an
+    // interrupted recording was drawn across the whole retained window — a
+    // forty-minute event on an eight-hour axis, which is the "weird time".
+    const bool as_recording =
+        s.ended || s.interrupted || !s.pinned_event_id.empty();
+    if (as_recording && (s.end_ms > 0 || s.live_edge > 0)) {
         // A recording spans its whole length, labelled as elapsed time.
         m_timeline->setSpan(0, media(s.live_edge + 1));
         m_timeline->setClockOrigin(0);
