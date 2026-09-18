@@ -1647,78 +1647,97 @@ than deleted.
   with two targets. The whole reliability claim rests on a segment appearing in
   the manifest only after storage has acknowledged it (§4.7); requiring both
   acknowledgements doubles the exposure to the slower link and lets one bad
-  provider stall the feed. The proposal is to keep the invariant per target —
-  manifest on primary confirmation, secondary mirrored best-effort, each
-  target's state carried in the manifest — and to add a failover state machine
-  over the top of the link health that already exists. The decoder side follows
-  from `live.json` naming both targets, and the checksums already in the
-  protocol are the proof that a mirror is a true copy rather than a hopeful one.
+  provider stall the feed. The original proposal — whose failover half the
+  decision below replaces — was to keep the invariant per target: manifest on
+  primary confirmation, secondary mirrored best-effort, each target's state
+  carried in the manifest, with a failover state machine over the link health
+  that already exists. The decoder side follows from `live.json` naming both
+  targets, and the checksums already in the protocol are the proof that a mirror
+  is a true copy rather than a hopeful one.
   Costs to state plainly: double storage and double origin writes, lifecycle
-  rules needed on **both** buckets, and *Manage storage…* extended to say which
-  target an event is in and to delete from both.
+  rules needed on **both** buckets, *Manage storage…* extended to say which
+  target an event is in and to delete from both — and, the one that bites during
+  an event rather than after it, **the mirror competes for the same uplink as the
+  live feed**. It has to yield to it, or a best-effort second copy becomes the
+  stalling this phase was warned about.
 
-  **Decisions taken (2026-09-17), the three things that had to be settled first:**
+  **Decided (2026-09-17): the promise is that an event is never lost to one
+  provider failing.** Not "broadcasting continues through a provider outage" —
+  that is a larger, different claim, and this phase does not make it.
 
-  1. **Active/passive is built first**, and is the default. Both buckets receive
-     every object; the difference is only *which acknowledgement publishes*.
-     Active/active — where a segment is not stored until both ack it — is a
-     later, per-room option, because it makes the slower link the pace of the
-     whole event.
-  2. **The primary confirms; the secondary mirrors.** A segment is in the
-     manifest once the primary has acked it, which is exactly today's rule and
-     the reason it is the right one: the manifest invariant must not acquire a
-     second dependency. The secondary is written on its own retry path and its
-     state — mirrored, behind, failed — is carried *in the manifest*, so a
-     campus can see that a mirror is lagging without the encoder stalling to
-     find out.
-  3. **Failover is automatic and announced.** The target moves after the primary
-     has been unhealthy for a sustained window (the existing link-health
-     tracker, not one failed request), the event keeps running, and the dock
-     and log say which target is live and why. Failing *back* is deliberately
-     not automatic: a flapping link must not move the destination back and forth
-     mid-event, so returning to the primary is an operator action.
+  What that means in the workflow, which is the part that had to be settled:
+
+  1. **Both targets receive everything, for the whole event** — media,
+     `manifest.json`, `live.json`, `event.json`, the cue objects. Not a
+     control-objects-first stage: an event that is only half in the second
+     bucket cannot be played from it, so a partial mirror is not insurance at
+     all. There is a threshold here, not a gradient.
+  2. **The manifest is published on the ACTIVE target's acknowledgement** — the
+     primary while it is working. The slower of the two links therefore never
+     sets the pace, and §4.7's invariant stays exactly what it is today. The
+     second target's manifest can lag its media by a moment, which is what its
+     checksums are for, and what makes the copy provable rather than hopeful.
+  3. **The decoder reads the primary, and the second target only for an object
+     the primary cannot serve.** On a metered provider that egress is a real
+     cost and a working primary should carry the load; it is the same
+     per-request fallback the LAN path already uses (§8.7), and for the same
+     reason — one object missing is not the target being down.
+  4. **If one target fails mid-event, the other keeps receiving**, so the event
+     completes whole in the survivor and only the failed target has a hole. The
+     spool cannot make that promise by itself: it rides out an outage, not a
+     provider that never comes back, and the provider that never comes back is
+     the account-lockout case this exists for.
+  5. **Completeness is proved, not assumed.** The protocol already carries a
+     checksum per segment, so the two targets can be compared — after an event,
+     and on demand — and every object present in one and not the other is named.
+     Without that, "mirrored" is a claim rather than a fact.
+
+  **Deliberately not in scope: seamless live cutover.** A campus buffers minutes
+  ahead, so a failover whose lag is below that buffer is invisible to one that
+  was already playing — but a campus that *joins* during an outage has no buffer
+  to cover the hole. That is a separate capability with its own limitation, and
+  claiming it is what would make this phase's promise dishonest.
 
   **Where it goes, and why there is only one new seam.** Both halves already
   speak through a `Transport&` and nothing above it knows which store is really
   behind that reference — that is how LAN-vs-cloud fallback was added without
   `DecoderSession` learning it exists (§8.7). Redundancy is the same shape:
 
-  - **Writes (encoder).** Mirroring is a property of the write path, so it
-    belongs *under* `Session` and `RetryUploader`, not inside them. Segments are
-    the part that needs care: `RetryUploader` deletes a spool file the moment the
-    primary confirms it (§4.7), so a mirror cannot be a second reader of the same
-    spool. On primary confirmation the segment is **moved into a mirror backlog**
-    rather than deleted, and a separate mirror worker uploads it to the secondary
-    and only then removes it. That keeps "confirmed" meaning exactly what it
-    means today, gives the mirror its own retry and its own back-pressure, and
-    leaves the primary's latency untouched — the failure Phase 9 was warned
-    about. The small objects (`live.json`, `event.json`, `manifest.json`,
-    `cues/*.json`) ride the same backlog; they are tiny, but they are what makes
-    an event findable at all, so they must not be the ones left behind.
+  - **Writes (encoder).** Both targets receive every object as the event runs, so
+    mirroring is a property of the write path and belongs *under* `Session` and
+    `RetryUploader`, not inside them. Segments are the part that needs care:
+    `RetryUploader` deletes a spool file the moment the active target confirms it
+    (§4.7), so a second copy cannot be a second reader of the same spool. On
+    confirmation the segment is **moved into a mirror backlog** rather than
+    deleted, and a mirror worker uploads it to the other target and only then
+    removes it. That keeps "confirmed" meaning exactly what it means today, gives
+    the mirror its own retry and back-pressure, and leaves the live feed's
+    latency untouched. The small objects (`live.json`, `event.json`,
+    `manifest.json`, `cues/*.json`) ride the same backlog; they are tiny, but they
+    are what makes an event findable at all, so they must not be the ones left
+    behind.
   - **Reads (decoder and appliance).** A second `FallbackTransport`, composed
     from two `S3Transport`s rather than LAN and cloud, chosen per request for
     the same reason: one object missing from the first target is not the target
-    being down. `live.json` names both, so the decoder knows where to look
-    before it knows whether the first answer will come.
-  - **Failover** is a small state machine over `LinkTracker`, sitting beside the
-    transport reference rather than above it, so nothing in `Session` changes.
+    being down. Reading the primary by default is also what keeps the second
+    provider's egress bill at zero in the ordinary case.
 
   **Slices, so each step is reviewable:**
 
-  1. **Design and the settings surface** — this section, plus the second
-     target's fields in both docks and the machine-wide store behind them.
-     Nothing writes anywhere different yet.
-  2. **Control objects mirrored** — `live.json`, `event.json`, `manifest.json`
-     and the cue objects go to both, with the mirror state visible in the
-     manifest and the dock. An encoder crash still leaves a complete, findable
-     event in the second bucket; segments do not follow yet, so this is not yet
-     a playback-capable insurance policy.
-  3. **Segments mirrored** — the mirror backlog and its worker, which is what
-     makes the second target a real copy.
-  4. **Read fallback** — the decoder and the appliance try both, and *Manage
-     storage…* says which target an event is in and deletes from both.
-  5. **Failover and failback** — the state machine, the dock's target
-     indication, and the operator's route back to the primary.
+  1. ✅ **The decision above, and the settings surface** — the second target's
+     fields in both docks and the machine-wide store behind them. Nothing writes
+     anywhere different yet.
+  2. **Everything to both** — the write path sends media and the control objects
+     to both targets as the event runs, publishing the manifest on the active
+     target's acknowledgement.
+  3. **Survivor completeness** — a target that fails mid-event stops being
+     written to, the other carries the event to its end, and the hole left in
+     the failed target is recorded and shown rather than discovered later.
+  4. **Read fallback** — the decoder and the appliance prefer the primary and
+     fall back per object to the second; *Manage storage…* says which target an
+     event is in.
+  5. **Verification** — compare the two targets by checksum and report what is
+     in one and not the other, after an event and on demand.
 
 - **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or
   four discrete pictures composites them at the main site today and pulls them
