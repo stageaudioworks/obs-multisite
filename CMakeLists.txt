@@ -235,6 +235,11 @@ add_executable(test_mirror_upload tests/test_mirror_upload.cpp)
 target_link_libraries(test_mirror_upload PRIVATE multisite_core)
 add_test(NAME mirror_upload COMMAND test_mirror_upload)
 
+# The decoder's two-cloud read path: prefer the primary, fall back per object.
+add_executable(test_mirror_read tests/test_mirror_read.cpp)
+target_link_libraries(test_mirror_read PRIVATE multisite_core)
+add_test(NAME mirror_read COMMAND test_mirror_read)
+
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.
 add_executable(test_link_health tests/test_link_health.cpp)
