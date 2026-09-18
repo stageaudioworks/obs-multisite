@@ -24,12 +24,15 @@ static QString tr_(const char* key) {
     return QString::fromUtf8(obs_module_text(key));
 }
 
-SecondaryTargetBox::SecondaryTargetBox(QWidget* parent)
-    : QGroupBox(tr_("Dock.SecondBucket"), parent) {
+SecondaryTargetBox::SecondaryTargetBox(bool main_site, QWidget* parent)
+    : QGroupBox(tr_("Dock.SecondBucket"), parent), m_main_site(main_site) {
     auto* form = new QFormLayout(this);
 
-    m_enabled = new QCheckBox(tr_("Dock.SecondBucketEnable"), this);
-    m_enabled->setToolTip(tr_("Dock.SecondBucketHint"));
+    m_enabled = new QCheckBox(m_main_site ? tr_("Dock.SecondBucketEnableMain")
+                                          : tr_("Dock.SecondBucketEnableSat"),
+                              this);
+    m_enabled->setToolTip(m_main_site ? tr_("Dock.SecondBucketHintMain")
+                                      : tr_("Dock.SecondBucketHintSat"));
     form->addRow(m_enabled);
 
     m_provider = new QComboBox(this);
@@ -77,45 +80,50 @@ SecondaryTargetBox::SecondaryTargetBox(QWidget* parent)
     // venue's link is not ours to fill uninvited; but it is also the ONLY way
     // to know spare capacity before an event, because the live stream never
     // produces more than its own bitrate and so can never reveal what is left.
-    m_test = new QPushButton(tr_("Dock.TestUplink"), this);
-    m_test->setToolTip(tr_("Dock.TestUplinkHint"));
-    m_testResult = new QLabel(QString(), this);
-    m_testResult->setWordWrap(true);
-    form->addRow(QString(), m_test);
-    form->addRow(QString(), m_testResult);
+    // Only a main site uploads at all, and only it can be expected to hold
+    // write access to the second bucket — offering this on a campus would be
+    // offering something that cannot work.
+    m_test = m_main_site ? new QPushButton(tr_("Dock.TestUplink"), this) : nullptr;
+    if (m_test) {
+        m_test->setToolTip(tr_("Dock.TestUplinkHint"));
+        m_testResult = new QLabel(QString(), this);
+        m_testResult->setWordWrap(true);
+        form->addRow(QString(), m_test);
+        form->addRow(QString(), m_testResult);
 
-    connect(m_test, &QPushButton::clicked, this, [this] {
-        if (!secondary_target().configured()) {
-            m_testResult->setText(tr_("Dock.TestUplinkNone"));
+        connect(m_test, &QPushButton::clicked, this, [this] {
+            if (!secondary_target().configured()) {
+                m_testResult->setText(tr_("Dock.TestUplinkNone"));
+                m_testResult->setStyleSheet(QString());
+                return;
+            }
+            m_test->setEnabled(false);
             m_testResult->setStyleSheet(QString());
-            return;
-        }
-        m_test->setEnabled(false);
-        m_testResult->setStyleSheet(QString());
-        m_testResult->setText(tr_("Dock.TestUplinkRunning"));
-        // Off the UI thread, and guarded: the dialog outlives the click but the
-        // test does not have to, and reporting into a destroyed widget would be
-        // a crash for the sake of a progress line.
-        QPointer<SecondaryTargetBox> self(this);
-        std::thread([self] {
-            const UplinkTestResult r = secondary_uplink_test();
-            if (!self) return;
-            QMetaObject::invokeMethod(self, [self, r] {
+            m_testResult->setText(tr_("Dock.TestUplinkRunning"));
+            // Off the UI thread, and guarded: the dialog outlives the click but
+            // the test does not have to, and reporting into a destroyed widget
+            // would be a crash for the sake of a progress line.
+            QPointer<SecondaryTargetBox> self(this);
+            std::thread([self] {
+                const UplinkTestResult r = secondary_uplink_test();
                 if (!self) return;
-                self->m_test->setEnabled(true);
-                if (!r.ok) {
-                    self->m_testResult->setText(
-                        tr_("Dock.TestUplinkFailed") + " (" +
-                        QString::fromStdString(r.error) + ")");
-                    self->m_testResult->setStyleSheet("color: #e5484d;");
-                } else {
-                    self->m_testResult->setText(tr_("Dock.TestUplinkResult")
-                                                    .arg(QString::number(r.mbps, 'f', 1)));
-                    self->m_testResult->setStyleSheet("color: #35c489;");
-                }
-            }, Qt::QueuedConnection);
-        }).detach();
-    });
+                QMetaObject::invokeMethod(self, [self, r] {
+                    if (!self) return;
+                    self->m_test->setEnabled(true);
+                    if (!r.ok) {
+                        self->m_testResult->setText(
+                            tr_("Dock.TestUplinkFailed") + " (" +
+                            QString::fromStdString(r.error) + ")");
+                        self->m_testResult->setStyleSheet("color: #e5484d;");
+                    } else {
+                        self->m_testResult->setText(tr_("Dock.TestUplinkResult")
+                                                        .arg(QString::number(r.mbps, 'f', 1)));
+                        self->m_testResult->setStyleSheet("color: #35c489;");
+                    }
+                }, Qt::QueuedConnection);
+            }).detach();
+        });
+    }
 
     updateEnabled();
     updateProviderFields();
@@ -123,11 +131,18 @@ SecondaryTargetBox::SecondaryTargetBox(QWidget* parent)
 
 void SecondaryTargetBox::updateEnabled() {
     const bool on = m_enabled->isChecked();
-    for (QWidget* w : { (QWidget*)m_provider, (QWidget*)m_accountId,
-                        (QWidget*)m_endpoint, (QWidget*)m_bucket,
-                        (QWidget*)m_keyId, (QWidget*)m_secret,
-                        (QWidget*)m_region })
-        w->setEnabled(on);
+    // HIDDEN, not merely greyed out. An operator who is not using a second
+    // bucket should not have to look past seven empty credential fields to find
+    // the rest of the storage settings; ticking the box is what asks for them.
+    if (auto* form = qobject_cast<QFormLayout*>(layout())) {
+        for (QWidget* w : { (QWidget*)m_provider, (QWidget*)m_accountId,
+                            (QWidget*)m_endpoint, (QWidget*)m_bucket,
+                            (QWidget*)m_keyId, (QWidget*)m_secret,
+                            (QWidget*)m_region })
+            form->setRowVisible(w, on);
+        if (m_test) form->setRowVisible(m_test, on);
+        if (m_testResult) form->setRowVisible(m_testResult, on);
+    }
 }
 
 void SecondaryTargetBox::updateProviderFields() {

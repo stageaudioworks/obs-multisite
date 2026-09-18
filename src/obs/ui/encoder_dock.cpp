@@ -332,7 +332,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // same answer — see storage_secondary.h. Nothing is written to it yet:
     // the fields exist and are saved, and the mirroring that uses them is the
     // next slice.
-    m_secondary = new SecondaryTargetBox(storePage);
+    m_secondary = new SecondaryTargetBox(true, storePage);
     storePageLayout->addWidget(m_secondary);
     connect(m_secondary, &SecondaryTargetBox::changed,
             this, [this] { if (!m_loading) m_dirty = true; });

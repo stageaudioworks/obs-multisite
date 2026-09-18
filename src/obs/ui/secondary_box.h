@@ -25,7 +25,11 @@ namespace multisite_obs {
 class SecondaryTargetBox : public QGroupBox {
     Q_OBJECT
 public:
-    explicit SecondaryTargetBox(QWidget* parent = nullptr);
+    // `main_site` changes what the box SAYS, because the same bucket means two
+    // different things: a main site writes a copy to it, a campus reads from it
+    // when the primary cannot be reached. A satellite is also not offered the
+    // upload test — it does not upload, and may not even have write access.
+    explicit SecondaryTargetBox(bool main_site, QWidget* parent = nullptr);
 
     void loadFromStore();
     void saveToStore();
@@ -55,6 +59,7 @@ private:
     // loadFromStore() sets fields programmatically; those setText calls must
     // not read as the operator editing something.
     bool m_loading = false;
+    bool m_main_site = false;
 };
 
 } // namespace multisite_obs

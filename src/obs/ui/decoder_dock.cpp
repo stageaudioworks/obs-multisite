@@ -684,7 +684,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // than part of these settings, because the other dock's half reads the
     // same answer — see storage_secondary.h. A decoder uses it to fall back
     // when the first target is unreachable.
-    m_secondary = new SecondaryTargetBox(storePage);
+    m_secondary = new SecondaryTargetBox(false, storePage);
     storePageLayout->addWidget(m_secondary);
     connect(m_secondary, &SecondaryTargetBox::changed,
             this, [this] { if (!m_loading) m_dirty = true; });
