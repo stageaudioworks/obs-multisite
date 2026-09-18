@@ -81,10 +81,7 @@ Session::Session(SessionConfig cfg, Transport& transport)
         // the primary is making progress and goes once it has stopped. The link
         // tracker supplies the hysteresis, so it is not reacting to one failed
         // request.
-        mcfg.may_upload = [this] {
-            return m_uploader->health() != LinkHealth::Healthy ||
-                   m_spool->caught_up(0);
-        };
+        mcfg.may_upload = [this] { return mirror_may_go(); };
         m_mirror = std::make_unique<RetryUploader>(*m_spool,
                                                    *m_cfg.mirror_transport,
                                                    mcfg);
@@ -102,6 +99,8 @@ Session::Session(SessionConfig cfg, Transport& transport)
 
 Session::~Session() {
     if (m_mirror) m_mirror->stop();
+    m_obj_run = false;
+    if (m_obj_thread.joinable()) m_obj_thread.join();
     if (m_uploader) m_uploader->stop();
 }
 
@@ -122,7 +121,51 @@ bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
         m_last_error = "PUT " + key + " -> HTTP " +
                        std::to_string(r.http_status) + " " + r.error;
     }
+    // Queue it for the second bucket, rather than putting it there now: this
+    // runs on the encode thread, and a second put that waits on a request
+    // timeout would stall the live feed on the insurance policy. Latest wins
+    // per key — a manifest is rewritten every segment and the mirror only needs
+    // the current one.
+    if (m_cfg.mirror_transport) {
+        std::lock_guard<std::mutex> lk(m_obj_mtx);
+        m_obj_pending[key] = { b, content_type };
+    }
     return r.success;
+}
+
+bool Session::mirror_may_go() const {
+    // One predicate for both halves of the mirror — the media stream and the
+    // small objects — so they can never disagree about whether the primary is
+    // working. See the note on the uploader's may_upload in the constructor.
+    return m_uploader->health() != LinkHealth::Healthy || m_spool->caught_up(0);
+}
+
+void Session::mirror_objects_loop() {
+    while (m_obj_run.load()) {
+        if (mirror_may_go()) {
+            std::map<std::string, std::pair<std::vector<uint8_t>, std::string>> batch;
+            {
+                std::lock_guard<std::mutex> lk(m_obj_mtx);
+                batch.swap(m_obj_pending);
+            }
+            std::map<std::string, std::string> tags;
+            if (m_cfg.send_expiry_tag)
+                tags[m_cfg.expiry_tag_key] = m_cfg.expiry_tag_val;
+            for (auto& kv : batch) {
+                PutResult r = m_cfg.mirror_transport->put(kv.first, kv.second.first,
+                                                          kv.second.second, tags);
+                if (!r.success) {
+                    // Put it back for a later pass — unless the key has been
+                    // rewritten meanwhile, in which case the newer copy is the
+                    // one that belongs there.
+                    std::lock_guard<std::mutex> lk(m_obj_mtx);
+                    if (!m_obj_pending.count(kv.first))
+                        m_obj_pending[kv.first] = kv.second;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
 }
 bool Session::put_json(const std::string& key, const std::string& body) {
     std::vector<uint8_t> b(body.begin(), body.end());
@@ -219,7 +262,13 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     m_uploader->start();
     // The mirror starts with the event. It will mostly sit yielded; that is the
     // point, and it costs one sleeping thread.
-    if (m_mirror) m_mirror->start();
+    if (m_mirror) {
+        m_mirror->start();
+        // …and the small objects get their own thread, for the reason in the
+        // header: they are queued by put_bytes rather than put there.
+        m_obj_run = true;
+        m_obj_thread = std::thread([this] { mirror_objects_loop(); });
+    }
     return true;
 }
 
@@ -485,6 +534,8 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     // makes (the segment stays until BOTH targets have it, so nothing is lost
     // by stopping here).
     if (m_mirror) m_mirror->stop();
+    m_obj_run = false;
+    if (m_obj_thread.joinable()) m_obj_thread.join();
     m_uploader->stop();
     m_tx.resume_pending();
 

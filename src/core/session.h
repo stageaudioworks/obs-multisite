@@ -22,7 +22,10 @@
 #include "retry_uploader.h"
 #include "transport.h"
 
+#include <atomic>
 #include <functional>
+#include <map>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -273,6 +276,21 @@ private:
     std::unique_ptr<RetryUploader> m_uploader;
     // The second target's stream. Null unless a mirror transport was supplied.
     std::unique_ptr<RetryUploader> m_mirror;
+
+    // ── The mirror's copy of the small objects (Phase 9) ─────────────────────
+    // The manifest, live.json, event.json and the cue objects go to the second
+    // bucket too, but NOT by duplicating the put: put_bytes() runs on the encode
+    // thread, and a synchronous second put would block the live feed on the
+    // request timeout of a bucket that may be gone. They are queued here instead
+    // — latest wins per key — and flushed by their own thread, which obeys the
+    // same yield rule as the media.
+    bool mirror_may_go() const;
+    void mirror_objects_loop();
+    std::thread        m_obj_thread;
+    std::atomic<bool>  m_obj_run{false};
+    std::mutex         m_obj_mtx;
+    std::map<std::string, std::pair<std::vector<uint8_t>, std::string>>
+                       m_obj_pending;
 
     std::string m_event_id;
     uint64_t    m_next_seq = 0;

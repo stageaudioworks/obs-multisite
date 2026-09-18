@@ -881,20 +881,24 @@ int main() {
         std::snprintf(first, sizeof(first), "events/%s/segments/00000000.m4s",
                       ev.c_str());
 
-        bool both = false;
+        bool both = false, manifests = false;
         for (int i = 0; i < 400; ++i) {
-            if (primary.has(first) && mirror.has(first)) { both = true; break; }
+            const std::string pm = primary.text("events/" + ev + "/manifest.json");
+            const std::string mm = mirror.text("events/" + ev + "/manifest.json");
+            if (primary.has(first) && mirror.has(first)) both = true;
+            if (!pm.empty() && pm == mm) manifests = true;
+            if (both && manifests) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
         CHECK(primary.has(first), "the segment reached the primary");
         CHECK(both, "and the second bucket received the same segment");
-        // Control objects (manifest.json, live.json) are deliberately NOT
-        // mirrored yet: they are the next step, and not done as a synchronous
-        // double-write from the encode thread, which against a dead second
-        // bucket would block the live feed for a request timeout. The mirror
-        // holds media and nothing else at this point.
-        CHECK(!mirror.has("events/" + ev + "/manifest.json"),
-              "and the manifest is not mirrored yet — that is the next step");
+        // The small objects go too, but on their own thread: they are queued by
+        // put_bytes rather than put there, because put_bytes runs on the encode
+        // thread and a second put that waited on a request timeout would stall
+        // the live feed on the insurance policy.
+        CHECK(manifests, "both buckets hold the same manifest");
+        CHECK(!mirror.text("events/" + ev + "/manifest.json").empty(),
+              "the manifest really is in the second bucket");
         CHECK(!primary.ordering_violation,
               "the manifest invariant is unchanged by mirroring");
         ses.end();
