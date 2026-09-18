@@ -1703,6 +1703,46 @@ than deleted.
   to cover the hole. That is a separate capability with its own limitation, and
   claiming it is what would make this phase's promise dishonest.
 
+  **The uplink: the mirror has to yield, and the operator has to be told.** A
+  second copy is a second upload, and most venues have one thin uplink. This is
+  not a nicety to add later — without it the promise fails *silently*, because
+  the second copy would simply never complete and nothing would say so.
+
+  Two facts shape it. First, **spare capacity cannot be measured from the live
+  stream**: the encoder only ever produces at its configured bitrate, so its
+  achieved upload rate says whether the link is coping with the stream, never
+  what is left over. On a 8 Mbps link a 6 Mbps stream reads exactly like a
+  6 Mbps link, until something else asks for the difference. Second, the primary
+  is what is on air, so the mirror may never be the reason it suffers.
+
+  So:
+
+  - **The mirror yields by construction: it uploads only while the primary is
+    caught up.** No rate limiter to tune, no borrowing capacity to reason about
+    — if the primary has anything outstanding, the second target waits. On a
+    link that is always behind the primary, the mirror simply never gets a
+    window, which is the honest outcome rather than a degraded broadcast.
+  - **It then catches up after the event.** The spool holds what the second
+    target has not confirmed (see the per-target position above), so the mirror
+    drains when the uplink is idle, and the second copy completes then. Costs:
+    the box has to stay on, and local disk has to hold the event until it does.
+    This is the graceful degradation — "your link cannot carry both at once"
+    becomes "your link takes longer to do both" — and it is the same
+    store-and-forward bargain the spool already makes for the primary.
+  - **The operator is told, in time.** Three moments: while the second bucket is
+    being configured, the achieved rate of the last event against this event's
+    configured bitrate (weak, since it says nothing about headroom, but it is
+    what is free); during an event, when the second target has made no progress
+    for several minutes while the event runs — *the link cannot carry both,
+    here is the lag* — and the reason, primary-never-caught-up or
+    second-unreachable, which are different faults; and after, when the second
+    copy is complete, so "mirrored" is a fact rather than an assumption.
+  - **An on-demand uplink test**, operator-initiated and nothing else, because it
+    is the only way to know spare capacity *before* an event: upload a measured
+    payload and report the achieved rate beside the configured bitrate. Off by
+    default and never automatic: it is a burst of traffic, and a venue's link is
+    not ours to fill uninvited.
+
   **Where it goes, and why there is only one new seam.** Both halves already
   speak through a `Transport&` and nothing above it knows which store is really
   behind that reference — that is how LAN-vs-cloud fallback was added without
@@ -1741,14 +1781,20 @@ than deleted.
      fields in both docks and the machine-wide store behind them. Nothing writes
      anywhere different yet.
   2. **Everything to both** — a confirmed position per target in the spool, a
-     second upload stream draining it, publication following the preferred
-     available target, and the control objects written to both directly. Survivor
-     completeness is a property of this step, not a step of its own.
-  3. **Read fallback** — the decoder and the appliance prefer the primary and
+     second upload stream that yields to the primary, publication following the
+     preferred available target, and the control objects written to both
+     directly. Survivor completeness is a property of this step, not a step of
+     its own.
+  3. **Telling the operator** — the second target's lag and its reason in the
+     dock, the after-the-event "the second copy is complete", the catch-up-when-
+     idle behaviour made visible, and the on-demand uplink test. Without this
+     step the promise can fail without anyone knowing, which is why it is a step
+     and not a footnote.
+  4. **Read fallback** — the decoder and the appliance prefer the primary and
      fall back per object to the second; `live.json` names both, and the decoder
      prefers whichever is actually advancing; *Manage storage…* says which
      target an event is in.
-  4. **Verification** — compare the two targets by checksum and report what is
+  5. **Verification** — compare the two targets by checksum and report what is
      in one and not the other, after an event and on demand.
 
 - **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or
