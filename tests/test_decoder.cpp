@@ -1447,6 +1447,35 @@ int main() {
               "pinning another event is not ready before it is applied");
     }
 
+    std::printf("== 28. A pinned event plays as a recording, whatever it says\n");
+    {
+        // The manifest can still say "live" — an interrupted event, or one
+        // whose encoder never marked it ended. A PINNED event is a chosen past
+        // event either way, so it starts at its beginning; treating it as live
+        // sat it `reserve` segments back from the edge, which for a short event
+        // is simply "two segments in", and Stop-then-Play came back there.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTPINNEDLIVE");
+        enc.publish_start();
+        for (int i = 0; i < 10; ++i) enc.publish_segment();   // status stays live
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d28").string();
+        cfg.prebuffer_segments = 2;        // the reserve that caused it
+        cfg.start_buffer_seconds = 60;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        dec.pin_event("01EVENTPINNEDLIVE");
+        dec.poll(enc.clock_ms);
+
+        CHECK(dec.start_gate_s() <= 6.0 + 1e-6,
+              "a pinned event's gate is one segment, not the live reserve");
+        for (int i = 0; i < 10 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.start(), "and it starts");
+        CHECK(dec.playback_head() == 0,
+              "from its first segment, not two segments in");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");

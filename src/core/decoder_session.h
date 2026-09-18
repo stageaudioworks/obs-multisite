@@ -388,6 +388,12 @@ private:
     // The plan, with m_mtx already held — start() reads it and then seats the
     // head, so it cannot take the lock itself.
     StartPlan start_plan_locked() const;
+    // Whether the event loaded now is played as a RECORDING: a cleanly finished
+    // one, an interrupted one, or anything PINNED — a chosen past event is a
+    // recording whatever its manifest's status says. One answer, because the
+    // start position, the download window and the timeline all have to agree
+    // about it and did not.
+    bool plays_as_recording_locked() const;
 
 };
 

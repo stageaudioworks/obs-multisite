@@ -384,7 +384,7 @@ int DecoderSession::pump_downloads(int max) {
 
         if (m_head_set.load()) {
             from = m_head.load();
-        } else if (is_vod(m_room.load())) {
+        } else if (is_vod(m_room.load()) || !m_pinned_event_id.empty()) {
             // A finished recording plays from the beginning, so fetch from the
             // beginning. Downloading from the live edge while playback intends
             // to start at segment zero left the first segment missing and
@@ -503,6 +503,10 @@ uint64_t DecoderSession::start_reserve_segments() const {
     return std::max((uint64_t)std::max(0, m_cfg.prebuffer_segments), by_time);
 }
 
+bool DecoderSession::plays_as_recording_locked() const {
+    return is_vod(m_room.load()) || !m_pinned_event_id.empty();
+}
+
 DecoderSession::StartPlan DecoderSession::start_plan_locked() const {
     StartPlan p;
     const RoomState rs = m_room.load();
@@ -531,10 +535,11 @@ DecoderSession::StartPlan DecoderSession::start_plan_locked() const {
         return p;
     }
 
-    if (is_vod(rs)) {
-        // A finished recording is video-on-demand: start at the beginning, and
-        // one segment is the whole requirement. Starting near the end (which is
-        // what treating it as live does) lands twelve seconds from the close.
+    if (plays_as_recording_locked()) {
+        // A recording starts at its beginning, and one segment is the whole
+        // requirement. Treating it as live instead sits it `reserve` segments
+        // back from an edge — which for a short event is simply "two segments
+        // in", and is why Stop-then-Play came back two segments ahead.
         p.want = m_first_available_seq.load();
         p.need = 1;
     } else {
