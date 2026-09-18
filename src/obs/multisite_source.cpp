@@ -39,6 +39,7 @@
 #include "../core/fallback_transport.h"
 
 #include <algorithm>
+#include <limits>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -1825,11 +1826,41 @@ void SourceCtx::resume() {
     //
     // Left empty, there is nothing to continue from and the next frame anchors
     // as before.
-    size_t held = 0;
+    size_t held = 0, trimmed = 0;
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
-        held = dq.size();
-        if (dq.empty()) first_pts_ns = -1;
+        // Trim the queue to the range BOTH streams cover.
+        //
+        // While held, the two streams fill to their own caps and each cap drops
+        // only its own overflow: video keeps 12 frames (about 0.4 s), audio 48
+        // (about 1 s). Both start at the hold point, but audio ends up with a
+        // tail the picture does not have — and delivering that tail is what
+        // makes OBS buffer audio, up to its 960 ms maximum. The logs show the
+        // hold length deciding how much: 661 ms after a 1 s hold, the maximum
+        // after 2 s. Trimming to the common end delivers them together again.
+        if (!dq.empty()) {
+            int64_t last_video = std::numeric_limits<int64_t>::min();
+            int64_t last_audio = std::numeric_limits<int64_t>::min();
+            for (const auto& f : dq) {
+                if (f.is_video) last_video = std::max(last_video, f.video.pts_ns);
+                else            last_audio = std::max(last_audio, f.audio.pts_ns);
+            }
+            if (last_video != std::numeric_limits<int64_t>::min() &&
+                last_audio != std::numeric_limits<int64_t>::min()) {
+                const int64_t common_end = std::min(last_video, last_audio);
+                const size_t before = dq.size();
+                dq.erase(std::remove_if(dq.begin(), dq.end(),
+                            [common_end](const PendingFrame& f) {
+                                const int64_t p = f.is_video ? f.video.pts_ns
+                                                             : f.audio.pts_ns;
+                                return p > common_end;
+                            }),
+                         dq.end());
+                trimmed = before - dq.size();
+            }
+            held = dq.size();
+            if (dq.empty()) first_pts_ns = -1;
+        }
     }
     dq_cv.notify_all();            // release the decoder if it was blocked
 
@@ -1840,8 +1871,9 @@ void SourceCtx::resume() {
     frames_at_resume = frames_out.load();
 
     mlog_info("source: RESUMED at %.0fs behind live (state=%d, continuing from "
-              "%zu held frame(s), clock re-anchoring on the next due frame)",
-              sess->behind_live_s(), (int)sess->play_state(), held);
+              "%zu held frame(s), %zu unpaired trimmed, clock re-anchoring on "
+              "the next due frame)",
+              sess->behind_live_s(), (int)sess->play_state(), held, trimmed);
 }
 
 void SourceCtx::toggle_pause() {
