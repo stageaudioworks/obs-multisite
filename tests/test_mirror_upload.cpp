@@ -2,9 +2,14 @@
 // test_mirror_upload.cpp — two upload streams over one spool: the primary and
 // the second bucket (PROJECT-SCOPE.md §10 Phase 9).
 //
-// The property under test is the yield rule: the second stream uploads only
-// while the primary is caught up, so a second copy can never be the reason the
-// live feed suffers. Offline: the transports are in-process fakes.
+// The property under test is the yield rule, and the distinction it turns on:
+// the mirror waits for a primary that is WORKING, never for one that is GONE.
+// "Wait for the primary to be caught up" sounds right and starves the mirror
+// exactly when the second copy is the only thing that matters, because a failed
+// primary is never caught up. So the policy is a predicate the caller supplies
+// and these tests supply both halves of it.
+//
+// Offline: the transports are in-process fakes.
 #include "../src/core/retry_uploader.h"
 #include "../src/core/spool_queue.h"
 
@@ -80,7 +85,12 @@ int main() {
         fill(q, 1, 5);
 
         GateTransport primary, second;
-        UploaderConfig mc = fast; mc.target = 1;
+        // The real policy: wait while the primary is healthy and behind.
+        std::atomic<bool> primary_healthy{true};
+        UploaderConfig mc = fast;
+        mc.target = 1;
+        mc.may_upload = [&] { return !primary_healthy.load() || q.caught_up(0); };
+
         RetryUploader up(q, primary, fast);
         RetryUploader mir(q, second, mc);
         up.start(); mir.start();
@@ -95,47 +105,79 @@ int main() {
               "each segment was uploaded twice — once per target");
     }
 
-    std::printf("== 2. The mirror yields while the primary is behind ==\n");
+    std::printf("== 2. The mirror waits for a BUSY primary… ==\n");
     {
-        SpoolQueue q((base / "yield").string());
+        SpoolQueue q((base / "busy").string());
         q.set_targets(2);
         q.begin_event("E", 1);
         fill(q, 1, 5);
 
         GateTransport primary, second;
-        primary.allow = false;   // the live feed's target can't take anything
+        primary.allow = false;                 // the primary is stuck
+        std::atomic<bool> primary_healthy{true}; // …but still working at it
 
-        UploaderConfig mc = fast; mc.target = 1;
+        UploaderConfig mc = fast;
+        mc.target = 1;
+        mc.may_upload = [&] { return !primary_healthy.load() || q.caught_up(0); };
+
         RetryUploader up(q, primary, fast);
         RetryUploader mir(q, second, mc);
         up.start(); mir.start();
 
-        // Long enough for the mirror to have had many chances to run.
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
         CHECK(second.puts.load() == 0,
-              "the mirror uploaded nothing while the primary was not caught up");
+              "the mirror uploaded nothing while the primary was still trying");
         CHECK(q.last_confirmed_for(1) == 0, "and its position has not moved");
-        CHECK(q.pending_count() == 5, "every segment is still waiting on disk");
-
-        // The live feed comes back: the mirror may go as soon as it catches up.
-        primary.allow = true;
-        const bool drained = wait_for([&] { return q.pending_count() == 0; }, 5000);
         up.stop(); mir.stop();
-
-        CHECK(drained, "once the primary caught up, both targets finished");
-        CHECK(second.puts.load() == 5, "the second target received all five");
-        CHECK(q.last_confirmed_for(0) == 5 && q.last_confirmed_for(1) == 5,
-              "and both positions reached the end");
     }
 
-    std::printf("== 3. One target configured: the second stream does nothing ==\n");
+    std::printf("== 3. …but takes over once the primary is GONE ==\n");
+    {
+        SpoolQueue q((base / "gone").string());
+        q.set_targets(2);
+        q.begin_event("E", 1);
+        fill(q, 1, 5);
+
+        GateTransport primary, second;
+        primary.allow = false;                  // the primary never comes back
+        std::atomic<bool> primary_healthy{true};
+
+        UploaderConfig mc = fast;
+        mc.target = 1;
+        mc.may_upload = [&] { return !primary_healthy.load() || q.caught_up(0); };
+
+        RetryUploader up(q, primary, fast);
+        RetryUploader mir(q, second, mc);
+        up.start(); mir.start();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(second.puts.load() == 0, "still yielding while it looks healthy");
+
+        // The sustained-window verdict lands, as Session would decide it.
+        primary_healthy = false;
+
+        const bool done = wait_for([&] { return q.last_confirmed_for(1) == 5; }, 4000);
+        up.stop(); mir.stop();
+
+        CHECK(done, "the survivor received the whole event once the primary was "
+                    "declared gone — decision 4, which 'wait for the primary to "
+                    "catch up' would have starved");
+        CHECK(q.last_confirmed_for(0) == 0, "the failed target confirmed nothing");
+        CHECK(q.pending_count() == 5,
+              "and every file stays on disk, because only one target has it");
+    }
+
+    std::printf("== 4. One target configured: nothing to mirror ==\n");
     {
         SpoolQueue q((base / "single").string());
         q.begin_event("E", 1);
         fill(q, 1, 3);
 
         GateTransport primary, second;
-        UploaderConfig mc = fast; mc.target = 1;   // configured, but...
+        UploaderConfig mc = fast;
+        mc.target = 1;
+        mc.may_upload = [&] { return q.caught_up(0); };
+
         RetryUploader up(q, primary, fast);
         RetryUploader mir(q, second, mc);
         up.start(); mir.start();
@@ -143,11 +185,9 @@ int main() {
         const bool drained = wait_for([&] { return q.pending_count() == 0; }, 3000);
         up.stop(); mir.stop();
 
-        // A one-target spool removes a file as soon as the only target confirms,
-        // so the mirror has nothing to find and must not invent work.
         CHECK(drained, "the spool drains on the single configured target");
         CHECK(second.puts.load() == 0,
-              "the mirror never uploaded — there was nothing left to mirror");
+              "the mirror never uploaded — a one-target spool had nothing left");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "MIRROR UPLOAD TESTS PASSED"

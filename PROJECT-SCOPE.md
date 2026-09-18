@@ -1717,11 +1717,15 @@ than deleted.
 
   So:
 
-  - **The mirror yields by construction: it uploads only while the primary is
-    caught up.** No rate limiter to tune, no borrowing capacity to reason about
-    — if the primary has anything outstanding, the second target waits. On a
-    link that is always behind the primary, the mirror simply never gets a
-    window, which is the honest outcome rather than a degraded broadcast.
+  - **The mirror yields to a WORKING primary, not to a dead one.** The
+    distinction is the whole rule, and it is easy to get wrong: "uploads only
+    while the primary is caught up" sounds right and is not — a primary that has
+    failed is never caught up, so the mirror would never run and the survivor
+    would receive nothing, which breaks decision 4 in exactly the case this
+    phase exists for. So the mirror waits while the primary is making progress
+    and has backlog, and proceeds regardless once the primary has stopped making
+    progress for a sustained window. The policy belongs to `Session`, which can
+    see both streams; the uploader only asks whether it may go.
   - **It then catches up after the event.** The spool holds what the second
     target has not confirmed (see the per-target position above), so the mirror
     drains when the uplink is idle, and the second copy completes then. Costs:

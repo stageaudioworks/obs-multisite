@@ -32,13 +32,18 @@ struct UploaderConfig {
     int verify_first_n = 3;
     std::map<std::string, std::string> tags = { {"MultisiteExpiry", "7d"} };
     // Which target this uploader advances: 0 the primary, 1 the second bucket
-    // (PROJECT-SCOPE.md §10 Phase 9). A target-1 uploader confirms as target 1
-    // and YIELDS — it uploads nothing while the primary has anything
-    // outstanding, so a second copy can never be the reason the live feed
-    // suffers. On a link always behind the primary it simply never runs, which
-    // is the honest outcome; what it does not finish during the event it
-    // finishes afterwards.
+    // (PROJECT-SCOPE.md §10 Phase 9). Only affects which confirmed position it
+    // advances — the spool removes a segment's files once every target has it.
     int target = 0;
+    // Whether this uploader may take a segment right now; null means always.
+    //
+    // The mirror's yield rule lives HERE as a predicate rather than as a
+    // hard-coded "wait for the primary" for a reason that cost a design pass:
+    // a primary that has FAILED is never caught up, so a rule phrased as "wait
+    // for the primary" starves the mirror exactly when the second copy is the
+    // only thing that matters. Only the caller can see both streams and tell
+    // "busy" from "gone", so the caller decides and this only asks.
+    std::function<bool()> may_upload;
 };
 
 struct UploaderStats {

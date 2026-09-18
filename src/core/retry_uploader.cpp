@@ -118,8 +118,7 @@ void RetryUploader::run() {
 }
 
 bool RetryUploader::may_upload_now() const {
-    if (m_cfg.target == 0) return true;
-    return m_spool.caught_up(0);
+    return !m_cfg.may_upload || m_cfg.may_upload();
 }
 
 void RetryUploader::start() {
