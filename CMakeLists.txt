@@ -81,6 +81,9 @@ add_library(multisite_core STATIC
     # part that can be wrong (is one tag newer than another) so it is tested
     # without a connection.
     src/core/version.cpp
+    # Comparing the two buckets' manifests (Phase 9): the only part that says
+    # whether the second copy is a copy.
+    src/core/mirror_verify.cpp
     src/core/lan_object_server.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
@@ -239,6 +242,11 @@ add_test(NAME mirror_upload COMMAND test_mirror_upload)
 add_executable(test_mirror_read tests/test_mirror_read.cpp)
 target_link_libraries(test_mirror_read PRIVATE multisite_core)
 add_test(NAME mirror_read COMMAND test_mirror_read)
+
+# Is the second copy really a copy?
+add_executable(test_mirror_verify tests/test_mirror_verify.cpp)
+target_link_libraries(test_mirror_verify PRIVATE multisite_core)
+add_test(NAME mirror_verify COMMAND test_mirror_verify)
 
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.

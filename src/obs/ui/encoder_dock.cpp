@@ -4,6 +4,9 @@
 #include "../broadcast_controller.h"
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
+#include "../storage_secondary.h"
+#include "../core/mirror_verify.h"
+#include "../core/s3_transport.h"
 #include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
@@ -17,6 +20,9 @@
 #include <obs-module.h>
 
 #include <QCheckBox>
+#include <thread>
+#include <QMetaObject>
+#include <QPointer>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -330,6 +336,17 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     storePageLayout->addWidget(m_secondary);
     connect(m_secondary, &SecondaryTargetBox::changed,
             this, [this] { if (!m_loading) m_dirty = true; });
+
+    // Verifying the copy needs BOTH ends' credentials, and the primary's are
+    // this machine's encoder settings — so unlike the box above, this cannot
+    // live in the shared widget the decoder dock also uses.
+    m_checkSecond = new QPushButton(tr_("Dock.CheckSecond"), storePage);
+    m_checkSecond->setToolTip(tr_("Dock.CheckSecondHint"));
+    storePageLayout->addWidget(m_checkSecond);
+    m_checkSecondResult = new QLabel(QString(), storePage);
+    m_checkSecondResult->setWordWrap(true);
+    storePageLayout->addWidget(m_checkSecondResult);
+    connect(m_checkSecond, &QPushButton::clicked, this, &EncoderDock::onCheckSecond);
 
     // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
     // Off by default: opening a port is exactly the kind of thing an
@@ -723,6 +740,83 @@ void EncoderDock::loadIntoFields() {
     updateLanFields();
     m_loading = false;
     m_dirty = false;
+}
+
+void EncoderDock::onCheckSecond() {
+    const auto st = BroadcastController::instance().status();
+    if (st.event_id.empty()) {
+        m_checkSecondResult->setText(tr_("Dock.CheckSecondNoEvent"));
+        return;
+    }
+
+    // The primary, in the same shape the output builds it from — so the check
+    // compares exactly the two places the bytes were meant to go.
+    multisite::S3Config primary_cfg;
+    {
+        const BroadcastSettings cfg = BroadcastController::instance().settings();
+        auto provider = multisite::provider_from_key(cfg.storage_provider);
+        if (provider == multisite::StorageProvider::Custom) {
+            primary_cfg.endpoint_host = cfg.endpoint_host;
+            primary_cfg.region        = cfg.region;
+        } else {
+            const std::string input =
+                provider == multisite::StorageProvider::CloudflareR2 ? cfg.r2_account_id
+                                                                     : cfg.region;
+            auto derived = multisite::derive(provider, input);
+            primary_cfg.r2_account_id = derived.r2_account_id;
+            primary_cfg.endpoint_host = derived.endpoint_host;
+            primary_cfg.region        = derived.region;
+        }
+        primary_cfg.bucket            = cfg.bucket;
+        primary_cfg.access_key_id     = cfg.access_key_id;
+        primary_cfg.secret_access_key = cfg.secret_access_key;
+    }
+    multisite::S3Config second_cfg;
+    if (!secondary_s3_config(second_cfg)) {
+        m_checkSecondResult->setText(tr_("Dock.CheckSecondNone"));
+        return;
+    }
+    if (primary_cfg.bucket.empty()) {
+        m_checkSecondResult->setText(tr_("Dock.CheckSecondNoPrimary"));
+        return;
+    }
+
+    const std::string ev = st.event_id;
+    m_checkSecond->setEnabled(false);
+    m_checkSecondResult->setStyleSheet(QString());
+    m_checkSecondResult->setText(tr_("Dock.CheckSecondRunning"));
+
+    // Off the UI thread, and guarded: two manifests is quick, but it is two
+    // network round trips and neither belongs on the paint thread.
+    QPointer<EncoderDock> self(this);
+    std::thread([self, primary_cfg, second_cfg, ev] {
+        multisite::S3Transport a(primary_cfg), b(second_cfg);
+        const multisite::MirrorDiff d = multisite::compare_targets(a, b, ev);
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, d] {
+            if (self) self->showCheckSecond(d);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void EncoderDock::showCheckSecond(const multisite::MirrorDiff& d) {
+    m_checkSecond->setEnabled(true);
+    if (!d.ok()) {
+        m_checkSecondResult->setText(
+            tr_("Dock.CheckSecondError").arg(QString::fromStdString(d.error)));
+        m_checkSecondResult->setStyleSheet("color: #e5484d;");
+    } else if (d.complete) {
+        m_checkSecondResult->setText(tr_("Dock.CheckSecondComplete"));
+        m_checkSecondResult->setStyleSheet("color: #35c489;");
+    } else {
+        // Named, not just counted: which segments and how they differ is what
+        // tells an operator whether this is a gap to worry about.
+        m_checkSecondResult->setText(tr_("Dock.CheckSecondDiff")
+                                         .arg((qulonglong)d.only_primary.size())
+                                         .arg((qulonglong)d.only_second.size())
+                                         .arg((qulonglong)d.checksum_mismatch.size()));
+        m_checkSecondResult->setStyleSheet("color: #e0a020;");
+    }
 }
 
 void EncoderDock::onSaveSettings() {

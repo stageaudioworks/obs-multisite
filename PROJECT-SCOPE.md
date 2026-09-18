@@ -1489,7 +1489,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
-| Redundant storage: two independent S3 targets, active/active or active/passive | planned (§10 Phase 9) |
+| Redundant storage: two independent S3 targets | built — both receive everything, reads fall back per request and switch ends when the one being read stops advancing, and completeness is checkable on demand; seamless live cutover is deliberately NOT claimed (§10 Phase 9) |
 | Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile on its single screen (§10 Phase 10) |
 | Fullscreen output assignment driven by the decoder plugin | built — each tile is a source with its own **Send to screen**, opening one of OBS's own fullscreen projectors; SDI is whatever OBS's DeckLink or AJA output already does, and several outputs from one appliance box is out of scope (§10 Phase 10) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
@@ -1784,21 +1784,21 @@ than deleted.
   1. ✅ **The decision above, and the settings surface** — the second target's
      fields in both docks and the machine-wide store behind them. Nothing writes
      anywhere different yet.
-  2. **Everything to both** — a confirmed position per target in the spool, a
+  2. ✅ **Everything to both** — a confirmed position per target in the spool, a
      second upload stream that yields to the primary, publication following the
      preferred available target, and the control objects written to both
      directly. Survivor completeness is a property of this step, not a step of
      its own.
-  3. **Telling the operator** — the second target's lag and its reason in the
+  3. ✅ **Telling the operator** — the second target's lag and its reason in the
      dock, the after-the-event "the second copy is complete", the catch-up-when-
      idle behaviour made visible, and the on-demand uplink test. Without this
      step the promise can fail without anyone knowing, which is why it is a step
      and not a footnote.
-  4. **Read fallback** — the decoder and the appliance prefer the primary and
+  4. ✅ **Read fallback** — the decoder and the appliance prefer the primary and
      fall back per object to the second; `live.json` names both, and the decoder
      prefers whichever is actually advancing; *Manage storage…* says which
      target an event is in.
-  5. **Verification** — compare the two targets by checksum and report what is
+  5. ✅ **Verification** — compare the two targets by checksum and report what is
      in one and not the other, after an event and on demand.
 
 - **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or

@@ -184,6 +184,34 @@ Sending stereo only? Do nothing: track 1 is the default at both ends.
    Leave it blank for the built-in location under OBS's plugin settings, or
    point it at a large or fast disk on a machine that stores a lot.
 
+### A second bucket, so an event is never lost to one provider failing
+
+**Settings… → Second bucket** in the encoder dock turns on redundancy. Both
+buckets then receive everything for the whole event — media and the small index
+objects alike — because a copy that is only half there cannot be played from.
+
+- **The live feed always wins.** The second copy uploads only while the primary
+  has nothing outstanding, so it can never be the reason the broadcast suffers.
+  On a thin uplink it simply falls behind and **finishes after the event**, from
+  the same local queue: "my link cannot carry both at once" becomes "my link
+  takes longer to do both".
+- **The dock tells you where it stands**: *up to date*, *N to go*, *N behind —
+  the link is busy with the live feed* (which is the design working, not a
+  fault), or *not answering*.
+- **Test upload speed** sends a measured burst to the second bucket and reports
+  Mbps. It uses real bandwidth for a few seconds and is the only way to know
+  spare capacity before an event — the live stream only ever produces at its own
+  bitrate, so it can never show what is left over.
+- **Check the second copy** compares what each bucket holds for the last event
+  and names anything missing or different. Two manifests, so it is quick.
+- A decoder reads the **primary** and reaches for the second only for an object
+  the primary cannot serve — that egress costs money — and if the end it is
+  reading stops advancing it moves across and says *via the second bucket*.
+
+Both buckets need their own retention rule. This is not a claim that broadcasting
+survives a provider outage: a campus already buffering minutes ahead rides one
+out, but one that joins during an outage has nothing to cover the gap.
+
 The **Internet** line in the Status box tells you whether the box can reach the
 bucket, separately from whether anything is on air. If it flips to red
 ("no connection") mid-event, the **Could broadcast for** figure is how long

@@ -11,6 +11,8 @@
 
 #include "settings_dialog.h"
 
+#include "../core/mirror_verify.h"
+
 class QLineEdit;
 class QSpinBox;
 class QDoubleSpinBox;
@@ -39,6 +41,8 @@ private slots:
     // event. See PROJECT-SCOPE.md §5.1.
     void onEndAndStartFresh();
     void onSaveSettings();
+    void onCheckSecond();
+    void showCheckSecond(const multisite::MirrorDiff& d);
     void onApplySettings();
     void onManageStorage();
     void updateAudioFields();
@@ -101,6 +105,11 @@ private:
     // The second bucket's state, when one is configured (Phase 9). Hidden
     // otherwise. Its own sentence rather than a grid cell — see the dock.
     QLabel*    m_second = nullptr;
+    // Verifying the second copy (Phase 9). Needs BOTH ends' credentials and the
+    // primary's are this machine's encoder settings, which is why it lives here
+    // rather than in the shared second-bucket box the decoder also uses.
+    QPushButton* m_checkSecond = nullptr;
+    QLabel*      m_checkSecondResult = nullptr;
     // "A newer build is available", shown only when the once-per-run check
     // found one. Hidden the rest of the time, including when the check could
     // not reach GitHub at all.
