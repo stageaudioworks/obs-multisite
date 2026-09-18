@@ -95,6 +95,27 @@ static QString position(long long ms) {
     return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
 }
 
+// What the store said, in words an operator can act on. "HTTP 404 NoSuchKey"
+// and "HTTP 403 AccessDenied" read as the same sentence to a volunteer and are
+// fixed in completely different places.
+static QString friendly_error(const std::string& raw) {
+    if (raw.empty()) return QString();
+    const QString text = QString::fromStdString(raw);
+    const QString lower = text.toLower();
+    if (lower.contains("403") || lower.contains("accessdenied") ||
+        lower.contains("signaturedoesnotmatch") ||
+        lower.contains("invalidaccesskeyid"))
+        return tr_("Dock.ErrRefused");
+    if (lower.contains("404") || lower.contains("nosuchkey") ||
+        lower.contains("nosuchbucket"))
+        return tr_("Dock.ErrNothingThere");
+    if (lower.contains("timeout") || lower.contains("timed out") ||
+        lower.contains("resolve") || lower.contains("connection") ||
+        lower.contains("unreachable"))
+        return tr_("Dock.ErrNoAnswer");
+    return text;   // unknown: the provider's own words beat a guess
+}
+
 // Clock time of a position in the event, e.g. "10:42:06".
 static QString clock_time(long long ms) {
     if (ms <= 0) return QString("--:--");
@@ -1267,8 +1288,22 @@ void DecoderDock::refresh() {
     m_pause->setEnabled(ctl && s.playing && !s.paused);
     m_resume->setEnabled(ctl && s.paused);
     m_live->setEnabled(ctl);
-    m_play->setEnabled(ctl && !s.playing);
-    m_stop->setEnabled(ctl && s.playing);
+    // Play only when the SESSION would actually start. It used to be enabled
+    // whenever nothing was on air, so pressing it too early declined silently
+    // and left an indefinite "BUFFERING…" — an operator cannot tell that from a
+    // dropped click.
+    m_play->setEnabled(ctl && !s.playing && s.ready_to_play);
+    if (!s.ready_to_play && !s.playing)
+        m_play->setToolTip(tr_("Dock.PlayNotReady"));
+    else
+        m_play->setToolTip(QString());
+    // Stop is also the way out of a load that is not becoming ready: it cancels
+    // what is in flight and tears the decoder down, which is the honest "give
+    // up on this" in a model where a load is applied the moment it is asked for.
+    const bool busy = s.playing || s.loading ||
+                      (!s.ready_to_play && s.gate_s > 0.0);
+    m_stop->setEnabled(ctl && busy);
+    m_stop->setToolTip(s.playing ? QString() : tr_("Dock.StopLoading"));
     m_start->setEnabled(ctl);
     m_goTo->setEnabled(ctl);
     m_jumpMarker->setEnabled(ctl && m_markers->count() > 0);
@@ -1285,12 +1320,38 @@ void DecoderDock::refresh() {
     // something visible long before the network has finished answering it.
     // Every branch is a state of this decoder — nothing about the main site
     // appears here, which is the whole point of the split.
-    // The start gate and how much of it is down. Only meaningful BEFORE Play is
-    // first pressed — the Filling buffer branch below is the only place these
-    // two belong. Rounded to seconds: the raw double flickers, and nobody reads
-    // past the whole second.
-    const int bufGate = s.start_buffer_s;
-    const int bufHave = (int)(s.buffered_span_s + 0.5);
+    // The start gate and how much of it is down — the SESSION's figures, not a
+    // second opinion computed here. The dock used to re-derive both from the
+    // start-buffer setting, which is right for a live event and wrong for a
+    // finished recording: that needs one segment, and was being shown a
+    // sixty-second countdown.
+    const int gateHave = (int)(s.ready_buffer_s + 0.5);
+    const int gateWant = (int)(s.gate_s + 0.5);
+
+    // How fast the gate is filling, from this dock's own two readings. The
+    // session does not report a rate, and this is the honest kind — what is
+    // visibly happening. Reset when the event changes, and omitted rather than
+    // guessed when it cannot be measured yet.
+    const long long nowWall = (long long)QDateTime::currentMSecsSinceEpoch();
+    if (s.ready_buffer_s + 0.01 < m_fillPrevS) {
+        m_fillRateS = 0.0;                       // a different event: start again
+    } else if (m_fillPrevS >= 0.0 && s.ready_buffer_s > m_fillPrevS + 0.01 &&
+               nowWall > m_fillPrevWallMs + 200) {
+        m_fillRateS = (s.ready_buffer_s - m_fillPrevS) /
+                      ((nowWall - m_fillPrevWallMs) / 1000.0);
+    }
+    m_fillPrevS = s.ready_buffer_s;
+    m_fillPrevWallMs = nowWall;
+
+    auto preparing_text = [&] {
+        QString t = tr_("Dock.Preparing").arg(gateHave).arg(gateWant);
+        if (m_fillRateS > 0.05 && s.ready_buffer_s < s.gate_s) {
+            const int eta =
+                (int)((s.gate_s - s.ready_buffer_s) / m_fillRateS + 0.5);
+            if (eta >= 1 && eta <= 6000) t += "  ·  " + tr_("Dock.ReadyIn").arg(eta);
+        }
+        return t;
+    };
 
     if (s.stopped) {
         m_playback->setText(tr_("Dock.Pb.Stopped"));
@@ -1326,19 +1387,17 @@ void DecoderDock::refresh() {
     } else if (s.playing) {
         m_playback->setText(tr_("Dock.Pb.Playing"));
         m_playback->setStyleSheet("color: #8fd3b4; font-weight: bold;");
+    } else if (!s.ready_to_play && s.gate_s > 0.0) {
+        // Loaded, not on air, and not yet playable: how far the buffer has got,
+        // against the gate the SESSION is actually waiting for, and roughly how
+        // long it has left.
+        m_playback->setText(preparing_text());
+        m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
     } else {
-        // Configured and buffering ahead, but not on air: what Load leaves
-        // behind, waiting for Play on cue. Say how far the buffer has actually
-        // got — "Ready" on its own is indistinguishable from a link that has
-        // stalled, and the operator's next move (wait, or press Play anyway)
-        // depends on the difference.
-        if (bufGate > 0 && bufHave < bufGate) {
-            m_playback->setText(tr_("Dock.FillingBuffer").arg(bufHave).arg(bufGate));
-            m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
-        } else {
-            m_playback->setText(tr_("Dock.Pb.Ready"));
-            m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
-        }
+        // Ready: the session would go to air on a press. Green, because this is
+        // a good state and the one moment worth noticing.
+        m_playback->setText(tr_("Dock.Pb.Ready"));
+        m_playback->setStyleSheet("color: #8fd3b4; font-weight: bold;");
     }
 
     // ── What the MAIN SITE is doing ──────────────────────────────────────────
@@ -1439,11 +1498,11 @@ void DecoderDock::refresh() {
     } else if (s.loading) {
         m_posText  = tr_("Dock.LoadingRecording");
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
-    } else if (!s.playing && bufGate > 0 && bufHave < bufGate) {
+    } else if (!s.playing && !s.ready_to_play && s.gate_s > 0.0) {
         // Load pressed, buffer still filling, nothing on air yet. This is the
         // largest text on the dock, so the progress belongs here as much as in
         // the state line — it is what the operator is watching while they wait.
-        m_posText  = tr_("Dock.FillingBuffer").arg(bufHave).arg(bufGate);
+        m_posText  = preparing_text();
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
@@ -1632,7 +1691,7 @@ void DecoderDock::refresh() {
 
     // A real error wins the red line, but a clock far from the store's earns
     // the same attention: it is what puts this site's cue times out of step.
-    QString warn = QString::fromStdString(s.last_error);
+    QString warn = friendly_error(s.last_error);
     const long long skew = s.clock_skew_ms;
     if (warn.isEmpty() && (skew >= 5000 || skew <= -5000))
         warn = tr_("Dock.ClockOut") + " (" + QString::number(skew / 1000) + " s)";

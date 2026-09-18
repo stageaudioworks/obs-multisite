@@ -295,6 +295,11 @@ private:
     // True while loadIntoFields() is filling the widgets, so the change signals
     // it raises are not mistaken for the operator's edits.
     bool m_loading = false;
+    // Fill-rate sampling for the "ready in ~Ns" estimate. Two of the dock's own
+    // readings, so it is what is visibly happening rather than a claim.
+    double    m_fillPrevS = -1.0;
+    long long m_fillPrevWallMs = 0;
+    double    m_fillRateS = 0.0;
 };
 
 } // namespace multisite_obs

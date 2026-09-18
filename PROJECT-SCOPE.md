@@ -641,8 +641,12 @@ Two consequences of doing it this way: a finished recording reaches **Ready**
 almost at once (it needs one segment, and it should feel instant rather than show
 a 60-second countdown), and a failure is **named** rather than timing out into
 "I tried something". Play is enabled at Ready, and the reason is shown when it is
-not — an operator may still force it, but never by accident. **Cancel** abandons a
-load; **Back to live** remains the other exit.
+not — an operator may still force it, but never by accident. **Stop** is the escape from a load that is not becoming
+ready — it cancels what is in flight and takes the decoder down, which is the
+honest "give up on this" in a model where a load is applied the moment it is
+asked for. A dedicated *Cancel* only means something different once there is
+something to go back to, so it belongs with prepare-then-take rather than here;
+**Back to live** remains the other exit.
 
 **What is on air while it loads is a decision, not an oversight.** Today the
 picture stops the moment a different event is loaded, which for a room full of
