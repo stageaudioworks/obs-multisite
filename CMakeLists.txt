@@ -230,6 +230,11 @@ add_executable(test_spool_targets tests/test_spool_targets.cpp)
 target_link_libraries(test_spool_targets PRIVATE multisite_core)
 add_test(NAME spool_targets COMMAND test_spool_targets)
 
+# Two upload streams over one spool, and the mirror's yield rule (Phase 9).
+add_executable(test_mirror_upload tests/test_mirror_upload.cpp)
+target_link_libraries(test_mirror_upload PRIVATE multisite_core)
+add_test(NAME mirror_upload COMMAND test_mirror_upload)
+
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.
 add_executable(test_link_health tests/test_link_health.cpp)

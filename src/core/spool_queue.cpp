@@ -68,6 +68,8 @@ void SpoolQueue::load_state() {
         m_state.last_confirmed = j.value("last_confirmed", (uint64_t)0);
         m_state.targets        = j.value("targets", 1);
         m_state.last_confirmed_2 = j.value("last_confirmed_2", (uint64_t)0);
+        m_state.any_confirmed  = j.value("any_confirmed", false);
+        m_state.any_confirmed_2 = j.value("any_confirmed_2", false);
         m_state.ended          = j.value("ended", false);
         m_state.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
         m_state.valid          = true;
@@ -84,6 +86,8 @@ void SpoolQueue::save_state() {
     j["last_confirmed"] = m_state.last_confirmed;
     j["targets"]        = m_state.targets;
     j["last_confirmed_2"] = m_state.last_confirmed_2;
+    j["any_confirmed"]  = m_state.any_confirmed;
+    j["any_confirmed_2"] = m_state.any_confirmed_2;
     j["ended"]          = m_state.ended;
     j["last_activity_ms"] = m_state.last_activity_ms;
     std::string s = j.dump();
@@ -202,9 +206,14 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
     return checksum;
 }
 
-std::optional<SpooledSegment> SpoolQueue::peek_next() const {
+std::optional<SpooledSegment> SpoolQueue::peek_next(int target) const {
     std::lock_guard<std::mutex> lk(m_mtx);
+    const bool     any  = target == 1 ? m_state.any_confirmed_2
+                                      : m_state.any_confirmed;
+    const uint64_t mark = target == 1 ? m_state.last_confirmed_2
+                                      : m_state.last_confirmed;
     for (uint64_t seq : pending_seqs()) {
+        if (any && seq <= mark) continue;      // this target already has it
         std::string mp = meta_path(seq), sp = seg_path(seq);
         if (!fs::exists(mp)) continue; // orphaned .seg (crash between writes)
         std::ifstream mf(mp);
@@ -258,6 +267,21 @@ uint64_t SpoolQueue::last_confirmed_for(int target) const {
     return target == 1 ? m_state.last_confirmed_2 : m_state.last_confirmed;
 }
 
+bool SpoolQueue::caught_up(int target) const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const bool     any  = target == 1 ? m_state.any_confirmed_2
+                                      : m_state.any_confirmed;
+    const uint64_t mark = target == 1 ? m_state.last_confirmed_2
+                                      : m_state.last_confirmed;
+    // "Nothing is waiting for this target" — the same predicate peek_next uses,
+    // so the yield rule and the queue can never disagree about whether there is
+    // work. Deliberately not derived from last_enqueued: that starts at
+    // first_seq-1 too, and carries the same ambiguity about sequence 0.
+    for (uint64_t seq : pending_seqs())
+        if (!(any && seq <= mark)) return false;
+    return true;
+}
+
 int SpoolQueue::targets() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return m_state.targets;
@@ -274,7 +298,7 @@ void SpoolQueue::set_targets(int n) {
     if (n < 2) {
         std::error_code ec;
         for (uint64_t seq : pending_seqs()) {
-            if (seq > m_state.last_confirmed) continue;
+            if (!m_state.any_confirmed || seq > m_state.last_confirmed) continue;
             auto sz = fs::file_size(seg_path(seq), ec);
             if (!ec && sz <= m_bytes_pending) m_bytes_pending -= sz;
             fs::remove(seg_path(seq), ec);
@@ -290,6 +314,8 @@ void SpoolQueue::confirm(uint64_t seq, int target) {
 
     uint64_t& mark = (target == 1) ? m_state.last_confirmed_2
                                    : m_state.last_confirmed;
+    if (target == 1) m_state.any_confirmed_2 = true;
+    else             m_state.any_confirmed   = true;
     if (seq > mark) mark = seq;
     m_state.last_activity_ms = now_ms();
     save_state();

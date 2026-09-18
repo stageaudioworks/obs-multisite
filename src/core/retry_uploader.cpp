@@ -66,7 +66,7 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             // crash in between must not orphan the object), then clear it so
             // status counters reflect reality for the confirm callback.
             if (m_on_confirm) m_on_confirm(seg);
-            m_spool.confirm(seg.seq);
+            m_spool.confirm(seg.seq, m_cfg.target);
             if (m_on_confirmed_after) m_on_confirmed_after(seg);
             return true;
         }
@@ -95,10 +95,19 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
 
 void RetryUploader::run() {
     while (m_running) {
-        auto next = m_spool.peek_next();
+        auto next = m_spool.peek_next(m_cfg.target);
         if (!next) {
             m_health = LinkHealth::Healthy;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+        // The mirror's yield (PROJECT-SCOPE.md §10 Phase 9). Checked per
+        // segment rather than once at start-up, because the primary falling
+        // behind mid-drain is exactly when the second copy must stop — it
+        // interleaves with the feed instead of competing with it. Waiting here
+        // is not a fault, so the health readout stays healthy.
+        if (!may_upload_now()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
         // Strict in-order: if this one hits a permanent failure, pause the loop
@@ -106,6 +115,11 @@ void RetryUploader::run() {
         if (!upload_one(*next) && m_running)
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
+}
+
+bool RetryUploader::may_upload_now() const {
+    if (m_cfg.target == 0) return true;
+    return m_spool.caught_up(0);
 }
 
 void RetryUploader::start() {
@@ -129,8 +143,12 @@ bool RetryUploader::drain_blocking(std::chrono::milliseconds deadline) {
     bool was_running = m_running.load();
     if (!was_running) m_running = true; // allow upload_one loops
     while (std::chrono::steady_clock::now() < end) {
-        auto next = m_spool.peek_next();
+        auto next = m_spool.peek_next(m_cfg.target);
         if (!next) { if (!was_running) m_running = false; return true; }
+        // A mirror that is yielding cannot drain, and waiting here would hold
+        // shutdown open on a primary that may never catch up. It finishes after
+        // the event instead — which is the bargain the yield rule makes.
+        if (!may_upload_now()) break;
         // Pass the deadline through: upload_one's own retry backoff must not
         // be allowed to run past it, or a single stuck segment hangs shutdown
         // indefinitely (max_attempts is 0 — retry forever — in production).

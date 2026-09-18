@@ -31,6 +31,14 @@ struct UploaderConfig {
     // storing, and mis-signed requests. 0 disables.
     int verify_first_n = 3;
     std::map<std::string, std::string> tags = { {"MultisiteExpiry", "7d"} };
+    // Which target this uploader advances: 0 the primary, 1 the second bucket
+    // (PROJECT-SCOPE.md §10 Phase 9). A target-1 uploader confirms as target 1
+    // and YIELDS — it uploads nothing while the primary has anything
+    // outstanding, so a second copy can never be the reason the live feed
+    // suffers. On a link always behind the primary it simply never runs, which
+    // is the honest outcome; what it does not finish during the event it
+    // finishes afterwards.
+    int target = 0;
 };
 
 struct UploaderStats {
@@ -98,12 +106,15 @@ private:
         m_last_verify_note = std::move(note);
     }
     void run();
+    // Whether this uploader may take a segment right now. Always true for the
+    // primary; for the mirror it is the yield rule — see `target` above.
+    bool may_upload_now() const;
     // Upload one segment with retry until success/stop/deadline. Returns true
     // on confirm. `deadline` is optional (the background run() thread retries
     // forever); drain_blocking() passes its own deadline through so a stuck
     // segment can't hang shutdown past it.
     bool upload_one(const SpooledSegment& seg,
-                     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
+                    std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     int  backoff_ms(int attempt) const;
 };
 

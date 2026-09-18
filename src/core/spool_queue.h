@@ -61,6 +61,14 @@ struct SpoolState {
     // independently over the same files — no second copy on disk.
     int         targets        = 1;
     uint64_t    last_confirmed_2 = 0; // the second target's position
+    // Whether a target has confirmed anything at all. Needed because
+    // `last_confirmed` starts at first_seq-1, which is 0 both when nothing has
+    // been confirmed and when sequence 0 HAS been — an ambiguity that silently
+    // skipped segment 0 for ever and broke the session test's confirm hook.
+    // With this, "already has it" is `any && seq <= mark`, which is right for
+    // every starting sequence number.
+    bool        any_confirmed   = false;
+    bool        any_confirmed_2 = false;
     bool        ended          = false;
     bool        valid          = false; // false if no prior state on disk
     // Wall-clock time of the last enqueue() or confirm() — i.e. the last sign
@@ -122,8 +130,12 @@ public:
     // Returns the checksum. Safe to call from the encode thread.
     std::string enqueue(SpooledSegment seg);
 
-    // Lowest-seq pending segment (not yet confirmed), or nullopt if none.
-    std::optional<SpooledSegment> peek_next() const;
+    // Lowest-seq segment THIS TARGET has not confirmed, or nullopt if none.
+    // Per target rather than "the lowest file on disk", because with two targets
+    // a file stays after the first has confirmed it — a target-agnostic answer
+    // would hand the primary the same segment for ever, which is precisely what
+    // the test caught.
+    std::optional<SpooledSegment> peek_next(int target = 0) const;
 
     // Mark a segment confirmed durable in the bucket → removes its spool files
     // and advances last_confirmed — once EVERY target in play has it (see
@@ -144,6 +156,10 @@ public:
     // Highest seq confirmed by `target`, which is both its position and, when it
     // lags, where its hole begins.
     uint64_t last_confirmed_for(int target) const;
+    // Whether `target` has confirmed everything enqueued so far. The mirror's
+    // yield rule reads this: it uploads only while the primary is caught up, so
+    // a second copy can never be the reason the live feed suffers.
+    bool caught_up(int target) const;
 
     // Number of segments on disk awaiting confirmation.
     size_t pending_count() const;
