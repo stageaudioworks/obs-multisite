@@ -14,6 +14,8 @@
 
 #include "settings_dialog.h"
 
+#include "../storage_probe.h"
+
 class QLabel;
 class QPushButton;
 class QComboBox;
@@ -267,6 +269,12 @@ private:
     QPushButton* m_cacheBrowse = nullptr;
     // Machine-wide, like the role selector beside it: whether this box asks
     // GitHub once per run whether a newer build exists.
+    // Test the primary bucket with the values as typed — a campus's whole job
+    // depends on this one request working.
+    QPushButton* m_testConnection = nullptr;
+    QLabel*      m_testConnectionResult = nullptr;
+    void showTestConnection(const ProbeResult& r);
+
     QCheckBox* m_checkUpdates = nullptr;
     // The second bucket's fields (PROJECT-SCOPE.md §10 Phase 9). Commits to its
     // own machine-wide store when Apply is pressed.

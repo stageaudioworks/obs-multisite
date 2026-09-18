@@ -795,6 +795,8 @@ if(BUILD_OBS_PLUGIN)
         # The second bucket, machine-wide: the encoder mirrors to it and the
         # decoder falls back to it, so neither dock owns it (Phase 9).
         src/obs/storage_secondary.cpp
+        # "Does this bucket work?" asked before an event rather than during one.
+        src/obs/storage_probe.cpp
         # One request to the GitHub releases API per run, so an operator learns
         # a newer build exists. Notification only; see the file's own note.
         src/obs/update_check.cpp

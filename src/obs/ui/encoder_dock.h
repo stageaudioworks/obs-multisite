@@ -12,6 +12,7 @@
 #include "settings_dialog.h"
 
 #include "../core/mirror_verify.h"
+#include "../storage_probe.h"
 
 class QLineEdit;
 class QSpinBox;
@@ -108,6 +109,12 @@ private:
     // Verifying the second copy (Phase 9). Needs BOTH ends' credentials and the
     // primary's are this machine's encoder settings, which is why it lives here
     // rather than in the shared second-bucket box the decoder also uses.
+    // Test the PRIMARY bucket, with the values as typed (Phase 9's idea applied
+    // to the bucket everything depends on).
+    QPushButton* m_testConnection = nullptr;
+    QLabel*      m_testConnectionResult = nullptr;
+    void showTestConnection(const ProbeResult& r);
+
     QPushButton* m_checkSecond = nullptr;
     QLabel*      m_checkSecondResult = nullptr;
     // "A newer build is available", shown only when the once-per-run check

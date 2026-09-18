@@ -12,11 +12,15 @@
 
 #include "../../core/position_interp.h"
 #include "../../core/storage_providers.h"
+#include "../../core/s3_transport.h"
 
 #include <obs-module.h>
 
 #include <QComboBox>
 #include <QCheckBox>
+#include <thread>
+#include <QMetaObject>
+#include <QPointer>
 #include <QFormLayout>
 #include <QStandardItemModel>
 #include <QLineEdit>
@@ -691,6 +695,43 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     }
     storePageLayout->addWidget(storeBox);
 
+    // Test the primary bucket with the values AS TYPED. A campus reads
+    // live.json, so that is what is asked for — a listing would need
+    // ListBucket, which a read-only object-scoped key commonly lacks and does
+    // not need.
+    m_testConnection = new QPushButton(tr_("Dock.TestConnection"), storePage);
+    m_testConnection->setToolTip(tr_("Dock.TestConnectionHintSat"));
+    storePageLayout->addWidget(m_testConnection);
+    m_testConnectionResult = new QLabel(QString(), storePage);
+    m_testConnectionResult->setWordWrap(true);
+    storePageLayout->addWidget(m_testConnectionResult);
+    connect(m_testConnection, &QPushButton::clicked, this, [this] {
+        const std::string bucket = m_bucket->text().trimmed().toStdString();
+        if (bucket.empty()) {
+            m_testConnectionResult->setText(tr_("Dock.TestConnectionNoBucket"));
+            return;
+        }
+        multisite::S3Config cfg;
+        fill_s3_config(cfg, m_provider->currentData().toString().toStdString(),
+                       m_accountId->text().trimmed().toStdString(),
+                       m_endpoint->text().trimmed().toStdString(),
+                       m_region->text().trimmed().toStdString(), bucket,
+                       m_keyId->text().trimmed().toStdString(),
+                       m_secret->text().toStdString());
+        const std::string room = m_roomId->text().trimmed().toStdString();
+        m_testConnection->setEnabled(false);
+        m_testConnectionResult->setStyleSheet(QString());
+        m_testConnectionResult->setText(tr_("Dock.TestConnectionRunning"));
+        QPointer<DecoderDock> self(this);
+        std::thread([self, cfg, room] {
+            const ProbeResult r = probe_bucket(cfg, false, room);
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, r] {
+                if (self) self->showTestConnection(r);
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
+
     // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide rather
     // than part of these settings, because the other dock's half reads the
     // same answer — see storage_secondary.h. A decoder uses it to fall back
@@ -961,6 +1002,19 @@ void DecoderDock::onSaveSettings() {
     update_check_set_enabled(m_checkUpdates->isChecked());
     m_secondary->saveToStore();
     m_dirty = false;
+}
+
+void DecoderDock::showTestConnection(const ProbeResult& r) {
+    m_testConnection->setEnabled(true);
+    if (r.ok) {
+        m_testConnectionResult->setText(r.found_live ? tr_("Dock.TestConnectionOkLive")
+                                                     : tr_("Dock.TestConnectionOkSat"));
+        m_testConnectionResult->setStyleSheet("color: #35c489;");
+    } else {
+        m_testConnectionResult->setText(
+            tr_("Dock.TestConnectionFailed").arg(QString::fromStdString(r.detail)));
+        m_testConnectionResult->setStyleSheet("color: #e5484d;");
+    }
 }
 
 void DecoderDock::onStart() {

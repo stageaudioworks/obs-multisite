@@ -335,6 +335,41 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(QString(), m_disableCloud);
     storePageLayout->addWidget(storeBox);
 
+    // Test the primary bucket with the values AS TYPED rather than as saved:
+    // the point of a test button is to find a wrong endpoint or a key without
+    // write access before Apply, and before an event depends on it.
+    m_testConnection = new QPushButton(tr_("Dock.TestConnection"), storePage);
+    m_testConnection->setToolTip(tr_("Dock.TestConnectionHintMain"));
+    storePageLayout->addWidget(m_testConnection);
+    m_testConnectionResult = new QLabel(QString(), storePage);
+    m_testConnectionResult->setWordWrap(true);
+    storePageLayout->addWidget(m_testConnectionResult);
+    connect(m_testConnection, &QPushButton::clicked, this, [this] {
+        const std::string bucket = m_bucket->text().trimmed().toStdString();
+        if (bucket.empty()) {
+            m_testConnectionResult->setText(tr_("Dock.TestConnectionNoBucket"));
+            return;
+        }
+        multisite::S3Config cfg;
+        fill_s3_config(cfg, m_provider->currentData().toString().toStdString(),
+                       m_accountId->text().trimmed().toStdString(),
+                       m_endpoint->text().trimmed().toStdString(),
+                       m_region->text().trimmed().toStdString(), bucket,
+                       m_keyId->text().trimmed().toStdString(),
+                       m_secret->text().toStdString());
+        m_testConnection->setEnabled(false);
+        m_testConnectionResult->setStyleSheet(QString());
+        m_testConnectionResult->setText(tr_("Dock.TestConnectionRunning"));
+        QPointer<EncoderDock> self(this);
+        std::thread([self, cfg] {
+            const ProbeResult r = probe_bucket(cfg, true, std::string());
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, r] {
+                if (self) self->showTestConnection(r);
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
+
     // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide rather
     // than part of these settings, because the other dock's half reads the
     // same answer — see storage_secondary.h. Nothing is written to it yet:
@@ -755,6 +790,18 @@ void EncoderDock::loadIntoFields() {
     updateLanFields();
     m_loading = false;
     m_dirty = false;
+}
+
+void EncoderDock::showTestConnection(const ProbeResult& r) {
+    m_testConnection->setEnabled(true);
+    if (r.ok) {
+        m_testConnectionResult->setText(tr_("Dock.TestConnectionOkMain"));
+        m_testConnectionResult->setStyleSheet("color: #35c489;");
+    } else {
+        m_testConnectionResult->setText(
+            tr_("Dock.TestConnectionFailed").arg(QString::fromStdString(r.detail)));
+        m_testConnectionResult->setStyleSheet("color: #e5484d;");
+    }
 }
 
 void EncoderDock::onCheckSecond() {
