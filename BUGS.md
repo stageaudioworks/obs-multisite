@@ -201,6 +201,69 @@ the question resting on nobody having looked. `src/appliance/player.{h,cpp}`,
 which is point 2 above — capturing the `ptp=` trace from the Pi's journal and
 the receiving console's own lock figure over the same run.
 
+---
+
+### 2. Hold/resume skips, and the first two attempts to fix it stalled
+
+**Status: OPEN, understood, deliberately not fixed yet. The skip is benign; a
+revert is in place so playback does not stall. Do not re-apply the reverted
+commits — see "what was tried".**
+
+**Symptom.** Hold, then resume: the picture and sound come back a fraction of a
+second out of step. OBS reports `Max audio buffering reached` and sometimes
+`audio is lagging (over by 352 ms) ... Restarting source audio`, and that flush
+is what reads as the picture jumping. In a long hold it is worse: the report that
+prompted this entry was a five-minute hold, and the resume stalled the picture
+for several seconds.
+
+**What was measured** (from two rounds of logs, and the reason the on-screen pts
+logging below was added):
+
+- the seat does NOT move. `PAUSED at segment 3 — on screen 4.288s` then
+  `playout anchored ... (pts 3.388s)`: a 300 ms difference across a hold, so
+  nothing skips a segment and the earlier "starts 2 segments ahead" report was a
+  different fault, since fixed;
+- the OBS audio buffering grows with the HOLD LENGTH: 661 ms after a 1 s hold,
+  the 960 ms maximum after 2 s. That is the tell, and it says the fault is in
+  what resume hands over, not in where it hands it over.
+
+**Root cause.** Video and audio are re-anchored SEPARATELY, each on whichever
+frame arrives first after the resume, so they come back on different references
+(~350 ms apart). Compounding it, the delivery queue is filled symmetrically by
+count and not by time: `kMaxQueuedVideo` is 12 (about 0.4 s) and
+`kMaxQueuedAudio` is 48 (about 1 s), so while a hold is in progress audio
+accumulates a tail with no picture to go with it, and resume delivers that tail
+for OBS to buffer.
+
+**What was tried, and why it did not stand:**
+
+1. **Keep the queue and re-anchor on its front** (commit `82b4183`, reverted by
+   `cc53500`). Correct for a short hold and wrong for a long one: after minutes of
+   holding the queue is ancient, so the delivery loop's stall resync fires
+   (`playout clock fell 316.1s behind`) and the re-anchor costs SECONDS of frozen
+   picture. That traded a half-second glitch for a multi-second pause, which is
+   the wrong direction for this project.
+2. **Trim the queue to the range both streams cover** (`12a54e4`, also reverted).
+   Addresses the unpaired tail, but it sits on top of (1) and inherits the same
+   long-hold problem.
+
+Both were reverted together; the resume path is back to clearing the queue and
+re-anchoring on the next frame, which is known to skip a little and to not stall.
+
+**The fix to attempt next.** Anchor BOTH streams on ONE reference at resume — the
+position that was being held — rather than letting each take its own first frame.
+That is a change to how the playout clock is established (`anchor_pts`,
+`first_pts_ns`, `playout_base_ns`, and the delivery loop's stall resync in
+`src/obs/multisite_source.cpp`), and it needs a test that asserts the two
+streams' anchors agree to within a frame after a resume. A time-balanced queue
+(the 12/48 asymmetry) is a separate, smaller question worth settling at the same
+time; it is not itself the cause.
+
+**Instrumentation that stays.** `PAUSED` now prints the pts of the last frame
+handed to OBS and the queue depth, and `RESUMED` prints what it continued from.
+Without that figure the two candidate causes were indistinguishable and cost
+three rounds of guessing — keep it, and keep it honest.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —
