@@ -423,6 +423,11 @@ EncoderStats OutputCtx::stats() const {
     if (lan_server) {
         es.lan_port            = lan_server->port();
         es.lan_cached_segments = (unsigned long long)lan_server->cached_count();
+        es.mirror_configured    = st.mirror_configured;
+        es.mirror_behind        = st.mirror_behind;
+        es.mirror_waiting_on_primary = st.mirror_waiting_on_primary;
+        es.mirror_unreachable   = st.mirror_unreachable;
+        es.mirror_complete      = st.mirror_complete;
     }
     es.lan_error = lan_error;
     // Colo/host/rate are S3Transport-specific (not part of the abstract

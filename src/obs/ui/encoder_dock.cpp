@@ -130,6 +130,16 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_error->hide();
     grid->addWidget(m_error, 5, 0, 1, 4);
 
+    // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Its own line rather
+    // than a grid cell, because the useful messages are sentences — "4
+    // segments behind — the link is busy with the live feed" — and a cell is
+    // meant to be one short value. Hidden entirely when no second bucket is
+    // configured, so a one-bucket machine looks exactly as it always did.
+    m_second = new QLabel(QString(), statusBox);
+    m_second->setWordWrap(true);
+    m_second->hide();
+    grid->addWidget(m_second, 6, 0, 1, 4);
+
     // Shown for as long as the live broadcast is actually a resumed one —
     // not just logged once and forgotten — so an operator can always see
     // what happened and undo it. See PROJECT-SCOPE.md §5.1.
@@ -137,10 +147,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_resumedNote->setWordWrap(true);
     m_resumedNote->setStyleSheet("color: palette(text); opacity: 0.85;");
     m_resumedNote->hide();
-    grid->addWidget(m_resumedNote, 6, 0, 1, 3);
+    grid->addWidget(m_resumedNote, 7, 0, 1, 3);
     m_endAndFresh = new QPushButton(tr_("Dock.EndAndStartFresh"), statusBox);
     m_endAndFresh->hide();
-    grid->addWidget(m_endAndFresh, 6, 3);
+    grid->addWidget(m_endAndFresh, 7, 3);
     connect(m_endAndFresh, &QPushButton::clicked,
             this, &EncoderDock::onEndAndStartFresh);
 
@@ -984,6 +994,39 @@ void EncoderDock::refresh() {
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7). Meaningful only while
     // live — the server starts at Go Live and stops at End — so idle just
     // says whether it's turned on for next time.
+    // The second bucket: how far behind it is, and why. Three states matter and
+    // they are acted on differently, so they are said differently:
+    //
+    //   complete            — both buckets hold everything; nothing to do
+    //   waiting on the live feed — the link cannot carry both at once, and the
+    //                         copy will finish after the event
+    //   not answering       — the second bucket itself is the problem
+    //
+    // Shown only when one is configured, so a one-bucket machine is unchanged.
+    auto showSecond = [&] {
+        if (!m_second) return;
+        if (!st.mirror_configured) { m_second->hide(); return; }
+        m_second->show();
+        if (st.mirror_complete) {
+            m_second->setText(tr_("Dock.SecondUpToDate"));
+            m_second->setStyleSheet("color: #35c489;");
+        } else if (st.mirror_unreachable) {
+            m_second->setText(tr_("Dock.SecondUnreachable")
+                                  .arg((qulonglong)st.mirror_behind));
+            m_second->setStyleSheet("color: #e5484d;");
+        } else if (st.mirror_waiting_on_primary) {
+            // Not a fault and must not read as one: this is the yield rule
+            // doing its job, and the copy finishes after the event.
+            m_second->setText(tr_("Dock.SecondYielding")
+                                  .arg((qulonglong)st.mirror_behind));
+            m_second->setStyleSheet("color: #e0a020;");
+        } else {
+            m_second->setText(tr_("Dock.SecondBehind")
+                                  .arg((qulonglong)st.mirror_behind));
+            m_second->setStyleSheet("color: #3b82c4;");
+        }
+    };
+
     auto showLan = [&] {
         if (!m_lan) return;
         if (!st.lan_enabled) {
@@ -1020,6 +1063,7 @@ void EncoderDock::refresh() {
         showLink(false);
         showDisk();
         showLan();
+        showSecond();
         // The idle probe's colo and host, so the operator can see where the
         // bucket answers from before they go live.
         multisite_ui::set_value(m_storage, multisite_ui::link_summary(
@@ -1058,6 +1102,7 @@ void EncoderDock::refresh() {
     showLink(true);
     showDisk();
     showLan();
+    showSecond();
 
     // A real error wins the red line, but a clock far from the store's earns
     // the same attention: it is what puts this site's times out of step with

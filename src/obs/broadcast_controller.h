@@ -146,6 +146,13 @@ struct BroadcastStatus {
     int         lan_port = 0;
     size_t      lan_cached_segments = 0;
     std::string lan_error;
+    // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Same meaning as the
+    // Session's fields of the same names; reported whether idle or live.
+    bool        mirror_configured = false;
+    uint64_t    mirror_behind = 0;
+    bool        mirror_waiting_on_primary = false;
+    bool        mirror_unreachable = false;
+    bool        mirror_complete = false;
     // What Go Live will do next time — true whether idle or live, same as
     // lan_enabled above.
     bool        cloud_enabled = true;

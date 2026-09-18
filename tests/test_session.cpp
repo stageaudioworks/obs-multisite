@@ -901,6 +901,30 @@ int main() {
               "the manifest really is in the second bucket");
         CHECK(!primary.ordering_violation,
               "the manifest invariant is unchanged by mirroring");
+
+        // What the dock is told. "Complete" is the claim the whole phase rests
+        // on, so it is asserted rather than left to the counters.
+        auto st2 = ses.status();
+        CHECK(st2.mirror_configured, "the status reports a second bucket");
+        CHECK(st2.mirror_behind == 0, "with nothing left to copy");
+        CHECK(st2.mirror_complete,
+              "and says the event is in both buckets — the only question that "
+              "matters once a broadcast ends");
+        ses.end();
+    }
+
+    std::printf("== 20. No second bucket: nothing is claimed ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s20").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0, 400), video, tracks);
+        auto st3 = ses.status();
+        CHECK(!st3.mirror_configured,
+              "a one-bucket machine reports no second bucket");
+        CHECK(!st3.mirror_complete,
+              "and never claims a copy it does not have");
         ses.end();
     }
 

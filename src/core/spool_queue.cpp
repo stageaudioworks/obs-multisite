@@ -282,6 +282,18 @@ bool SpoolQueue::caught_up(int target) const {
     return true;
 }
 
+uint64_t SpoolQueue::behind(int target) const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const bool     any  = target == 1 ? m_state.any_confirmed_2
+                                      : m_state.any_confirmed;
+    const uint64_t mark = target == 1 ? m_state.last_confirmed_2
+                                      : m_state.last_confirmed;
+    uint64_t n = 0;
+    for (uint64_t seq : pending_seqs())
+        if (!(any && seq <= mark)) ++n;
+    return n;
+}
+
 int SpoolQueue::targets() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return m_state.targets;

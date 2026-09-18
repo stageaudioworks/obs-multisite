@@ -98,6 +98,9 @@ private:
     QCheckBox* m_tags = nullptr;
     QLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;
+    // The second bucket's state, when one is configured (Phase 9). Hidden
+    // otherwise. Its own sentence rather than a grid cell — see the dock.
+    QLabel*    m_second = nullptr;
     // "A newer build is available", shown only when the once-per-run check
     // found one. Hidden the rest of the time, including when the check could
     // not reach GitHub at all.

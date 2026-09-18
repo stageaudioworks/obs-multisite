@@ -195,6 +195,24 @@ public:
         // Segments already confirmed durable before this run resumed —
         // i.e. work that would be abandoned by choosing "start new" instead.
         uint64_t    resumed_already_confirmed = 0;
+
+        // ── The second bucket (PROJECT-SCOPE.md §10 Phase 9) ────────────────
+        // All false/zero unless a mirror transport was supplied, so a machine
+        // without redundancy reports exactly what it always did.
+        bool        mirror_configured = false;
+        // Segments enqueued that the second target has not confirmed. This is
+        // the lag, and the number an operator needs when deciding whether the
+        // copy is keeping up.
+        uint64_t    mirror_behind = 0;
+        // Why it is behind, when it is. The two causes are different faults and
+        // are acted on differently: one means the link cannot carry both, the
+        // other means the second bucket is not answering.
+        bool        mirror_waiting_on_primary = false;
+        bool        mirror_unreachable = false;
+        // Everything enqueued is in BOTH buckets. This is what makes "the event
+        // is safe in two places" a fact rather than an assumption — and after a
+        // broadcast ends it is the only question left.
+        bool        mirror_complete = false;
     };
     Status status() const;
 

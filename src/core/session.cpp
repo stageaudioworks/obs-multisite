@@ -581,6 +581,18 @@ Session::Status Session::status() const {
     s.resumed_event_id           = m_resumed_event_id;
     s.resumed_event_started_ms   = m_resumed_event_started_ms;
     s.resumed_already_confirmed  = m_resumed_already_confirmed;
+
+    if (m_cfg.mirror_transport) {
+        s.mirror_configured       = true;
+        s.mirror_behind           = m_spool->behind(1);
+        s.mirror_waiting_on_primary = !m_spool->caught_up(0);
+        // "Unreachable" means the second stream is not getting anywhere, not
+        // that it is idle: an up-to-date mirror has nothing to do and says
+        // healthy. Only reported while there is work it has failed to do.
+        s.mirror_unreachable = s.mirror_behind > 0 &&
+                               m_mirror->health() != LinkHealth::Healthy;
+        s.mirror_complete    = m_spool->caught_up(1);
+    }
     return s;
 }
 

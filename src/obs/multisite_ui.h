@@ -54,6 +54,12 @@ struct EncoderStats {
     bool        lan_running = false;
     int         lan_port = 0;
     unsigned long long lan_cached_segments = 0;
+    // The second bucket (PROJECT-SCOPE.md §10 Phase 9) — see Session::Status.
+    bool     mirror_configured = false;
+    unsigned long long mirror_behind = 0;
+    bool     mirror_waiting_on_primary = false;
+    bool     mirror_unreachable = false;
+    bool     mirror_complete = false;
     std::string lan_error;
 
     // This machine's clock against the store's, from the HTTP Date header — 0

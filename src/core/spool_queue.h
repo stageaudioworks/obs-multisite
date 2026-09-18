@@ -160,6 +160,9 @@ public:
     // yield rule reads this: it uploads only while the primary is caught up, so
     // a second copy can never be the reason the live feed suffers.
     bool caught_up(int target) const;
+    // How many enqueued segments `target` has not confirmed — the lag, in
+    // segments. Zero means caught up; it is the number an operator is shown.
+    uint64_t behind(int target) const;
 
     // Number of segments on disk awaiting confirmation.
     size_t pending_count() const;

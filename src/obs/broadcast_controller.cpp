@@ -516,6 +516,11 @@ BroadcastStatus BroadcastController::status() const {
             st.lan_port             = es.lan_port;
             st.lan_cached_segments  = (size_t)es.lan_cached_segments;
             st.lan_error            = es.lan_error;
+            st.mirror_configured    = es.mirror_configured;
+            st.mirror_behind        = es.mirror_behind;
+            st.mirror_waiting_on_primary = es.mirror_waiting_on_primary;
+            st.mirror_unreachable   = es.mirror_unreachable;
+            st.mirror_complete      = es.mirror_complete;
         }
         st.link_known = true;   // the uploader always reports once live
         return st;
