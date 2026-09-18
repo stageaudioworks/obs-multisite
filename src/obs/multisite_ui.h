@@ -218,6 +218,8 @@ struct DecoderSnapshot {
     // DecoderSession's start plan, so the display cannot disagree with start() —
     // it did, and mislabelled every finished recording.
     bool        ready_to_play = false;
+    // The session's own classification, so no surface has to reconstruct it.
+    bool        plays_as_recording = false;
     double      gate_s = 0.0;          // what the start gate wants, in seconds
     double      ready_buffer_s = 0.0;  // what is present towards it, in seconds
     // The encoder died rather than ending: the recording is complete up to

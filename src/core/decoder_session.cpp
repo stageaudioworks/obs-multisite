@@ -564,6 +564,11 @@ DecoderSession::StartPlan DecoderSession::start_plan() const {
     return start_plan_locked();
 }
 
+bool DecoderSession::plays_as_recording() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return plays_as_recording_locked();
+}
+
 bool DecoderSession::can_start_now() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return start_plan_locked().ready();

@@ -1398,11 +1398,18 @@ Second copies:
 - the appliance page's mapping (`EVENT = {LIVE, RECORDING, INTERRUPTED}` in
   `web/app.js`).
 
-The dock's copy is the dangerous one: it decides what the timeline spans. It is
-correct today and was WRONG for an interrupted pinned event until this session —
-which is the whole argument. Fix: put the session's own classification in the
-snapshot (`plays_as_recording`) and use it in all four places. That also removes
-the need for the dock to know pinned-or-interrupted at all.
+The dock's copy was the dangerous one: it decides what the timeline spans, and it
+was WRONG for an interrupted pinned event until this session — which is the whole
+argument.
+
+**DONE (2026-09-18):** `DecoderSession::plays_as_recording()` is exposed through
+the snapshot and the dock's three hand-written copies are gone (the timeline
+span, the position text, and the cue-list times). The third was found only by
+grepping for the pattern after the first two were replaced — which is the
+argument for the sweep happening at all. Still outstanding: the status strings in
+`multisite_source.cpp` and `player.cpp` and the page's mapping in
+`src/appliance/web/app.js` classify independently, and a page that disagrees with
+its box is a smaller version of the same fault.
 
 ### D2. Segment length — two fallbacks
 

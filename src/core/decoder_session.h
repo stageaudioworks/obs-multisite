@@ -181,6 +181,11 @@ public:
     StartPlan start_plan() const;
     // The same answer, in the units an operator reads.
     bool   can_start_now() const;
+    // Whether the event loaded now is played as a RECORDING: finished,
+    // interrupted, or pinned. Exposed so the surfaces stop re-deriving it — the
+    // dock's hand-written copy was wrong for interrupted pinned events, which is
+    // what drew a 40-minute recording on an 8-hour axis.
+    bool   plays_as_recording() const;
     double start_gate_s() const;      // what the gate wants, in seconds
     double ready_buffer_s() const;    // what is present towards it, in seconds
     void pause();                      // freezes the head; cache keeps filling

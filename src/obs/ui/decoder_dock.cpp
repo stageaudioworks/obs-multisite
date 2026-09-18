@@ -1557,7 +1557,7 @@ void DecoderDock::refresh() {
         // the state line — it is what the operator is watching while they wait.
         m_posText  = preparing_text();
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
-    } else if (s.ended || s.interrupted || !s.pinned_event_id.empty()) {
+    } else if (s.plays_as_recording) {
         // A finished recording: show where you are in it and how much is left.
         // How far through, out of its total length — the way a media player
         // reads. "Behind live" means nothing once the event has finished, and
@@ -1608,8 +1608,10 @@ void DecoderDock::refresh() {
     // interrupted one spans its own length like any other. Without that, an
     // interrupted recording was drawn across the whole retained window — a
     // forty-minute event on an eight-hour axis, which is the "weird time".
-    const bool as_recording =
-        s.ended || s.interrupted || !s.pinned_event_id.empty();
+    // The SESSION's answer, not a second opinion. This was hand-written here
+    // and was wrong for an interrupted pinned event — which drew a 40-minute
+    // recording across the whole retained window.
+    const bool as_recording = s.plays_as_recording;
     if (as_recording && (s.end_ms > 0 || s.live_edge > 0)) {
         // A recording spans its whole length, labelled as elapsed time.
         m_timeline->setSpan(0, media(s.live_edge + 1));
@@ -1653,9 +1655,11 @@ void DecoderDock::refresh() {
         m_markers->clear();
         for (const auto& m : s.markers) {
             // A recording's cue times run 00:00 to the end of the event; live
-            // they are times of day. Same rule the playhead readout follows —
-            // "behind live" means nothing once there is no live edge.
-            const bool vod = s.ended || s.interrupted;
+            // they are times of day. The SESSION's classification, so this list
+            // reads in the same frame as the position line above it — a third
+            // hand-written copy of the same question, and two of them
+            // disagreeing is worse than either being wrong.
+            const bool vod = s.plays_as_recording;
             QString when;
             if (m.at_ms > 0) {
                 when = (vod && s.started_ms > 0 && m.at_ms >= s.started_ms)

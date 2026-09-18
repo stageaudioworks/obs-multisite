@@ -1894,6 +1894,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.was_live         = sess->was_live_this_session();
     // The session's own answer to "can Play work", not the dock's guess at it.
     out.ready_to_play    = sess->can_start_now();
+    out.plays_as_recording = sess->plays_as_recording();
     out.gate_s           = sess->start_gate_s();
     out.ready_buffer_s   = sess->ready_buffer_s();
     out.interrupted      = sess->was_interrupted();
