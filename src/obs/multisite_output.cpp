@@ -671,12 +671,7 @@ static bool complete_start(OutputCtx* ctx) {
         const SecondaryTarget second = secondary_target();
         if (second.configured()) {
             S3Config sc2;
-            sc2.endpoint_host   = second.endpoint_host;
-            sc2.r2_account_id   = second.r2_account_id;
-            sc2.bucket          = second.bucket;
-            sc2.access_key_id   = second.access_key_id;
-            sc2.secret_access_key = second.secret_access_key;
-            sc2.region          = second.region;
+            secondary_s3_config(sc2);
             auto s3b = std::make_unique<S3Transport>(sc2);
             mlog_info("second bucket: %s", s3b->base_url().c_str());
             ctx->mirror_transport = std::move(s3b);

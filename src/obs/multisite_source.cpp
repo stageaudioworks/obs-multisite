@@ -18,6 +18,9 @@
 #include <util/platform.h>
 
 #include "plugin_log.h"
+#include "storage_secondary.h"
+
+#include "../core/mirror_read_transport.h"
 #include "multisite_ui.h"
 #include "decoder_settings.h"
 
@@ -1621,6 +1624,26 @@ static void src_update(void* data, obs_data_t* s) {
             lan_tx = std::make_shared<LanTransport>(lcfg);
         }
 
+        // The second bucket, when this machine has one configured
+        // (PROJECT-SCOPE.md §10 Phase 9). Composed UNDER the LAN fallback, so
+        // the preference order is LAN → primary cloud → second cloud, decided
+        // per request: an event's later segments may exist only in the second
+        // bucket after a write-side failover, and a 404 from a reachable
+        // primary must fall through rather than be read as the primary failing.
+        std::shared_ptr<S3Transport> tx2;
+        std::shared_ptr<MirrorReadTransport> mirror_tx;
+        Transport* cloud = tx.get();
+        if (tx) {
+            S3Config sc2;
+            if (secondary_s3_config(sc2)) {
+                tx2 = std::make_shared<S3Transport>(sc2);
+                mirror_tx = std::make_shared<MirrorReadTransport>(*tx, *tx2);
+                cloud = mirror_tx.get();
+                mlog_info("source: second bucket configured — reads will fall "
+                          "back to it per request");
+            }
+        }
+
         if (lan_tx && !tx) {
             // A cue goes to the encoder's hub only when there is NO bucket to
             // write to. With cloud configured the cue is written directly, so a
@@ -1638,12 +1661,12 @@ static void src_update(void* data, obs_data_t* s) {
         if (lan_tx && tx) {
             // Preference and fallback (§8.7): LAN answers when it can, cloud
             // otherwise, decided per request — see fallback_transport.h.
-            fb = std::make_shared<FallbackTransport>(*lan_tx, *tx);
+            fb = std::make_shared<FallbackTransport>(*lan_tx, *cloud);
             active = fb.get();
         } else if (lan_tx) {
             active = lan_tx.get();
         } else {
-            active = tx.get();
+            active = cloud;
         }
         auto ses = std::make_shared<DecoderSession>(dc, *active);
 
@@ -1660,7 +1683,7 @@ static void src_update(void* data, obs_data_t* s) {
             CatalogConfig cc;
             cc.room_id        = dc.room_id;
             cc.stale_after_ms = dc.stale_after_ms;
-            cat = std::make_shared<EventCatalog>(cc, *tx);
+            cat = std::make_shared<EventCatalog>(cc, *cloud);
         }
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         ctx->transport     = tx;

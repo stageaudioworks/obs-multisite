@@ -85,6 +85,18 @@ void set_secondary_target(const SecondaryTarget& t) {
         mlog_info("second bucket off — nothing is mirrored");
 }
 
+bool secondary_s3_config(multisite::S3Config& out) {
+    const SecondaryTarget t = secondary_target();
+    if (!t.configured()) return false;
+    out.endpoint_host     = t.endpoint_host;
+    out.r2_account_id     = t.r2_account_id;
+    out.bucket            = t.bucket;
+    out.access_key_id     = t.access_key_id;
+    out.secret_access_key = t.secret_access_key;
+    out.region            = t.region;
+    return true;
+}
+
 UplinkTestResult secondary_uplink_test(size_t bytes) {
     UplinkTestResult out;
     const SecondaryTarget t = secondary_target();
@@ -94,12 +106,10 @@ UplinkTestResult secondary_uplink_test(size_t bytes) {
     }
 
     multisite::S3Config cfg;
-    cfg.endpoint_host     = t.endpoint_host;
-    cfg.r2_account_id     = t.r2_account_id;
-    cfg.bucket            = t.bucket;
-    cfg.access_key_id     = t.access_key_id;
-    cfg.secret_access_key = t.secret_access_key;
-    cfg.region            = t.region;
+    if (!secondary_s3_config(cfg)) {
+        out.error = "no second bucket is configured";
+        return out;
+    }
     multisite::S3Transport tx(cfg);
 
     // Incompressible-ish and cheap to build: the point is to move bytes, not to

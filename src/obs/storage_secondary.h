@@ -15,6 +15,8 @@
 //
 #include <string>
 
+namespace multisite { struct S3Config; }
+
 namespace multisite_obs {
 
 struct SecondaryTarget {
@@ -52,6 +54,11 @@ struct UplinkTestResult {
     std::string error;
 };
 UplinkTestResult secondary_uplink_test(size_t bytes = 8u << 20);
+
+// Fills `out` from the stored target. False when it is not configured, so a
+// caller cannot build a transport for a half-typed bucket. Both halves use this
+// one conversion rather than each assembling an S3Config of their own.
+bool secondary_s3_config(multisite::S3Config& out);
 
 SecondaryTarget secondary_target();
 void set_secondary_target(const SecondaryTarget& t);
