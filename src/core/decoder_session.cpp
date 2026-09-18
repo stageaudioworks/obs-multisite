@@ -508,6 +508,19 @@ DecoderSession::StartPlan DecoderSession::start_plan_locked() const {
     const RoomState rs = m_room.load();
     if (rs != RoomState::Live && !is_vod(rs)) return p;      // nothing to plan
     p.known    = true;
+
+    // The seat belongs to the event currently loaded. If what the host wants to
+    // play has ALREADY changed — a pin, which poll() has not applied yet — then
+    // any answer here is about the old event, and acting on it plays the old
+    // head against the new one.
+    //
+    // That window is up to a whole poll interval wide, and it is exactly what
+    // "load another recording and it jumps with random times" was: the dock was
+    // told READY for the wrong event, so it showed no loading, left Play
+    // enabled, and the press landed on a seat that did not belong to it.
+    const std::string wanted =
+        m_pinned_event_id.empty() ? m_live_event_id : m_pinned_event_id;
+    if (!wanted.empty() && wanted != m_event_id) return p;   // not known: not ready
     p.has_init = m_cache->has_init();
 
     if (m_head_set.load()) {

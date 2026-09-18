@@ -1382,8 +1382,14 @@ void DecoderDock::refresh() {
     if (s.stopped) {
         m_playback->setText(tr_("Dock.Pb.Stopped"));
         m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
-    } else if (s.loading) {
-        // Name it. "LOADING…" about something anonymous does not tell an
+    } else if (s.loading && !s.ready_to_play) {
+        // AND only while it is not yet playable. The source's loading flag is
+        // cleared by its own rule, so it could still be set for a tick after the
+        // session had already decided it could start — which is exactly how
+        // "why can I play before loading has finished?" happened. Readiness is
+        // the session's answer, so it wins here too.
+        //
+        // Name it, too: "LOADING…" about something anonymous does not tell an
         // operator whether their click landed on the right row.
         m_playback->setText(m_loadingName.isEmpty()
                                 ? tr_("Dock.Loading")
@@ -1496,7 +1502,7 @@ void DecoderDock::refresh() {
 
     // The load is over: stop naming it, so a later wait cannot show a stale
     // name from a click that has long since finished.
-    if (!s.loading) m_loadingName.clear();
+    if (!s.loading || s.ready_to_play) m_loadingName.clear();
 
     m_posValid    = true;
     m_posFixed    = true;
@@ -1529,7 +1535,7 @@ void DecoderDock::refresh() {
         // operator is neither left wondering nor misled.
         m_posText  = tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms));
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
-    } else if (s.loading) {
+    } else if (s.loading && !s.ready_to_play) {
         m_posText  = m_loadingName.isEmpty()
                          ? tr_("Dock.LoadingRecording")
                          : tr_("Dock.LoadingNamed").arg(m_loadingName);

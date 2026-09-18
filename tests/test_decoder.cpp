@@ -1415,6 +1415,38 @@ int main() {
         CHECK(dec.last_error().empty(), "a normal poll after resuming is clean");
     }
 
+    std::printf("== 27. A pin is not ready until it is the thing being played ==\n");
+    {
+        FakeStore store;
+        // Two events in one room, and the SECOND one published is the one
+        // live.json names — so the long one has to go last for the session to be
+        // following it when the pin happens.
+        FakeEncoder b(store, "r", "01EVENTBBBBBBB");
+        b.publish_start();
+        for (int i = 0; i < 3; ++i) b.publish_segment();
+        FakeEncoder a(store, "r", "01EVENTAAAAAAA");
+        a.publish_start();
+        for (int i = 0; i < 15; ++i) a.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d27").string();
+        cfg.prebuffer_segments = 0; cfg.start_buffer_seconds = 60;
+        DecoderSession dec(cfg, store);
+        dec.poll(a.clock_ms);
+        for (int i = 0; i < 40 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.can_start_now(), "ready on the event that is loaded");
+        CHECK(dec.start(), "and it starts");
+
+        // Pin a different event. poll() has not run yet, and the seat still
+        // belongs to the first — so readiness must be withdrawn AT ONCE, or the
+        // dock shows READY, leaves Play enabled, and the press plays the old
+        // head against the new event. That is the jump, and it was up to a full
+        // poll interval wide.
+        dec.pin_event("01EVENTBBBBBBB");
+        CHECK(!dec.can_start_now(),
+              "pinning another event is not ready before it is applied");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");
