@@ -8,6 +8,7 @@
 #include "role_selector.h"
 #include "status_text.h"
 #include "web_box.h"
+#include "secondary_box.h"
 #include "storage_dialog.h"
 
 #include "../../core/s3_transport.h"
@@ -309,6 +310,16 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(QString(), m_tags);
     form->addRow(QString(), m_disableCloud);
     storePageLayout->addWidget(storeBox);
+
+    // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide rather
+    // than part of these settings, because the other dock's half reads the
+    // same answer — see storage_secondary.h. Nothing is written to it yet:
+    // the fields exist and are saved, and the mirroring that uses them is the
+    // next slice.
+    m_secondary = new SecondaryTargetBox(storePage);
+    storePageLayout->addWidget(m_secondary);
+    connect(m_secondary, &SecondaryTargetBox::changed,
+            this, [this] { if (!m_loading) m_dirty = true; });
 
     // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
     // Off by default: opening a port is exactly the kind of thing an
@@ -698,6 +709,7 @@ void EncoderDock::loadIntoFields() {
     // Machine-wide, so read from its own store rather than from cfg — and read
     // here, on every open, so a change made in the other dock's dialog shows up.
     m_checkUpdates->setChecked(update_check_enabled());
+    m_secondary->loadFromStore();
     updateLanFields();
     m_loading = false;
     m_dirty = false;
@@ -760,6 +772,7 @@ void EncoderDock::onSaveSettings() {
     // dialog — so opening the settings to look at something still changes
     // nothing, which is the promise the Apply button exists to make.
     update_check_set_enabled(m_checkUpdates->isChecked());
+    m_secondary->saveToStore();
     m_dirty = false;
 }
 

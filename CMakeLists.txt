@@ -768,6 +768,9 @@ if(BUILD_OBS_PLUGIN)
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp
         src/obs/plugin_log.cpp
+        # The second bucket, machine-wide: the encoder mirrors to it and the
+        # decoder falls back to it, so neither dock owns it (Phase 9).
+        src/obs/storage_secondary.cpp
         # One request to the GitHub releases API per run, so an operator learns
         # a newer build exists. Notification only; see the file's own note.
         src/obs/update_check.cpp
@@ -828,6 +831,7 @@ if(BUILD_OBS_PLUGIN)
             src/obs/ui/role_selector.cpp
             src/obs/ui/settings_tabs.cpp
             src/obs/ui/web_box.cpp
+            src/obs/ui/secondary_box.cpp
             src/obs/ui/dock_register.cpp)
         set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)
         target_link_libraries(obs-multisite PRIVATE Qt6::Widgets)

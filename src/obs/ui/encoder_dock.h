@@ -23,6 +23,8 @@ class QComboBox;
 
 namespace multisite_obs {
 
+class SecondaryTargetBox;
+
 class EncoderDock : public QWidget {
     Q_OBJECT
 public:
@@ -90,6 +92,9 @@ private:
     // Machine-wide, like the role selector beside it: whether this box asks
     // GitHub once per run whether a newer build exists.
     QCheckBox* m_checkUpdates = nullptr;
+    // The second bucket's fields (PROJECT-SCOPE.md §10 Phase 9). Commits to its
+    // own machine-wide store when Apply is pressed.
+    SecondaryTargetBox* m_secondary = nullptr;
     QCheckBox* m_tags = nullptr;
     QLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;

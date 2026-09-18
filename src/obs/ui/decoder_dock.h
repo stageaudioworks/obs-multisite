@@ -27,6 +27,8 @@ class QMouseEvent;
 
 namespace multisite_obs {
 
+class SecondaryTargetBox;
+
 struct DecoderSnapshot;
 
 // Timeline strip: retained window, buffered region, playhead, live edge and
@@ -266,6 +268,9 @@ private:
     // Machine-wide, like the role selector beside it: whether this box asks
     // GitHub once per run whether a newer build exists.
     QCheckBox* m_checkUpdates = nullptr;
+    // The second bucket's fields (PROJECT-SCOPE.md §10 Phase 9). Commits to its
+    // own machine-wide store when Apply is pressed.
+    SecondaryTargetBox* m_secondary = nullptr;
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — an empty host means
     // not configured, the same convention an empty bucket already uses
     // above; no separate on/off checkbox.
