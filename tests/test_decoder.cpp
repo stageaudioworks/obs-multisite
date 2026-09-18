@@ -1513,6 +1513,32 @@ int main() {
               "and playback begins three seconds into it, not at its start");
     }
 
+    std::printf("== 30. A media seek lands where the click was ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTMEDIASEEK");
+        enc.publish_start();
+        for (int i = 0; i < 8; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d30").string();
+        cfg.prebuffer_segments = 0; cfg.start_buffer_seconds = 0;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 30 && !dec.can_start_now(); ++i) dec.pump_downloads(4);
+        CHECK(dec.start(), "playing");
+
+        // Click 3 s into the second segment. The dock has media time and hands
+        // it over; the SESSION decides where that is.
+        CHECK(dec.seek_to_media_ms(9000) == 9000, "the media seek is accepted");
+        dec.pump_downloads(8);
+        auto seg = dec.next_segment();
+        CHECK(seg.has_value(), "a segment is ready");
+        CHECK(seg->seq == 1, "the segment the click fell in");
+        CHECK(seg->skip_to_ms == 3000,
+              "and it starts three seconds in, not at the segment's start");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");

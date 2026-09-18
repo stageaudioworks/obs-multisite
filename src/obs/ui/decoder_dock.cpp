@@ -1079,11 +1079,14 @@ void DecoderDock::onJumpMarker() {
 }
 
 void DecoderDock::onSeek(long long media_ms) {
-    // The bar hands back MEDIA time now; the session seeks by segment.
-    if (m_mediaSegMs <= 0) return;
-    long long seq = media_ms / m_mediaSegMs;
-    if (seq < 0) seq = 0;
-    decoder_seek((unsigned long long)seq);
+    // Hand the clicked TIME over, not a segment number.
+    //
+    // This used to divide by the segment length and drop the remainder, so a
+    // click landed up to six seconds from where it was made — and the segment
+    // length is the SESSION's to know, not the dock's, which is why the
+    // conversion belongs there (DecoderSession::seek_to_media_ms).
+    if (media_ms < 0) media_ms = 0;
+    decoder_seek_media(media_ms);
 }
 
 // ── Recordings ───────────────────────────────────────────────────────────────

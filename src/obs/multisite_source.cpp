@@ -418,6 +418,7 @@ struct SourceCtx : DecoderControls {
     void jump_to_marker(const std::string& id) override;
     void add_cue(const std::string& label, std::string& error) override;
     void seek(unsigned long long seq) override;
+    void seek_media(long long media_ms) override;
     void reconfigure() override;
     void play() override;
     void stop_playback() override;
@@ -2372,6 +2373,23 @@ void SourceCtx::reconfigure() {
     // machine-wide storage config. Deferring avoids tearing down worker
     // threads from whichever thread happened to click the button.
     if (source) obs_source_update(source, nullptr);
+}
+
+void SourceCtx::seek_media(long long media_ms) {
+    auto sess = get_session(this);
+    if (!sess) return;
+    if (sess->seek_to_media_ms(media_ms) == 0) {
+        const std::string why = sess->last_error();
+        mlog_warn("source: %s", why.empty()
+                                    ? "that moment cannot be played"
+                                    : why.c_str());
+        return;
+    }
+    // The same housekeeping a segment seek or a jog gets: flush what is queued,
+    // release the decoder, re-anchor, and move the displayed time to where the
+    // click is heading rather than where the picture still is.
+    after_jump((long long)sess->playhead_wall_ms());
+    mlog_info("source: went to %.3fs on the media timeline", media_ms / 1000.0);
 }
 
 void SourceCtx::seek(unsigned long long seq) {

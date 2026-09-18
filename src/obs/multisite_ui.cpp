@@ -143,6 +143,10 @@ void decoder_jump_to_marker(const std::string& id) {
     for (auto* d : g_decoders) d->jump_to_marker(id);
 }
 
+void decoder_seek_media(long long media_ms) {
+    for (auto* d : g_decoders) d->seek_media(media_ms);
+}
+
 void decoder_seek(unsigned long long seq) {
     std::lock_guard<std::mutex> lk(g_mtx);
     for (auto* d : g_decoders) d->seek(seq);

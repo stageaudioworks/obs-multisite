@@ -293,6 +293,16 @@ public:
     // into that segment to begin.
     int64_t seek_to_wall_ms(int64_t wall_ms);
 
+    // Seek by MEDIA time — segment number times one segment, which is the axis
+    // the decoder dock draws and the axis a click on it is in. Returns the
+    // media time reached, or 0 if it is outside what storage still holds.
+    //
+    // The dock used to convert a click to a segment number itself and throw the
+    // remainder away, so every click landed up to one segment (6 s) from where
+    // it was made. Segments are the unit of TRANSFER, not of seeking: the
+    // in-segment offset is set here and applied by the host as `skip_to_ms`.
+    int64_t seek_to_media_ms(int64_t media_ms);
+
     const SegmentCache& cache() const { return *m_cache; }
 
     struct Stats {

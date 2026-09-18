@@ -123,6 +123,11 @@ struct DecoderControls {
     // reason when this box has no site name or nowhere to write it.
     virtual void add_cue(const std::string& label, std::string& error) = 0;
     virtual void seek(unsigned long long seq) = 0;
+    // Seek by MEDIA time (segment number x one segment) — what a click on the
+    // timeline is in. The dock used to turn that into a segment number itself
+    // and drop the remainder, so every click landed up to 6 s from where it was
+    // made; the session owns the conversion because it owns the segment length.
+    virtual void seek_media(long long media_ms) = 0;
     // Re-read settings (including the machine-wide storage config) and
     // restart. Needed when credentials are entered in the dock after a source
     // already exists.
@@ -292,6 +297,7 @@ void decoder_set_delay(double seconds);
 void decoder_set_locked(bool locked);
 void decoder_jump_to_marker(const std::string& id);
 void decoder_seek(unsigned long long seq);
+void decoder_seek_media(long long media_ms);
 
 // ── Cues ─────────────────────────────────────────────────────────────────────
 // One merged list for the Cues dock, whichever role this machine is. Prefer the

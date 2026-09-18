@@ -266,26 +266,16 @@ three rounds of guessing — keep it, and keep it honest.
 
 ### 3. Clicking the timeline lands on the segment, not the moment
 
-**Status: OPEN, same fault as "a cue jump lands on its segment" above, which is
-fixed. This is the other call site.**
+**Status: FIXED.** The dock divided the clicked time by the segment length and
+threw the remainder away, so every click landed up to 6 s from where it was
+made. `DecoderSession::seek_to_media_ms()` now owns the conversion — segments are
+the unit of transfer, not of seeking — and sets `m_pending_skip_ms` under the
+same lock that seats the head, so the feed loop cannot serve the segment before
+its offset is set. The dock hands over a time and nothing else.
 
-Clicking the timeline lands up to one segment (6 s) from where the click was,
-because the dock converts the clicked time to a segment number and discards the
-remainder:
-
-  `long long seq = media_ms / m_mediaSegMs; decoder_seek(seq);`
-
-Segments are the unit of TRANSFER, not of seeking — the session sets
-`skip_to_ms` for a time seek, and the cue path now uses it (`jump_to_marker`).
-The click path needs the same, and the conversion should NOT be done in the dock:
-the dock has media time, and only the session knows the segment's own `at_ms`,
-which is what makes the offset right on an event whose clock restarted.
-
-The fix is a `seek_to_media_ms(media_ms)` in `DecoderSession` mirroring
-`seek_to_wall_ms`: find the segment, then `skip = media_ms - seq * seg`. The dock
-hands over the clicked time and nothing else. Test it the way the cue case is
-tested — assert `skip_to_ms`, not just the segment — because a segment-only
-assertion passes for both the bug and the fix.
+`tests/test_decoder.cpp` asserts `skip_to_ms == 3000` for a click 3 s into the
+second segment. A segment-only assertion passes for both the bug and the fix,
+which is how this survived as long as it did.
 
 ## Recently landed (context, not action items)
 

@@ -1002,6 +1002,38 @@ std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const
 // Seek by TIME, which is how an operator thinks. Finds the segment containing
 // the requested moment and records how far into it to start, so accuracy is not
 // limited to the segment boundary.
+int64_t DecoderSession::seek_to_media_ms(int64_t media_ms) {
+    if (media_ms < 0) media_ms = 0;
+    const double seg_s = m_segment_duration_s.load() > 0.1
+                             ? m_segment_duration_s.load() : 6.0;
+    const int64_t seg_ms = (int64_t)(seg_s * 1000.0 + 0.5);
+    if (seg_ms <= 0) return 0;
+
+    const uint64_t seq  = (uint64_t)(media_ms / seg_ms);
+    const int64_t  skip = media_ms - (int64_t)seq * seg_ms;
+
+    // Seat the head and set the offset under ONE lock, the same way seek() sets
+    // the head: the feed loop takes this lock to serve the next segment, so a
+    // head that moved before its skip was set could be served from the start of
+    // the segment — the very fault this is fixing, reintroduced by a race.
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (seq < m_first_available_seq.load() || seq > m_latest_seq.load()) {
+            std::lock_guard<std::mutex> elk(m_err_mtx);
+            m_last_error = "that moment is outside what storage still holds";
+            return 0;
+        }
+        if (!m_head_set.load() || seq != m_head.load()) {
+            ++m_discontinuity;
+            m_init_sent = false;        // decoder restarts, so it needs init again
+        }
+        m_head = seq;
+        m_head_set = true;
+        m_pending_skip_ms = skip;
+    }
+    return media_ms;
+}
+
 int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
     uint64_t target = 0;
     int64_t  seg_start = 0;
