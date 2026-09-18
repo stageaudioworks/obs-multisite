@@ -44,6 +44,11 @@ struct SessionConfig {
     // operation (the spool should sit near-empty) while still bounding a
     // multi-hour outage on a small drive.
     uint64_t    max_spool_bytes = 4ull * 1024 * 1024 * 1024;
+    // The second bucket, when redundancy is configured (PROJECT-SCOPE.md §10
+    // Phase 9). Borrowed, not owned — the caller keeps it alive for the
+    // Session's lifetime, exactly as it does the primary. Null means one target,
+    // and everything behaves as it always has.
+    Transport*  mirror_transport = nullptr;
     // How long a resumable event may sit with no activity before it is too
     // old to resume silently. Below this, a crash-and-restart just continues
     // the same recording, as it always has. At or above it, resuming would
@@ -266,6 +271,8 @@ private:
     Transport&    m_tx;
     std::unique_ptr<SpoolQueue>    m_spool;
     std::unique_ptr<RetryUploader> m_uploader;
+    // The second target's stream. Null unless a mirror transport was supplied.
+    std::unique_ptr<RetryUploader> m_mirror;
 
     std::string m_event_id;
     uint64_t    m_next_seq = 0;

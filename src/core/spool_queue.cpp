@@ -305,7 +305,11 @@ void SpoolQueue::set_targets(int n) {
             fs::remove(meta_path(seq), ec);
         }
     }
-    m_state.last_activity_ms = now_ms();
+    // Deliberately does NOT touch last_activity_ms: that clock is how long the
+    // EVENT has been quiet, and how many buckets it goes to is configuration.
+    // Stamping it here made a stale event read as freshly alive the moment
+    // Session normalised the target count — which the session test caught as a
+    // resume prompt that stopped appearing.
     save_state();
 }
 
@@ -320,14 +324,21 @@ void SpoolQueue::confirm(uint64_t seq, int target) {
     m_state.last_activity_ms = now_ms();
     save_state();
 
-    // Removed only once every target in play holds it. With one target this is
-    // the same test the spool has always made.
-    if (m_state.targets > 1) {
-        if (seq > m_state.last_confirmed_2 || seq > m_state.last_confirmed)
-            return;
-    } else if (seq > m_state.last_confirmed) {
-        return;
-    }
+    // Removed only once every target in play holds it.
+    //
+    // Each half is `any && seq <= mark`, NOT `seq <= mark` — the sequence-0
+    // ambiguity, in its third and worst form. `last_confirmed_2` starts at 0
+    // both when the second target has nothing and when it has sequence 0, so a
+    // bare `seq <= last_confirmed_2` said "the second target already has
+    // sequence 0" and deleted the file while only the primary had it. The
+    // segment then never reached the second bucket, which is the one thing this
+    // whole mechanism exists to prevent.
+    const bool has_primary =
+        m_state.any_confirmed && seq <= m_state.last_confirmed;
+    const bool has_second =
+        m_state.targets < 2 ||
+        (m_state.any_confirmed_2 && seq <= m_state.last_confirmed_2);
+    if (!(has_primary && has_second)) return;
 
     std::error_code ec;
     auto sz = fs::file_size(seg_path(seq), ec);

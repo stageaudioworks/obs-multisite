@@ -11,6 +11,7 @@
 #include <obs-module.h>
 #include "plugin_log.h"
 #include "multisite_ui.h"
+#include "storage_secondary.h"
 
 #include "../core/session.h"
 #include "../core/cmaf_muxer.h"
@@ -105,6 +106,9 @@ struct OutputCtx : EncoderControls {
     // need the concrete type, guarded by cloud_enabled at their one call site
     // each.
     std::unique_ptr<Transport> transport;
+    // The second bucket's transport, when redundancy is configured (Phase 9).
+    // Kept alive here because Session borrows it; null means one target.
+    std::unique_ptr<Transport> mirror_transport;
     std::unique_ptr<Session>     session;
     std::unique_ptr<CmafMuxer>   muxer;
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — null unless the
@@ -654,6 +658,30 @@ static bool complete_start(OutputCtx* ctx) {
         // only visible as curl's opaque "bad/illegal format" error.
         mlog_info("storage: %s", s3->base_url().c_str());
         ctx->transport = std::move(s3);
+
+        // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide
+        // rather than part of this event's settings — see storage_secondary.h.
+        // Only with cloud delivery: with it off nothing leaves the machine, so
+        // there is nothing to mirror.
+        const SecondaryTarget second = secondary_target();
+        if (second.configured()) {
+            S3Config sc2;
+            sc2.endpoint_host   = second.endpoint_host;
+            sc2.r2_account_id   = second.r2_account_id;
+            sc2.bucket          = second.bucket;
+            sc2.access_key_id   = second.access_key_id;
+            sc2.secret_access_key = second.secret_access_key;
+            sc2.region          = second.region;
+            auto s3b = std::make_unique<S3Transport>(sc2);
+            mlog_info("second bucket: %s", s3b->base_url().c_str());
+            ctx->mirror_transport = std::move(s3b);
+            ctx->pending_sc.mirror_transport = ctx->mirror_transport.get();
+        } else if (second.enabled) {
+            // Ticked but not finished. Say so plainly rather than mirroring to
+            // a half-typed target or silently doing nothing.
+            mlog_warn("second bucket is enabled but not complete — nothing is "
+                      "being mirrored (fill in bucket, endpoint and keys)");
+        }
     } else {
         mlog_info("cloud delivery is disabled for this event — publishing "
                   "to the LAN cache only, nothing leaves this machine");

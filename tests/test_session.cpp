@@ -858,6 +858,48 @@ int main() {
               "end() left the transport usable rather than switched off");
     }
 
+    std::printf("== 19. A second bucket receives the media too ==\n");
+    {
+        // The Session-level half of Phase 9: the wiring, not the rule. The
+        // uploader's own tests cover the yield; this checks that configuring a
+        // mirror actually produces a second stream into a second store, and that
+        // the primary's manifest invariant is untouched by it.
+        MemStore primary, mirror;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s19").string();
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        cfg.mirror_transport = &mirror;
+
+        Session ses(cfg, primary);
+        CHECK(ses.start_new(blob(0, 800), video, tracks), "event starts");
+
+        for (uint64_t i = 0; i < 4; ++i)
+            ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+
+        const std::string ev = ses.event_id();
+        char first[80];
+        std::snprintf(first, sizeof(first), "events/%s/segments/00000000.m4s",
+                      ev.c_str());
+
+        bool both = false;
+        for (int i = 0; i < 400; ++i) {
+            if (primary.has(first) && mirror.has(first)) { both = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        CHECK(primary.has(first), "the segment reached the primary");
+        CHECK(both, "and the second bucket received the same segment");
+        // Control objects (manifest.json, live.json) are deliberately NOT
+        // mirrored yet: they are the next step, and not done as a synchronous
+        // double-write from the encode thread, which against a dead second
+        // bucket would block the live feed for a request timeout. The mirror
+        // holds media and nothing else at this point.
+        CHECK(!mirror.has("events/" + ev + "/manifest.json"),
+              "and the manifest is not mirrored yet — that is the next step");
+        CHECK(!primary.ordering_violation,
+              "the manifest invariant is unchanged by mirroring");
+        ses.end();
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

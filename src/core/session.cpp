@@ -40,6 +40,14 @@ Session::Session(SessionConfig cfg, Transport& transport)
     m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir, m_cfg.max_spool_bytes);
     m_spool->set_drop_callback([this](const SpoolDrop& d) { on_dropped(d); });
 
+    // How many targets must hold a segment comes from the CONFIGURATION IN
+    // FORCE, not from what was persisted. A spool left at two targets after the
+    // operator turns the second bucket off would wait for a confirmation that is
+    // never coming, and grow until the disk cap dropped the lot — so this is
+    // stated once, here, and set_targets(1) also sweeps whatever the remaining
+    // target already has.
+    m_spool->set_targets(m_cfg.mirror_transport ? 2 : 1);
+
     UploaderConfig ucfg;
     ucfg.content_type = "video/mp4";
     if (m_cfg.send_expiry_tag)
@@ -57,9 +65,43 @@ Session::Session(SessionConfig cfg, Transport& transport)
     m_uploader->set_post_confirm_callback([this](const SpooledSegment&) {
         if (m_on_progress) m_on_progress(status());
     });
+
+    if (m_cfg.mirror_transport) {
+        // Two targets are already in force (see set_targets above): the spool
+        // keeps a segment until BOTH have it, so the mirror uploads it from the
+        // same file whenever it gets a window. No second copy on disk and no
+        // backlog to keep in step.
+        UploaderConfig mcfg = ucfg;
+        mcfg.target = 1;
+        // The yield rule (PROJECT-SCOPE.md §10 Phase 9), and it is phrased as
+        // "is the primary WORKING" rather than "is the primary caught up" on
+        // purpose: a failed primary is never caught up, so the latter starves
+        // the mirror exactly when the second copy is the only thing that
+        // matters. Degraded still yields — it is trying — so this waits while
+        // the primary is making progress and goes once it has stopped. The link
+        // tracker supplies the hysteresis, so it is not reacting to one failed
+        // request.
+        mcfg.may_upload = [this] {
+            return m_uploader->health() != LinkHealth::Healthy ||
+                   m_spool->caught_up(0);
+        };
+        m_mirror = std::make_unique<RetryUploader>(*m_spool,
+                                                   *m_cfg.mirror_transport,
+                                                   mcfg);
+        // Deliberately NO confirm callback on the mirror: the manifest still
+        // advances on the primary's confirmations.
+        //
+        // Publication follows "the preferred target that is currently working",
+        // but moving it to the mirror's confirmations before the read side can
+        // fall back would publish a manifest naming segments the primary does
+        // not have, and a decoder reading the primary would then be handed a
+        // manifest it cannot fetch a segment of. That moves together with read
+        // fallback, not before it.
+    }
 }
 
 Session::~Session() {
+    if (m_mirror) m_mirror->stop();
     if (m_uploader) m_uploader->stop();
 }
 
@@ -175,6 +217,9 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
 
     publish_live("live");
     m_uploader->start();
+    // The mirror starts with the event. It will mostly sit yielded; that is the
+    // point, and it costs one sleeping thread.
+    if (m_mirror) m_mirror->start();
     return true;
 }
 
@@ -434,6 +479,12 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     //
     // Safe at this point and only at this point: stop() has joined the
     // upload thread, so nothing is in flight to lose its cancellation.
+    // Stop the mirror first: it must not be uploading while the primary is
+    // being drained to a deadline, and whatever it has not finished is left on
+    // disk for the next run — the store-and-forward bargain the yield rule
+    // makes (the segment stays until BOTH targets have it, so nothing is lost
+    // by stopping here).
+    if (m_mirror) m_mirror->stop();
     m_uploader->stop();
     m_tx.resume_pending();
 
