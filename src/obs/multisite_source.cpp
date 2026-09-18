@@ -191,6 +191,11 @@ struct SourceCtx : DecoderControls {
     // Playout clock: OBS timestamps = base + (media pts - first media pts).
     std::atomic<uint64_t> playout_base_ns{0};
     std::atomic<int64_t>  first_pts_ns{-1};
+    // The pts of the last frame handed to OBS — what is actually on screen.
+    // Logged at a hold so the next resume's anchor can be compared against the
+    // picture rather than against a figure from several seconds earlier, which
+    // is what made "it skips on resume" hard to settle from the log.
+    std::atomic<int64_t>  last_out_pts_ns{-1};
     std::atomic<bool>     decoder_started{false};
     uint64_t              seen_discontinuity = 0;
 
@@ -908,6 +913,7 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
 
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
+    ctx->last_out_pts_ns = f.pts_ns;
     const int64_t first = anchor_pts(ctx, f.pts_ns, true);
 
     PendingFrame item;
@@ -1768,8 +1774,16 @@ void SourceCtx::pause() {
     paused = true;
     pause_started_ns = os_gettime_ns();
     sess->pause();
-    mlog_info("source: PAUSED at segment %llu — cache keeps filling",
-              (unsigned long long)sess->playback_head());
+    // The pts on screen, and what the session is serving. On resume the log
+    // already prints the pts of the first frame after the hold, so the two
+    // together say whether the picture moved — which is the question, and it
+    // could not be answered from a figure seconds stale.
+    size_t queued = 0;
+    { std::lock_guard<std::mutex> qlk(dq_mtx); queued = dq.size(); }
+    mlog_info("source: PAUSED at segment %llu — on screen %.3fs, %zu frame(s) "
+              "queued, cache keeps filling",
+              (unsigned long long)sess->playback_head(),
+              (double)last_out_pts_ns.load() / 1e9, queued);
 }
 
 void SourceCtx::resume() {
