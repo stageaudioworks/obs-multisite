@@ -224,6 +224,12 @@ add_executable(test_version tests/test_version.cpp)
 target_link_libraries(test_version PRIVATE multisite_core)
 add_test(NAME version COMMAND test_version)
 
+# Per-target confirmation in the spool: two upload streams over one set of files,
+# so the second bucket can be written independently of the first (Phase 9).
+add_executable(test_spool_targets tests/test_spool_targets.cpp)
+target_link_libraries(test_spool_targets PRIVATE multisite_core)
+add_test(NAME spool_targets COMMAND test_spool_targets)
+
 # The three-state link readout every operator surface shows. The arithmetic is
 # kept in the core so it can be tested with no network and no libcurl.
 add_executable(test_link_health tests/test_link_health.cpp)

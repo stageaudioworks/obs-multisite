@@ -66,6 +66,8 @@ void SpoolQueue::load_state() {
         m_state.first_seq      = j.value("first_seq", (uint64_t)0);
         m_state.last_enqueued  = j.value("last_enqueued", (uint64_t)0);
         m_state.last_confirmed = j.value("last_confirmed", (uint64_t)0);
+        m_state.targets        = j.value("targets", 1);
+        m_state.last_confirmed_2 = j.value("last_confirmed_2", (uint64_t)0);
         m_state.ended          = j.value("ended", false);
         m_state.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
         m_state.valid          = true;
@@ -80,6 +82,8 @@ void SpoolQueue::save_state() {
     j["first_seq"]      = m_state.first_seq;
     j["last_enqueued"]  = m_state.last_enqueued;
     j["last_confirmed"] = m_state.last_confirmed;
+    j["targets"]        = m_state.targets;
+    j["last_confirmed_2"] = m_state.last_confirmed_2;
     j["ended"]          = m_state.ended;
     j["last_activity_ms"] = m_state.last_activity_ms;
     std::string s = j.dump();
@@ -123,11 +127,17 @@ void SpoolQueue::begin_event(const std::string& event_id, uint64_t first_seq) {
         auto ext = e.path().extension();
         if (ext == ".seg" || ext == ".meta") fs::remove(e.path());
     }
+    // How many targets there are is CONFIGURATION, not event state — a new
+    // event does not un-configure the second bucket. Everything else here is
+    // per-event and is reset.
+    const int targets = m_state.targets;
     m_state = SpoolState{};
+    m_state.targets       = targets;
     m_state.event_id      = event_id;
     m_state.first_seq     = first_seq;
     m_state.last_enqueued = first_seq > 0 ? first_seq - 1 : 0;
     m_state.last_confirmed= first_seq > 0 ? first_seq - 1 : 0;
+    m_state.last_confirmed_2 = m_state.last_confirmed;
     m_state.ended         = false;
     m_state.valid         = true;
     m_state.last_activity_ms = now_ms();
@@ -240,15 +250,64 @@ uint64_t SpoolQueue::floor() const {
 }
 
 void SpoolQueue::confirm(uint64_t seq) {
+    confirm(seq, 0);
+}
+
+uint64_t SpoolQueue::last_confirmed_for(int target) const {
     std::lock_guard<std::mutex> lk(m_mtx);
+    return target == 1 ? m_state.last_confirmed_2 : m_state.last_confirmed;
+}
+
+int SpoolQueue::targets() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_state.targets;
+}
+
+void SpoolQueue::set_targets(int n) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (n < 1) n = 1;
+    if (n > 2) n = 2;
+    m_state.targets = n;
+    // Going back to one target: anything the remaining target already has is no
+    // longer waiting on anybody, so remove it now rather than leaving orphans
+    // on disk until the next event clears them.
+    if (n < 2) {
+        std::error_code ec;
+        for (uint64_t seq : pending_seqs()) {
+            if (seq > m_state.last_confirmed) continue;
+            auto sz = fs::file_size(seg_path(seq), ec);
+            if (!ec && sz <= m_bytes_pending) m_bytes_pending -= sz;
+            fs::remove(seg_path(seq), ec);
+            fs::remove(meta_path(seq), ec);
+        }
+    }
+    m_state.last_activity_ms = now_ms();
+    save_state();
+}
+
+void SpoolQueue::confirm(uint64_t seq, int target) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+
+    uint64_t& mark = (target == 1) ? m_state.last_confirmed_2
+                                   : m_state.last_confirmed;
+    if (seq > mark) mark = seq;
+    m_state.last_activity_ms = now_ms();
+    save_state();
+
+    // Removed only once every target in play holds it. With one target this is
+    // the same test the spool has always made.
+    if (m_state.targets > 1) {
+        if (seq > m_state.last_confirmed_2 || seq > m_state.last_confirmed)
+            return;
+    } else if (seq > m_state.last_confirmed) {
+        return;
+    }
+
     std::error_code ec;
     auto sz = fs::file_size(seg_path(seq), ec);
     if (!ec && sz <= m_bytes_pending) m_bytes_pending -= sz;
     fs::remove(seg_path(seq), ec);
     fs::remove(meta_path(seq), ec);
-    if (seq > m_state.last_confirmed) m_state.last_confirmed = seq;
-    m_state.last_activity_ms = now_ms();
-    save_state();
 }
 
 size_t SpoolQueue::pending_count() const {

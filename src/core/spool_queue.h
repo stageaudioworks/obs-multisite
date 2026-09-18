@@ -53,6 +53,14 @@ struct SpoolState {
     uint64_t    first_seq      = 0;
     uint64_t    last_enqueued  = 0;   // highest seq written to spool
     uint64_t    last_confirmed = 0;   // highest seq confirmed durable in bucket
+    // ── A second target (PROJECT-SCOPE.md §10 Phase 9) ───────────────────────
+    // How many targets must hold a segment before its files are removed. 1 is
+    // the default and is exactly the old behaviour. 2 makes the spool mean
+    // "what AT LEAST ONE target has not confirmed" rather than "what the bucket
+    // has not confirmed", which is what lets two upload streams run
+    // independently over the same files — no second copy on disk.
+    int         targets        = 1;
+    uint64_t    last_confirmed_2 = 0; // the second target's position
     bool        ended          = false;
     bool        valid          = false; // false if no prior state on disk
     // Wall-clock time of the last enqueue() or confirm() — i.e. the last sign
@@ -118,8 +126,24 @@ public:
     std::optional<SpooledSegment> peek_next() const;
 
     // Mark a segment confirmed durable in the bucket → removes its spool files
-    // and advances last_confirmed.
+    // and advances last_confirmed — once EVERY target in play has it (see
+    // set_targets). This overload is the primary target.
     void confirm(uint64_t seq);
+
+    // ── Two targets (PROJECT-SCOPE.md §10 Phase 9) ───────────────────────────
+    // Confirmation is per target: `target` 0 is the primary, 1 the second. A
+    // segment's files are removed only when every target in play has confirmed
+    // it, so the second uploader can pick the segment up from the same file
+    // whenever it gets there. Dropping back to one target removes anything the
+    // remaining target already has.
+    void confirm(uint64_t seq, int target);
+    // How many targets must hold a segment before it is removed. 1 or 2; takes
+    // effect at once.
+    void set_targets(int n);
+    int  targets() const;
+    // Highest seq confirmed by `target`, which is both its position and, when it
+    // lags, where its hole begins.
+    uint64_t last_confirmed_for(int target) const;
 
     // Number of segments on disk awaiting confirmation.
     size_t pending_count() const;
