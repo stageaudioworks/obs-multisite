@@ -36,6 +36,7 @@ SecondaryTargetBox::SecondaryTargetBox(bool main_site, QWidget* parent)
     form->addRow(m_enabled);
 
     m_provider = new QComboBox(this);
+    m_provider->setToolTip(tr_("StorageProviderHint"));
     for (const auto& info : multisite::all_providers()) {
         m_provider->addItem(QString::fromStdString(info.display_name),
                             QString::fromStdString(info.key));
@@ -48,12 +49,18 @@ SecondaryTargetBox::SecondaryTargetBox(bool main_site, QWidget* parent)
         }
     }
     m_accountId = new QLineEdit(this);
+    m_accountId->setToolTip(tr_("R2AccountIDHint"));
     m_endpoint  = new QLineEdit(this);
+    m_endpoint->setToolTip(tr_("EndpointHostHint"));
     m_bucket    = new QLineEdit(this);
+    m_bucket->setToolTip(tr_("BucketHint"));
     m_keyId     = new QLineEdit(this);
+    m_keyId->setToolTip(tr_("AccessKeyIDHint"));
     m_secret    = new QLineEdit(this);
     m_secret->setEchoMode(QLineEdit::Password);
+    m_secret->setToolTip(tr_("SecretKeyHint"));
     m_region    = new QLineEdit(this);
+    m_region->setToolTip(tr_("RegionHint"));
 
     form->addRow(tr_("Dock.StorageProvider"), m_provider);
     form->addRow(tr_("R2AccountID"), m_accountId);

@@ -475,6 +475,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* delayRow = new QHBoxLayout();
     delayRow->addWidget(new QLabel(tr_("Dock.DelayFromLive"), this));
     m_delayMins = new QSpinBox(this);
+    m_delayMins->setToolTip(tr_("Dock.DelayHint"));
     m_delayMins->setRange(0, 120);
     m_delayMins->setSuffix(tr_("Dock.Minutes"));
     m_delayMins->setValue(0);
@@ -494,7 +495,9 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* mrow = new QHBoxLayout();
     m_markers = new QComboBox(this);
     m_markers->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_markers->setToolTip(tr_("Dock.MarkerHint"));
     m_jumpMarker = new QPushButton(tr_("Dock.Jump"), this);
+    m_jumpMarker->setToolTip(tr_("Dock.JumpHint"));
     mrow->addWidget(m_markers, 1);
     mrow->addWidget(m_jumpMarker);
     root->addLayout(mrow);
@@ -599,6 +602,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
     m_provider  = new QComboBox(storeBox);
+    m_provider->setToolTip(tr_("StorageProviderHint"));
     for (const auto& info : multisite::all_providers()) {
         m_provider->addItem(QString::fromStdString(info.display_name),
                             QString::fromStdString(info.key));
@@ -611,13 +615,20 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         }
     }
     m_accountId = new QLineEdit(storeBox);
+    m_accountId->setToolTip(tr_("R2AccountIDHint"));
     m_endpoint  = new QLineEdit(storeBox);
+    m_endpoint->setToolTip(tr_("EndpointHostHint"));
     m_bucket    = new QLineEdit(storeBox);
+    m_bucket->setToolTip(tr_("BucketHint"));
     m_keyId     = new QLineEdit(storeBox);
+    m_keyId->setToolTip(tr_("AccessKeyIDHint"));
     m_secret    = new QLineEdit(storeBox);
     m_secret->setEchoMode(QLineEdit::Password);
+    m_secret->setToolTip(tr_("SecretKeyHint"));
     m_region    = new QLineEdit(storeBox);
+    m_region->setToolTip(tr_("RegionHint"));
     m_roomId    = new QLineEdit(storeBox);
+    m_roomId->setToolTip(tr_("RoomIDHint"));
     m_prebuffer = new QSpinBox(storeBox);
     m_prebuffer->setRange(0, 10);
     m_prebuffer->setToolTip(tr_("Dock.PrebufferHint"));
@@ -700,6 +711,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_lanHost = new QLineEdit(lanBox);
     m_lanHost->setToolTip(tr_("Dock.LanHostHint"));
     m_lanPortField = new QSpinBox(lanBox);
+    m_lanPortField->setToolTip(tr_("Dock.LanPortHint"));
     m_lanPortField->setRange(1, 65535);
     m_lanToken = new QLineEdit(lanBox);
     m_lanToken->setToolTip(tr_("Dock.LanTokenHint"));

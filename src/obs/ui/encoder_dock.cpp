@@ -254,6 +254,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
     m_provider  = new QComboBox(storeBox);
+    m_provider->setToolTip(tr_("StorageProviderHint"));
     for (const auto& info : multisite::all_providers()) {
         m_provider->addItem(QString::fromStdString(info.display_name),
                             QString::fromStdString(info.key));
@@ -266,13 +267,20 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         }
     }
     m_accountId = new QLineEdit(storeBox);
+    m_accountId->setToolTip(tr_("R2AccountIDHint"));
     m_endpoint  = new QLineEdit(storeBox);
+    m_endpoint->setToolTip(tr_("EndpointHostHint"));
     m_bucket    = new QLineEdit(storeBox);
+    m_bucket->setToolTip(tr_("BucketHint"));
     m_keyId     = new QLineEdit(storeBox);
+    m_keyId->setToolTip(tr_("AccessKeyIDHint"));
     m_secret    = new QLineEdit(storeBox);
+    m_secret->setToolTip(tr_("SecretKeyHint"));
     m_secret->setEchoMode(QLineEdit::Password);
     m_region    = new QLineEdit(storeBox);
+    m_region->setToolTip(tr_("RegionHint"));
     m_room      = new QLineEdit(storeBox);
+    m_room->setToolTip(tr_("RoomIDHint"));
     m_siteName  = new QLineEdit(storeBox);
     m_siteName->setToolTip(tr_("Dock.SiteNameHint"));
     m_tags      = new QCheckBox(tr_("SendExpiryTag"), storeBox);
@@ -357,6 +365,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_lanEnabled = new QCheckBox(tr_("Dock.LanEnabled"), lanBox);
     m_lanEnabled->setToolTip(tr_("Dock.LanEnabledHint"));
     m_lanPort = new QSpinBox(lanBox);
+    m_lanPort->setToolTip(tr_("Dock.LanPortHint"));
     m_lanPort->setRange(1, 65535);
     m_lanToken = new QLineEdit(lanBox);
     m_lanToken->setToolTip(tr_("Dock.LanTokenHint"));
@@ -379,20 +388,26 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     auto* mform = new QFormLayout(mediaBox);
     m_segDur = new QDoubleSpinBox(mediaBox);
     m_segDur->setRange(2.0, 15.0);
+    m_segDur->setToolTip(tr_("SegmentDurationHint"));
     m_segDur->setSingleStep(0.5);
     m_segDur->setSuffix(" s");
     m_vBitrate = new QSpinBox(mediaBox);
+    m_vBitrate->setToolTip(tr_("VideoBitrateHint"));
     m_vBitrate->setRange(500, 50000);
     m_vBitrate->setSingleStep(500);
     m_vBitrate->setSuffix(" kbps");
     m_aBitrate = new QSpinBox(mediaBox);
+    m_aBitrate->setToolTip(tr_("AudioBitrateHint"));
     m_aBitrate->setRange(64, 512);
     m_aBitrate->setSingleStep(32);
     m_aBitrate->setSuffix(" kbps");
     m_tracks = new QSpinBox(mediaBox);
+    m_tracks->setToolTip(tr_("AudioTracksHint"));
     m_tracks->setRange(1, 6);
     m_trackLabels   = new QLineEdit(mediaBox);
+    m_trackLabels->setToolTip(tr_("TrackLabelsHint"));
     m_channelLabels = new QLineEdit(mediaBox);
+    m_channelLabels->setToolTip(tr_("ChannelLabelsHint"));
     // Encoder choice, populated from what OBS actually has here. A hardware
     // encoder leaves the CPU free for everything else the main site is doing.
     // Filled by populateEncoders() rather than here — see that function.
