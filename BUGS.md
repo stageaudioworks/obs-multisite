@@ -227,13 +227,36 @@ logging below was added):
   the 960 ms maximum after 2 s. That is the tell, and it says the fault is in
   what resume hands over, not in where it hands it over.
 
-**Root cause.** Video and audio are re-anchored SEPARATELY, each on whichever
-frame arrives first after the resume, so they come back on different references
-(~350 ms apart). Compounding it, the delivery queue is filled symmetrically by
-count and not by time: `kMaxQueuedVideo` is 12 (about 0.4 s) and
-`kMaxQueuedAudio` is 48 (about 1 s), so while a hold is in progress audio
-accumulates a tail with no picture to go with it, and resume delivers that tail
-for OBS to buffer.
+**CORRECTION, before acting on anything above: the root cause as first written
+here was WRONG, and the fix it implies has already been warned against.**
+
+There is only ONE anchor, not two. `anchor_pts` sets a single `first_pts_ns`
+from whichever frame arrives first, and both streams compute their due time
+against it via `playout_due_ns`. The ~350 ms gap between the streams' first
+frames after a re-anchor is not a fault being introduced: it is the **CMAF
+interleave gap**, documented in `src/core/playout_clock.h` as measured at
+~344 ms in the field — and the 500 ms cushion at the anchor exists specifically
+to absorb it. That is also why the anchor lands on audio on one resume and video
+on the next, with no sync consequence.
+
+`playout_clock.h` carries an explicit "READ THIS BEFORE FIXING THE ARITHMETIC",
+added by an earlier investigation into this same area, and the fix proposed below
+is the third variant of the same misreading of it. Do not re-derive the anchor
+again without reading that header and `tests/test_playout_clock.cpp` first.
+
+**What is therefore still the real question:** the cushion is meant to absorb
+the interleave gap, and on resume OBS nonetheless reports
+`audio is lagging (over by 352.49 ms) at max audio buffering. Restarting source
+audio`. So the fault is NOT the anchor's reference; it is somewhere between the
+re-anchor and what OBS receives, and the place to look first is the AUDIO
+delivery path on resume — and why the cushion fails to cover the gap in that
+one case (`kMaxDeliveryLeadNs`? the epoch bump? frames released immediately
+because they are already due?).
+
+**Original note, kept for the record — it is the wrong diagnosis:** video and
+audio were said to be re-anchored separately on different references. They are
+not. The queue asymmetry described below is real and separate, and does mean
+resume can hand OBS an unbalanced batch.
 
 **What was tried, and why it did not stand:**
 
