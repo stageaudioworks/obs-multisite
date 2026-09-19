@@ -1375,14 +1375,7 @@ void Player::poll_loop() {
                 if ((int)st != m_last_room) {
                     m_last_room = (int)st;
                     const char* name =
-                        st == RoomState::Live  ? "LIVE"
-                      : st == RoomState::Ended ? (sess->was_live_this_session()
-                            ? "BROADCAST ENDED — playing out the recording"
-                            : "a finished recording (was not live when loaded)")
-                      : st == RoomState::Interrupted
-                            ? "INTERRUPTED — the encoder stopped without "
-                              "ending; playing what was recorded"
-                      : st == RoomState::Offline ? "offline" : "unknown";
+                        room_state_words(st, sess->was_live_this_session());
                     plog_info("room is %s", name);
                     if (!sess->last_error().empty())
                         note_error(sess->last_error());

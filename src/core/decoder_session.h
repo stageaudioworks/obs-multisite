@@ -45,6 +45,32 @@ inline bool is_vod(RoomState s) {
     return s == RoomState::Ended || s == RoomState::Interrupted;
 }
 
+// How a room state is DESCRIBED to a human, which is the other half of the
+// comment above. Written out once because it was written out twice: the OBS
+// source and the appliance's player each carried a byte-identical copy of this
+// conditional, so a change to the wording had to be made in two files or the
+// plugin and the box would describe the same room differently.
+//
+// Not the same question as plays_as_recording(): this says what the ROOM is
+// doing, which is true regardless of whether the operator has pinned away from
+// it. A pinned playback correctly logs a live room as live.
+inline const char* room_state_words(RoomState s, bool was_live_this_session) {
+    switch (s) {
+    case RoomState::Live:    return "LIVE";
+    case RoomState::Ended:   return was_live_this_session
+                                    ? "BROADCAST ENDED — playing out the recording"
+                                    : "a finished recording (was not live when loaded)";
+    // An event whose encoder died rather than ending. It is still a complete
+    // recording of everything up to that point, so it plays; the wording says
+    // why it stops where it does.
+    case RoomState::Interrupted:
+        return "INTERRUPTED — the encoder stopped without ending; "
+               "playing what was recorded";
+    case RoomState::Offline: return "offline";
+    default:                 return "unknown";
+    }
+}
+
 enum class PlayState { Stopped, Playing, Paused };
 
 struct DecoderConfig {

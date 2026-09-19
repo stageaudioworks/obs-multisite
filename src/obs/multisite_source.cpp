@@ -1104,18 +1104,7 @@ static void poll_loop(SourceCtx* ctx) {
             if (st != ctx->last_room) {
                 ctx->last_room = st;
                 const char* name =
-                    st == RoomState::Live  ? "LIVE"
-                  : st == RoomState::Ended ? (sess->was_live_this_session()
-                        ? "BROADCAST ENDED — playing out the recording"
-                        : "a finished recording (was not live when loaded)")
-                  // An event whose encoder died rather than ending. It is still
-                  // a complete recording of everything up to that point, so it
-                  // plays; the wording says why it stops where it does.
-                  : st == RoomState::Interrupted
-                        ? "INTERRUPTED — the encoder stopped without ending; "
-                          "playing what was recorded"
-                  : st == RoomState::Offline ? "offline"
-                                             : "unknown";
+                    room_state_words(st, sess->was_live_this_session());
                 mlog_info("source: room is %s%s", name,
                           st == RoomState::Offline ? " (encoder stopped or unreachable)" : "");
                 if ((st == RoomState::Offline || is_vod(st)) &&

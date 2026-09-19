@@ -1473,8 +1473,22 @@ nor interrupted, so every hand-written copy evaluated to false, while
 `plays_as_recording()` is true. A test using an ended event — as the existing
 one did — passes for the bug and the fix alike.
 
-The status strings in `multisite_source.cpp` and `player.cpp` remain genuinely
-cosmetic and are the lowest-value part of D1.
+**The status strings were mis-named too (2026-09-19).** This entry listed them
+as further copies of "is this played as a recording". They are not: they switch
+on `RoomState` and say what the ROOM is doing, which is a different question and
+correctly ignores pinning — a pinned playback should log a live room as live.
+
+What they actually were is byte-identical copies OF EACH OTHER, the same
+conditional written out in `multisite_source.cpp` and `player.cpp`, so the
+wording had to be changed in two files or the plugin and the box would describe
+the same room differently. Now `room_state_words()` in `decoder_session.h`,
+beside `is_vod()` — whose comment already said these states "differ in how they
+should be DESCRIBED", which is exactly the function that was missing.
+
+D1 is complete. Worth keeping from it: the entry named the wrong duplicate
+THREE times — the `EVENT` enum, the count of page sites, and these strings. A
+sweep entry is a lead, not an inventory; grep the pattern before trusting the
+list, and again after replacing what you found.
 
 ### D2. Segment length — two fallbacks
 
