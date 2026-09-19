@@ -246,6 +246,36 @@ struct SourceCtx : DecoderControls {
     // clue in the log.
     std::atomic<uint64_t> resumed_at_ns{0};
     std::atomic<uint64_t> frames_at_resume{0};
+
+    // ── Resume transient, for BUGS #2 ────────────────────────────────────────
+    // MEASUREMENT ONLY. The periodic lead report above averages over its whole
+    // interval, which is precisely how a 500 ms event at resume vanishes — it
+    // is why three rounds of logs could not separate the candidate causes. This
+    // window covers the first second after a resume and nothing else.
+    //
+    // What each reading rules in or out:
+    //   gap vs cushion     the interleave gap is ~344 ms in the field and the
+    //                      cushion is 500 ms. If the gap on THIS resume is
+    //                      larger, the cushion is simply too small and the
+    //                      arithmetic is innocent.
+    //   min lead           kMaxDeliveryLeadNs is 400 ms. A min at or below zero
+    //                      means frames were already due when handed over, so
+    //                      they went out in a burst rather than paced.
+    //   pts span vs frames a stream that hands OBS more programme-time than the
+    //                      other in the same window is the unbalanced batch D4
+    //                      predicts, and is measured here in ms rather than in
+    //                      frames so the two are comparable at all.
+    std::atomic<uint64_t> rw_end_ns{0};
+    std::atomic<bool>     rw_reported{true};
+    std::atomic<int>      rw_v_frames{0},     rw_a_frames{0};
+    std::atomic<int64_t>  rw_v_lead_min_ns{INT64_MAX}, rw_a_lead_min_ns{INT64_MAX};
+    std::atomic<int64_t>  rw_v_pts_lo{-1}, rw_v_pts_hi{-1};
+    std::atomic<int64_t>  rw_a_pts_lo{-1}, rw_a_pts_hi{-1};
+
+    // Which stream won the anchor race, and what the other one's first frame
+    // turned out to be offset by. One reading per re-anchor.
+    std::atomic<bool>     anchor_was_video{false};
+    std::atomic<bool>     anchor_gap_pending{false};
     std::atomic<bool>     resume_checked{false};
 
     // The clock time of the frame currently on screen. Derived from the frame
@@ -793,6 +823,28 @@ static void deliver_loop(SourceCtx* ctx) {
                 if (lead < ctx->lead_audio_min_ns.load())
                     ctx->lead_audio_min_ns = lead;
             }
+
+            // The same sample again, but confined to the first second after a
+            // resume (BUGS #2). Separate accumulators rather than a shorter
+            // reporting interval, because the periodic report has a job of its
+            // own and shortening it would bury the steady state in noise.
+            if (os_gettime_ns() < ctx->rw_end_ns.load()) {
+                const int64_t pts = item.is_video ? item.video.pts_ns
+                                                  : item.audio.pts_ns;
+                if (item.is_video) {
+                    ctx->rw_v_frames++;
+                    if (lead < ctx->rw_v_lead_min_ns.load())
+                        ctx->rw_v_lead_min_ns = lead;
+                    if (ctx->rw_v_pts_lo.load() < 0) ctx->rw_v_pts_lo = pts;
+                    ctx->rw_v_pts_hi = pts;
+                } else {
+                    ctx->rw_a_frames++;
+                    if (lead < ctx->rw_a_lead_min_ns.load())
+                        ctx->rw_a_lead_min_ns = lead;
+                    if (ctx->rw_a_pts_lo.load() < 0) ctx->rw_a_pts_lo = pts;
+                    ctx->rw_a_pts_hi = pts;
+                }
+            }
         }
 
         if (item.is_video) {
@@ -906,8 +958,34 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
         ctx->first_pts_ns = pts_ns;
         ctx->playout_base_ns = os_gettime_ns() + kPlayoutCushionNs;
         first = pts_ns;
+        ctx->anchor_was_video = is_video;
+        ctx->anchor_gap_pending = true;
         mlog_info("source: playout anchored on first %s frame (pts %.3fs)",
                   is_video ? "video" : "audio", (double)pts_ns / 1e9);
+        return first;
+    }
+
+    // MEASUREMENT (BUGS #2), no behaviour change. The first frame of the OTHER
+    // stream after an anchor gives this resume's actual interleave gap, which
+    // until now was only ever a field average (~344 ms) quoted in
+    // playout_clock.h. A gap wider than the cushion means the cushion is simply
+    // too small and there is nothing wrong with the arithmetic; a gap well
+    // inside it means the fault is downstream of here and the anchor is not
+    // where to look. One line per re-anchor.
+    if (ctx->anchor_gap_pending.load() &&
+        is_video != ctx->anchor_was_video.load()) {
+        ctx->anchor_gap_pending = false;
+        const int64_t gap_ns = first - pts_ns;   // >0 when this stream is EARLIER
+        const double gap_ms = (double)gap_ns / 1e6;
+        const double cushion_ms = (double)kPlayoutCushionNs / 1e6;
+        mlog_info("source: interleave gap this anchor: %s leads by %.0f ms "
+                  "(cushion %.0f ms, %s)",
+                  gap_ns > 0 ? (is_video ? "audio" : "video")
+                             : (is_video ? "video" : "audio"),
+                  gap_ms < 0 ? -gap_ms : gap_ms, cushion_ms,
+                  (gap_ms < 0 ? -gap_ms : gap_ms) > cushion_ms
+                      ? "OVER the cushion — it cannot absorb this"
+                      : "within the cushion");
     }
     return first;
 }
@@ -1122,6 +1200,51 @@ static void poll_loop(SourceCtx* ctx) {
             // A larger batch is safe now that downloads do not hold the
             // state lock: it fills the buffer faster without affecting the UI.
             if (sess) fetched = sess->pump_downloads(8);
+        }
+
+        // Resume transient report (BUGS #2). Measurement only: this prints
+        // what the first second after a resume actually looked like and
+        // changes nothing. Read it as three separate questions —
+        //
+        //   min lead <= 0        frames were already due when handed over, so
+        //                        they left in a burst rather than paced. This
+        //                        is the candidate the entry calls "frames
+        //                        released immediately because they are already
+        //                        due", and it is what OBS reports as lagging.
+        //   audio ms >> video ms the streams were handed unequal amounts of
+        //                        programme, which is D4's asymmetry showing up
+        //                        as a real imbalance rather than a suspicion.
+        //   both healthy         the fault is past our handoff, and the anchor
+        //                        and the cushion are both exonerated — look at
+        //                        what OBS does with timestamps it accepted.
+        {
+            const uint64_t end = ctx->rw_end_ns.load();
+            if (end != 0 && !ctx->rw_reported.load() && os_gettime_ns() > end) {
+                ctx->rw_reported = true;
+                const int vn = ctx->rw_v_frames.load();
+                const int an = ctx->rw_a_frames.load();
+                const int64_t vlo = ctx->rw_v_pts_lo.load(), vhi = ctx->rw_v_pts_hi.load();
+                const int64_t alo = ctx->rw_a_pts_lo.load(), ahi = ctx->rw_a_pts_hi.load();
+                const double v_ms = (vn > 1) ? (double)(vhi - vlo) / 1e6 : 0.0;
+                const double a_ms = (an > 1) ? (double)(ahi - alo) / 1e6 : 0.0;
+                const int64_t vmin = ctx->rw_v_lead_min_ns.load();
+                const int64_t amin = ctx->rw_a_lead_min_ns.load();
+                mlog_info("source: first 1s after resume — video %d frame(s), "
+                          "%.0f ms of programme, min lead %s%.0f ms; "
+                          "audio %d frame(s), %.0f ms of programme, "
+                          "min lead %s%.0f ms",
+                          vn, v_ms,
+                          vn ? "" : "n/a ", vn ? (double)vmin / 1e6 : 0.0,
+                          an, a_ms,
+                          an ? "" : "n/a ", an ? (double)amin / 1e6 : 0.0);
+                if ((vn && vmin <= 0) || (an && amin <= 0))
+                    mlog_warn("source: frames were already due at handoff after "
+                              "resume (video min %.0f ms, audio min %.0f ms) — "
+                              "they went out as a burst, not paced. This is the "
+                              "shape OBS reports as audio lagging.",
+                              vn ? (double)vmin / 1e6 : 0.0,
+                              an ? (double)amin / 1e6 : 0.0);
+            }
         }
 
         // Resume watchdog. A frozen picture after Resume is the failure that
@@ -1798,8 +1921,25 @@ void SourceCtx::resume() {
     pause_started_ns = 0;
 
     size_t dropped = 0;
+    // MEASUREMENT (BUGS #2 / D4). What the queue held, per stream, in
+    // MILLISECONDS of programme rather than in frames. The caps are counts —
+    // 12 video and 48 audio — so "48 frames" and "12 frames" say nothing about
+    // whether the two streams were holding equivalent amounts, and that
+    // equivalence is the whole question D4 asks. Taken before the clear,
+    // because after it there is nothing to measure.
+    double v_span_ms = 0.0, a_span_ms = 0.0;
+    size_t v_n = 0, a_n = 0;
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
+        int64_t v_lo = INT64_MAX, v_hi = INT64_MIN;
+        int64_t a_lo = INT64_MAX, a_hi = INT64_MIN;
+        for (const auto& q : dq) {
+            const int64_t p = q.is_video ? q.video.pts_ns : q.audio.pts_ns;
+            if (q.is_video) { ++v_n; if (p < v_lo) v_lo = p; if (p > v_hi) v_hi = p; }
+            else            { ++a_n; if (p < a_lo) a_lo = p; if (p > a_hi) a_hi = p; }
+        }
+        if (v_n > 1) v_span_ms = (double)(v_hi - v_lo) / 1e6;
+        if (a_n > 1) a_span_ms = (double)(a_hi - a_lo) / 1e6;
         dropped = dq.size();
         dq.clear();
         // Same reason as a seek: a frame already popped into the delivery
@@ -1815,6 +1955,20 @@ void SourceCtx::resume() {
 
     resumed_at_ns = os_gettime_ns();
     frames_at_resume = frames_out.load();
+
+    // Arm the resume-transient window (BUGS #2). One second: long enough to
+    // cover the 500 ms cushion and the burst behind it, short enough that the
+    // steady state does not dilute the reading.
+    rw_end_ns        = resumed_at_ns.load() + 1000000000ULL;
+    rw_reported      = false;
+    rw_v_frames      = 0;  rw_a_frames = 0;
+    rw_v_lead_min_ns = INT64_MAX; rw_a_lead_min_ns = INT64_MAX;
+    rw_v_pts_lo = -1; rw_v_pts_hi = -1;
+    rw_a_pts_lo = -1; rw_a_pts_hi = -1;
+
+    mlog_info("source: queue at resume held video %zu frame(s)/%.0f ms, "
+              "audio %zu frame(s)/%.0f ms (caps are counts: 12 video, 48 audio)",
+              v_n, v_span_ms, a_n, a_span_ms);
 
     mlog_info("source: RESUMED at %.0fs behind live (state=%d, dropped %zu "
               "queued frames, clock re-anchoring)",

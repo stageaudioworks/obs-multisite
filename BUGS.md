@@ -305,8 +305,47 @@ rather than in frames. If audio is holding ~1 s and video ~0.4 s, that is a
 measurement pointing at this symptom, and it also settles D4's open question with
 a number instead of an opinion. It is still not claimed to be the cause.
 
-**Instrumentation that stays.** `PAUSED` now prints the pts of the last frame
-handed to OBS and the queue depth, and `RESUMED` prints what it continued from.
+**Instrumentation added 2026-09-19 to take that reading (measurement only — no
+behaviour changed).** Three lines, each of which rules a candidate in or out.
+None of them existed before, which is why three rounds of logs could not
+separate the causes: the periodic lead report averages over its whole interval,
+and that is exactly how a 500 ms event at resume disappears.
+
+1. `interleave gap this anchor: <stream> leads by N ms (cushion 500 ms, ...)`
+   — printed once per re-anchor, when the first frame of the stream that did
+   NOT win the anchor arrives. Until now the ~344 ms gap was a field average
+   quoted in `playout_clock.h` and never measured per resume. If it comes back
+   OVER 500 ms, the cushion is simply too small and the arithmetic is innocent;
+   if it is well inside, the anchor is not where to look.
+
+2. `queue at resume held video N frame(s)/X ms, audio N frame(s)/Y ms` — taken
+   before the queue is cleared. The caps are COUNTS (12 video, 48 audio), so
+   frame numbers cannot say whether the two streams held equivalent amounts of
+   programme. This is D4's question asked in milliseconds, which is the only
+   unit in which it has an answer.
+
+3. `first 1s after resume — video N frame(s), X ms of programme, min lead A ms;
+   audio ...` — a window armed at resume and reported once, separate from the
+   periodic report so neither dilutes the other. A **min lead at or below zero**
+   means frames were already due when handed over and left as a burst rather
+   than paced; that is the "released immediately because already due" candidate,
+   and it is the shape OBS reports as lagging. A warning line calls it out
+   explicitly when it happens, so it does not have to be spotted by eye.
+
+**How to read the result.** If (3) shows a non-positive min lead, the fault is
+the burst at handoff and NOT the anchor. If (1) exceeds the cushion, the cushion
+is the fault. If audio's programme-ms in (2) or (3) far exceeds video's, D4's
+asymmetry is real and is delivering an unbalanced batch. If all three look
+healthy, everything up to our handoff is exonerated and the question moves to
+what OBS does with timestamps it accepted — which would be the first time that
+has been established rather than assumed.
+
+**Still unmeasured, deliberately:** nobody has yet run this against a real hold.
+Everything above is a reading waiting to be taken, not a finding.
+
+**Earlier instrumentation that stays.** `PAUSED` now prints the pts of the last
+frame handed to OBS and the queue depth, and `RESUMED` prints what it continued
+from.
 Without that figure the two candidate causes were indistinguishable and cost
 three rounds of guessing — keep it, and keep it honest.
 
