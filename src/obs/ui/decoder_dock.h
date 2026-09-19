@@ -56,7 +56,6 @@ public:
     // from what is on screen. Labels need to know whether that reads as a time
     // of day: `wall_ms_of_media_zero` is the event's start, and 0 means this is
     // a recording and the labels are elapsed instead.
-    void setClockOrigin(long long wall_ms_of_media_zero) { m_clock_origin = wall_ms_of_media_zero; }
     // Why the bar has nothing to show, when it has nothing to show. An empty
     // trough looked identical whether no source existed, nothing had been
     // loaded yet, or something had genuinely failed — which is exactly how a
@@ -81,7 +80,6 @@ private:
     long long timeAt(int x) const;
 
     long long m_earliest = 0, m_live = 0, m_head = 0;
-    long long m_clock_origin = 0;   // wall time of media 0; 0 = a recording
     QString   m_placeholder;
     std::vector<std::pair<long long, long long>> m_downloaded;
     std::vector<long long> m_markers;
@@ -171,7 +169,6 @@ private:
     long long m_posStartedMs = 0, m_posTotalMs = 0;
     // Wall time of media 0, so a live playhead's media position can be shown as
     // a time of day. 0 on a recording, which shows elapsed instead.
-    long long m_posClockOriginMs = 0;
     // One segment, in milliseconds: the unit that turns a segment number into
     // the media time the timeline draws.
     long long m_mediaSegMs = 6000;

@@ -85,7 +85,9 @@ static QString friendly_duration(double seconds) {
 }
 
 // A position within a recording, as an operator would read a media player:
-// "24:15" or "1:24:15". Distinct from clock_time(), which is the time of day.
+// "24:15" or "1:24:15" — how far into the programme, which is the only way
+// this dock states a position. There is deliberately no time-of-day helper:
+// see axis_time().
 static QString position(long long ms) {
     if (ms < 0) ms = 0;
     const long long total = ms / 1000;
@@ -125,12 +127,6 @@ static QString friendly_error(const std::string& raw) {
         lower.contains("unreachable"))
         return tr_("Dock.ErrNoAnswer");
     return text;   // unknown: the provider's own words beat a guess
-}
-
-// Clock time of a position in the event, e.g. "10:42:06".
-static QString clock_time(long long ms) {
-    if (ms <= 0) return QString("--:--");
-    return QDateTime::fromMSecsSinceEpoch((qint64)ms).toString("HH:mm:ss");
 }
 
 // ── TimelineBar ──────────────────────────────────────────────────────────────
@@ -191,10 +187,13 @@ long long TimelineBar::timeAt(int x) const {
 // A position on the media axis, as text. With an origin (a live event) it reads
 // as a time of day; without one (a recording) it reads as elapsed. The axis is
 // media time either way, so a tick is always where the picture is.
-static QString axis_time(long long media_ms, long long origin, bool seconds) {
-    if (origin > 0)
-        return QDateTime::fromMSecsSinceEpoch((qint64)(origin + media_ms))
-            .toString(seconds ? "HH:mm:ss" : "HH:mm");
+// Elapsed into the programme, always. The axis used to switch to a time of day
+// whenever a live event was playing, so the same bar read "4:47" for a recording
+// and "13:49" for a live feed — two different quantities in one place, and the
+// second needed a wall<->media mapping that drifted 1.11% (BUGS #2b). A
+// position on a timeline means how far in you are, whatever is producing it.
+static QString axis_time(long long media_ms, bool seconds) {
+    (void)seconds;
     if (media_ms < 0) media_ms = 0;
     const long long t = media_ms / 1000;
     const long long h = t / 3600, m = (t % 3600) / 60, s = t % 60;
@@ -264,7 +263,7 @@ void TimelineBar::paintEvent(QPaintEvent*) {
             (long long)(frac * (double)(m_live - m_earliest));
         const int x = (int)(frac * w);
         p.drawLine(x, y - 4, x, y - 1);
-        const QString label = axis_time(t, m_clock_origin, false);
+        const QString label = axis_time(t, false);
         // Keep the end labels inside the widget. Centred on x, the first
         // rect started at -22 and the last ended at w+22, so both were
         // clipped by the widget edge and the scale read "5 … 1" instead of
@@ -330,7 +329,7 @@ void TimelineBar::paintEvent(QPaintEvent*) {
         const long long t = timeAt(m_hoverX);
         p.setPen(QPen(QColor(0xdf, 0xe3, 0xe7, 160), 1, Qt::DashLine));
         p.drawLine(m_hoverX, y - 6, m_hoverX, y + h + 6);
-        const QString label = axis_time(t, m_clock_origin, true);
+        const QString label = axis_time(t, true);
         p.setPen(QPen(QColor(0xff, 0xff, 0xff)));
         QRect box(m_hoverX - 30, y + h + 4, 60, 14);
         if (box.left() < 0) box.moveLeft(0);
@@ -1506,7 +1505,6 @@ void DecoderDock::refresh() {
     // picture.
     const double seg_s = s.segment_duration_s > 0.1 ? s.segment_duration_s : 6.0;
     m_mediaSegMs = (long long)(seg_s * 1000.0 + 0.5);
-    m_posClockOriginMs = (long long)s.started_ms;
     const auto media = [this](unsigned long long seq) {
         return (long long)seq * m_mediaSegMs;
     };
@@ -1544,7 +1542,13 @@ void DecoderDock::refresh() {
         // A jog or a timeline click. The position updates instantly; the
         // wording makes clear the picture has not caught up yet, so the
         // operator is neither left wondering nor misled.
-        m_posText  = tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms));
+        // Where in the programme, not what the clock said when it was
+        // recorded. An operator lining up a cue is thinking "seven minutes in",
+        // and a time of day is a number they have to convert in their head.
+        m_posText  = tr_("Dock.GoingTo").arg(
+            s.started_ms > 0 && s.seek_target_ms >= s.started_ms
+                ? position(s.seek_target_ms - s.started_ms)
+                : position(s.seek_target_ms));
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.loading && !s.ready_to_play) {
         m_posText  = m_loadingName.isEmpty()
@@ -1615,12 +1619,10 @@ void DecoderDock::refresh() {
     if (as_recording && (s.end_ms > 0 || s.live_edge > 0)) {
         // A recording spans its whole length, labelled as elapsed time.
         m_timeline->setSpan(0, media(s.live_edge + 1));
-        m_timeline->setClockOrigin(0);
     } else {
         // Live: the left edge is what storage still holds, and the labels read
         // as times of day.
         m_timeline->setSpan(media(s.first_available), media(s.live_edge + 1));
-        m_timeline->setClockOrigin(m_posClockOriginMs);
     }
     // Which of the ordinary "nothing to draw yet" states this is. Only used
     // when the span is empty; the bar ignores it otherwise.
@@ -1665,12 +1667,11 @@ void DecoderDock::refresh() {
             // no clock subtracted from another clock. Time of day only while
             // following a live event.
             if (m.at_media_ms >= 0) {
-                when = vod ? position(m.at_media_ms) : clock_time(m.at_ms);
-            } else if (m.at_ms > 0) {
-                // Older than at_media_ms, and no event start to convert it.
-                when = (vod && s.started_ms > 0 && m.at_ms >= s.started_ms)
-                         ? position(m.at_ms - s.started_ms)
-                         : clock_time(m.at_ms);
+                when = position(m.at_media_ms);
+            } else if (m.at_ms > 0 && s.started_ms > 0 && m.at_ms >= s.started_ms) {
+                // Older than at_media_ms: convert from its time of day, which
+                // is all such a cue carries.
+                when = position(m.at_ms - s.started_ms);
             }
             const QString label = when.isEmpty()
                 ? QString::fromStdString(m.label)
@@ -1826,17 +1827,19 @@ void DecoderDock::paintPosition() {
             style("font-size: 18px; font-weight: 500; color: #8fd3b4;");
             m_behind->setText(pos);
         }
-        // The clock time of the recorded moment stays available, just smaller.
-        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(m_posClockOriginMs + head)));
+        // No time-of-day tooltip. The line above already says where in the
+        // recording this is, which is the only thing the position means; a
+        // clock time is what the encoder's machine happened to read at the
+        // time and tells an operator playing it back nothing they can use.
+        m_behind->setToolTip(QString());
         return;
     }
 
-    // Behind live. Only the clock time advances between samples; how far behind
-    // we are does not, because the live edge is moving at the same rate.
+    // Following a live event, the meaningful quantity is how far behind the
+    // main site this campus is — not what time it is. That is the whole of what
+    // an operator can act on, and it is what the picture is actually doing.
     style("font-size: 18px; font-weight: 500; color: #e0a020;");
-    m_behind->setText(tr_("Dock.Showing").arg(clock_time(m_posClockOriginMs + head))
-                      + "  —  "
-                      + tr_("Dock.BehindBy").arg(friendly_duration(m_posBehindS)));
+    m_behind->setText(tr_("Dock.BehindBy").arg(friendly_duration(m_posBehindS)));
     m_behind->setToolTip(QString());
 }
 

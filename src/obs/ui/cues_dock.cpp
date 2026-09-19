@@ -128,7 +128,12 @@ void CuesDock::refresh() {
     // times of day. The snapshot is what says which this is.
     DecoderSnapshot snap;
     const bool have_snap = have_decoder && decoder_snapshot(snap);
-    const bool vod = have_snap && (snap.ended || snap.interrupted);
+    // NOTE: there was a `vod` flag here, written by hand as
+    // `snap.ended || snap.interrupted` — a fourth copy of the question
+    // DecoderSession::plays_as_recording() answers, and missing the pinned term
+    // exactly as the other three were (BUGS D1). It is gone rather than fixed:
+    // a cue's time now reads the same whether the event is live or recorded, so
+    // nothing here needs to know.
     const long long started = have_snap ? snap.started_ms : 0;
 
     EncoderStats es;
@@ -145,21 +150,14 @@ void CuesDock::refresh() {
         m_cues->clear();
         for (const auto& c : cues) {
             QString when;
-            // Elapsed into the programme, from the cue's own media anchor —
-            // no subtraction of one clock from another, and nothing to drift.
-            // The time of day is shown only while following a live event,
-            // where an operator genuinely thinks in clock time.
-            if (c.at_media_ms >= 0 && vod) {
+            // How far into the programme, always — live or recorded. A cue
+            // means "this moment in the service", and the media anchor says
+            // that directly with nothing to convert and nothing to drift.
+            if (c.at_media_ms >= 0) {
                 when = elapsed(c.at_media_ms);
-            } else if (c.at_media_ms >= 0) {
-                when = QDateTime::fromMSecsSinceEpoch((qint64)c.at_ms)
-                           .toString("HH:mm");
-            } else if (c.at_ms > 0) {
-                // A cue older than at_media_ms and with no event start to
-                // convert it. Fall back rather than show nothing.
-                when = (vod && started > 0 && c.at_ms >= started)
-                    ? elapsed(c.at_ms - started)
-                    : QDateTime::fromMSecsSinceEpoch((qint64)c.at_ms).toString("HH:mm");
+            } else if (c.at_ms > 0 && started > 0 && c.at_ms >= started) {
+                // Older than at_media_ms: its time of day is all it carries.
+                when = elapsed(c.at_ms - started);
             }
             QString text = when.isEmpty()
                 ? QString::fromStdString(c.label)
