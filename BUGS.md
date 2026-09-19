@@ -349,6 +349,24 @@ deadlock the 250 ms timeout stood in for is already defended by the flag that
 was always the real defence. The poll means even a missed notification cannot
 wedge the decoder, and a wedged decoder here is a frozen OBS.
 
+**CONFIRMED ON A SECOND RUN, 2026-09-19, including a 47 s hold:**
+
+| hold | on screen at PAUSE | resumed at | loss |
+|------|--------------------|------------|------|
+| 3.0 s | 8.367 s | 8.728 s | 361 ms |
+| 5.9 s | 729.833 s | 730.200 s | 367 ms |
+| 46.8 s | 746.033 s | 746.392 s | 359 ms |
+
+Flat across a fifteenfold range of hold length, and 359-367 ms is exactly the
+video queue span of 367 ms — so the residual is the queue clear and nothing
+else. No `media clock pinned` line after any resume either: the origin survives
+a hold now, and is re-pinned only by PLAY and by a real seek.
+
+Remaining wrinkle, not chased: video's min lead after a resume settles at
+130-170 ms against audio's 378-395 ms. Positive and stable, so nothing is
+delivered late and no burst warning fires, but video has markedly less margin
+than audio for the first second. Was -441 ms before any of this.
+
 **Expected residual: about 370 ms.** Resume still clears the queue, which holds
 ~367 ms of video, so that much is still skipped. It should now be CONSTANT
 rather than growing with the hold, which is the thing to check. Removing it
