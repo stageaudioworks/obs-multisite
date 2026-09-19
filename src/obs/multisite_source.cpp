@@ -907,11 +907,12 @@ static void deliver_loop(SourceCtx* ctx) {
         }
         if (!ctx->running.load()) break;
 
-        // Publish for the dock and the web remote.
-        if (tl.have_clock()) {
-            ctx->pts_wall_offset_ms = tl.clock_offset_ms();
-            ctx->playing_at_ms      = tl.wall_ms_for(item_pts);
-        }
+        // Publish for the dock and the web remote. The position IS the frame's
+        // own pts — how far into the programme it sits — so there is no clock
+        // to consult and nothing that can drift away from the picture. This
+        // used to be the pts mapped through the media clock into a time of day,
+        // and then mapped back to a position by every consumer.
+        ctx->playing_at_ms = item_pts / 1000000;
 
         // Has playback actually ARRIVED where it was sent?
         //
@@ -2342,10 +2343,10 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.pinned_event_id  = sess->pinned_event();
     out.live_elsewhere   = sess->live_elsewhere();
     out.live_event_id    = sess->live_event_id();
-    out.end_ms           = sess->end_wall_ms();
-    out.total_ms = (out.ended && out.end_ms > 0 && out.started_ms > 0 &&
-                    out.end_ms > out.started_ms)
-                     ? (out.end_ms - out.started_ms) : 0;
+    out.end_ms   = sess->end_media_ms();
+    // Media time starts at zero, so the end IS the length. The subtraction of
+    // one clock from another that used to be needed here is gone with it.
+    out.total_ms = (out.ended && out.end_ms > 0) ? out.end_ms : 0;
     out.head             = sess->playback_head();
     out.live_edge        = sess->live_edge();
     out.first_available  = sess->earliest_available();
@@ -2422,7 +2423,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.buffering      = playing.load() && awaiting_frames.load();
     // Prefer the frame-accurate playing clock; fall back to the segment.
     const long long tick = playing_at_ms.load();
-    out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();
+    out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_media_ms();
     // Whichever clock was used, the position has to lie inside the event that
     // is loaded. playhead_wall_ms() clamps to the end already and says why;
     // the frame clock bypassed that, which is how the dock came to show a
@@ -2431,21 +2432,24 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     // first frame out of the new decoder.
     if (out.end_ms > 0 && out.playhead_ms > out.end_ms)
         out.playhead_ms = out.end_ms;
-    if (out.started_ms > 0 && out.playhead_ms > 0 &&
-        out.playhead_ms < out.started_ms)
-        out.playhead_ms = out.started_ms;
+    if (out.playhead_ms < 0) out.playhead_ms = 0;   // media time starts at 0
     {
-        // Downloaded ranges as clock times, for the timeline.
+        // Downloaded ranges in media time, for the timeline.
         for (const auto& r : sess->cached_ranges()) {
-            const int64_t a = sess->wall_clock_ms(r.first);
-            const int64_t b = sess->wall_clock_ms(r.second);
-            if (a > 0 && b >= a) out.cached_spans.emplace_back(a, b);
+            // [start of the first segment, END of the last] — the bar draws a
+            // filled range, so the far edge is the boundary AFTER r.second, not
+            // its start, or every downloaded run reads one segment short.
+            const int64_t a = sess->media_ms_for_seq(r.first);
+            const int64_t b = sess->media_ms_for_seq(r.second + 1);
+            // >= 0, not > 0: segment 0 sits at media time 0, and a `> 0` guard
+            // silently dropped the opening run of every recording.
+            if (a >= 0 && b >= a) out.cached_spans.emplace_back(a, b);
             // The same range as segment numbers, which is what the bar draws.
             out.cached_seq_spans.emplace_back(r.first, r.second);
         }
     }
-    out.live_ms     = sess->live_wall_ms();
-    out.earliest_ms = sess->earliest_wall_ms();
+    out.live_ms     = sess->live_media_ms();
+    out.earliest_ms = sess->earliest_media_ms();
 
     // Now that the playhead is known and clamped, express "behind live" as the
     // gap between two real times rather than a count of segments. Only done
@@ -2850,8 +2854,7 @@ void SourceCtx::seek_media(long long media_ms) {
     // 780032 — 3456 ms apart, and never converging.
     //
     // The exact position asked for is right here. Use it.
-    const long long ev = (long long)sess->event_started_ms();
-    if (ev > 0) seek_target_ms = ev + media_ms;
+    seek_target_ms = media_ms;      // media time, like the position it meets
 
     mlog_info("source: went to %.3fs on the media timeline", media_ms / 1000.0);
 }

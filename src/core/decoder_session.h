@@ -310,6 +310,22 @@ public:
     // Wall-clock time of a position in the programme. Uses the exact time
     // recorded for a segment when it is still in the manifest window, and
     // estimates from the event start otherwise. 0 if unknown.
+    // ── Position, in MEDIA time ──────────────────────────────────────────────
+    // Milliseconds from the start of the event: how far into the programme,
+    // which is what a position actually means and the only unit every site,
+    // the appliance and the relay agree on without a conversion.
+    //
+    // These are the primaries. The wall-clock forms below are event start plus
+    // one of these, kept only until their callers are moved across — see
+    // BUGS #2b for why a time of day has no business in the playback path.
+    int64_t media_ms_for_seq(uint64_t seq) const {
+        return (int64_t)seq * segment_ms();
+    }
+    int64_t playhead_media_ms() const;    // clamped to the end of the recording
+    int64_t live_media_ms() const;        // the live edge
+    int64_t earliest_media_ms() const;    // oldest still in storage
+    int64_t end_media_ms() const;         // end of what exists = total length
+
     int64_t wall_clock_ms(uint64_t seq) const;
 
     // Milliseconds of programme per segment, MEASURED rather than assumed.

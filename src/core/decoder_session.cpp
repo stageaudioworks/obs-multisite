@@ -992,6 +992,29 @@ bool DecoderSession::at_end() const {
     return m_head_set.load() && m_head.load() > m_latest_seq.load();
 }
 
+int64_t DecoderSession::playhead_media_ms() const {
+    if (!m_head_set.load()) return 0;
+    const int64_t t = media_ms_for_seq(m_head.load());
+    // Once playback runs past the last segment the head points at a position
+    // that does not exist, and the reported position ran beyond the end of the
+    // recording. Clamp it.
+    const int64_t end = end_media_ms();
+    if (end > 0 && t > end) return end;
+    return t;
+}
+
+int64_t DecoderSession::live_media_ms() const {
+    return media_ms_for_seq(m_latest_seq.load());
+}
+
+int64_t DecoderSession::earliest_media_ms() const {
+    return media_ms_for_seq(m_first_available_seq.load());
+}
+
+int64_t DecoderSession::end_media_ms() const {
+    return media_ms_for_seq(m_latest_seq.load()) + segment_ms();
+}
+
 int64_t DecoderSession::playhead_wall_ms() const {
     if (!m_head_set.load()) return 0;
     const int64_t t = wall_clock_ms(m_head.load());

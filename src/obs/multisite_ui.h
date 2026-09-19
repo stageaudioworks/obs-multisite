@@ -213,8 +213,16 @@ struct DecoderSnapshot {
     std::string current_marker;
     std::string last_error;
     int         audio_channels = 0;
-    // Wall-clock times, so the UI never has to mention sequence numbers.
-    long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
+    // MEDIA times: milliseconds from the start of the event. How far into the
+    // programme, which is what a position means to an operator and the only
+    // unit that needs no conversion to be true. These were wall-clock times,
+    // and turning a wall clock back into a position is what drifted 1.11% and
+    // put a click up to seven seconds out (BUGS #2b, #2c).
+    //
+    // started_ms is the exception and is still a time of day: it is the
+    // event's identity — when it was recorded — not a position within it.
+    long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0;
+    long long   started_ms = 0;     // time of day the event began. Metadata.
     bool        playing = false;
     // Stopped is narrower than !playing: a source that is loading an event is
     // also not playing, but it is downloading hard. Stopped means idle all the
@@ -256,14 +264,15 @@ struct DecoderSnapshot {
     // to confirm it. Without them a Load or a jog looked like a dropped click
     // for several seconds and then snapped into place.
     bool        loading = false;        // an event is being switched to
-    // Non-zero while playback is heading somewhere it has not arrived at:
-    // the time shown is where it is GOING, not where the picture is.
+    // Non-zero while playback is heading somewhere it has not arrived at: the
+    // position shown is where it is GOING, not where the picture is. Media
+    // time, like the rest.
     long long   seek_target_ms = 0;
     bool        buffering = false;      // playing, but nothing decoded yet
-    long long   end_ms = 0;
+    long long   end_ms = 0;          // media time of the end of what exists
     // Total length of the recording, once it has an end. 0 while live.
     long long   total_ms = 0;
-    // Contiguous downloaded ranges as clock times, so the timeline can show
+    // Contiguous downloaded ranges in media time, so the timeline can show
     // exactly what is on disk.
     std::vector<std::pair<long long, long long>> cached_spans;
     // …and the same ranges as SEGMENT numbers, which is what the timeline

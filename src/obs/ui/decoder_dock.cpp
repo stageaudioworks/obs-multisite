@@ -1503,11 +1503,20 @@ void DecoderDock::refresh() {
     // the place on screen rather than a stored clock time. The two disagree on
     // an event whose encoder restarted, and only the segment agrees with the
     // picture.
+    // The snapshot carries media positions directly now, so this dock no
+    // longer converts segment numbers into times at all.
+    //
+    // It used to: seq * its own copy of the segment length, taken from the
+    // NOMINAL and with its own fallback — the duplicated derivation D2 warned
+    // about. The nominal is a request to the encoder, not a description of
+    // what it produced (a "6 s" keyframe interval is a whole number of frames,
+    // so 6.033 or 6.067), and every position on this axis was therefore out by
+    // seq * the difference: seconds by the end of a service. See BUGS #2b.
+    //
+    // m_mediaSegMs survives only to cap one interpolation step; it is not used
+    // to place anything.
     const double seg_s = s.segment_duration_s > 0.1 ? s.segment_duration_s : 6.0;
     m_mediaSegMs = (long long)(seg_s * 1000.0 + 0.5);
-    const auto media = [this](unsigned long long seq) {
-        return (long long)seq * m_mediaSegMs;
-    };
 
     // The load is over: stop naming it, so a later wait cannot show a stale
     // name from a click that has long since finished.
@@ -1519,7 +1528,7 @@ void DecoderDock::refresh() {
     m_posVod      = false;
     m_posBoundMs  = 0;
     m_posTooltip  = QString();
-    m_posBaseMs     = media(s.playhead_seq);
+    m_posBaseMs     = (long long)s.playhead_ms;
     m_posBaseWallMs = (long long)QDateTime::currentMSecsSinceEpoch();
 
     // Anchor the interpolation to the on-screen segment. Media time advances at
@@ -1550,10 +1559,9 @@ void DecoderDock::refresh() {
         // indistinguishable. Removing the clock from this dock is worth
         // nothing if what replaced it still READS as one. Saying it against
         // the total settles it: "17:59 of 24:16" can only be a position.
-        const long long target_in =
-            (s.started_ms > 0 && s.seek_target_ms >= s.started_ms)
-                ? s.seek_target_ms - s.started_ms
-                : s.seek_target_ms;
+        // Already a position: the snapshot carries media time now, so there is
+        // no event start to subtract.
+        const long long target_in = s.seek_target_ms;
         m_posText = s.total_ms > 0
             ? tr_("Dock.GoingToOf").arg(position(target_in))
                                    .arg(position((long long)s.total_ms))
@@ -1585,11 +1593,11 @@ void DecoderDock::refresh() {
         // deliberately — so a recording whose first available segment is #2
         // would otherwise open at 0:12 and look like it had skipped a start
         // rather than like the opening was gone.
-        m_posStartedMs = media(s.first_available);
-        m_posTotalMs   = media(s.live_edge + 1) - m_posStartedMs;
+        m_posStartedMs = (long long)s.earliest_ms;
+        m_posTotalMs   = (long long)s.end_ms - m_posStartedMs;
         // A recording cannot play past its own end, so interpolation must not
         // walk past it either.
-        if (s.live_edge > 0) m_posBoundMs = media(s.live_edge + 1);
+        if (s.end_ms > 0) m_posBoundMs = (long long)s.end_ms;
         // Animate only while it is genuinely running: not held, and not
         // already sitting at the end.
         m_posAnimate = s.playing && !s.paused && !s.at_end;
@@ -1608,7 +1616,7 @@ void DecoderDock::refresh() {
         m_posVod     = false;
         m_posBehindS = s.behind_live_s;
         // The live edge is the furthest this can meaningfully go.
-        if (s.live_edge > 0) m_posBoundMs = media(s.live_edge + 1);
+        if (s.end_ms > 0) m_posBoundMs = (long long)s.end_ms;
         m_posAnimate = s.playing && !s.paused && !s.buffering;
     }
 
@@ -1626,12 +1634,12 @@ void DecoderDock::refresh() {
     // recording across the whole retained window.
     const bool as_recording = s.plays_as_recording;
     if (as_recording && (s.end_ms > 0 || s.live_edge > 0)) {
-        // A recording spans its whole length, labelled as elapsed time.
-        m_timeline->setSpan(0, media(s.live_edge + 1));
+        // A recording spans its whole length, in elapsed time.
+        m_timeline->setSpan(0, (long long)s.end_ms);
     } else {
-        // Live: the left edge is what storage still holds, and the labels read
-        // as times of day.
-        m_timeline->setSpan(media(s.first_available), media(s.live_edge + 1));
+        // Live: the left edge is what storage still holds. Elapsed too — the
+        // axis no longer switches to times of day for a live event.
+        m_timeline->setSpan((long long)s.earliest_ms, (long long)s.end_ms);
     }
     // Which of the ordinary "nothing to draw yet" states this is. Only used
     // when the span is empty; the bar ignores it otherwise.
@@ -1641,21 +1649,25 @@ void DecoderDock::refresh() {
                                                : tr_("Dock.TimelineNothing"))
             : tr_("Dock.TimelineWaiting"));
     {
+        // Already media time, straight from the session.
         std::vector<std::pair<long long, long long>> dl;
-        for (const auto& r : s.cached_seq_spans)
-            dl.emplace_back(media(r.first), media(r.second + 1));
+        for (const auto& r : s.cached_spans)
+            dl.emplace_back(r.first, r.second);
         m_timeline->setDownloaded(std::move(dl));
     }
     {
         std::vector<long long> mt;
-        for (const auto& m : s.markers) mt.push_back(media(m.seq));
+        // The cue's own media anchor, exact and sub-segment, rather than
+        // its segment number rounded to a boundary.
+        for (const auto& m : s.markers)
+            if (m.at_media_ms >= 0) mt.push_back((long long)m.at_media_ms);
         m_timeline->setMarkers(std::move(mt));
     }
     // Confirm the click on the bar itself, not only in the position line above
-    // it. The target is a wall time; the bar's axis is media time, and the two
-    // differ by the event's own start.
-    m_timeline->setPending((s.seek_target_ms > 0 && s.started_ms > 0)
-                               ? (long long)(s.seek_target_ms - s.started_ms)
+    // it. Target and axis are both media time now, so there is nothing to
+    // reconcile.
+    m_timeline->setPending((s.seek_target_ms > 0)
+                               ? (long long)s.seek_target_ms
                                : -1);
 
     // Rebuild the marker list only when it changes, so the combo doesn't
