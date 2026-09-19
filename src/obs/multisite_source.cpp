@@ -370,6 +370,14 @@ struct SourceCtx : DecoderControls {
     // How many times the feed loop asked for a segment and was refused. See
     // where it is reported: this is the "seeking is slow" measurement.
     std::atomic<unsigned long long> feed_waits{0};
+    // Seek latency breakdown (see where it is reported). "It still feels laggy"
+    // is not a number, and the last two attempts each fixed a real delay
+    // without changing what an operator felt — because the wait had moved
+    // rather than gone. These say which stage actually holds the time.
+    std::atomic<uint64_t> jump_decoder_ns{0};   // when the decoder restarted
+    std::atomic<uint64_t> jump_first_decode_ns{0};  // first frame out of it
+    std::atomic<unsigned long long> jump_skipped{0};  // frames the skip dropped
+    std::atomic<bool>     jump_reported{true};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -839,7 +847,9 @@ static void deliver_loop(SourceCtx* ctx) {
                                                  : item.audio.pts_ns;
         switch (tl.consider(item_epoch, item_pts)) {
             case multisite::PlayoutTimeline::Action::Discard:     continue;
-            case multisite::PlayoutTimeline::Action::DropForSkip: continue;
+            case multisite::PlayoutTimeline::Action::DropForSkip:
+                ctx->jump_skipped++;
+                continue;
             case multisite::PlayoutTimeline::Action::Play:        break;
         }
 
@@ -975,6 +985,21 @@ static void deliver_loop(SourceCtx* ctx) {
                                         frame.color_range_min,
                                         frame.color_range_max);
             ctx->on_screen_seq = item.video.seq;
+            if (!ctx->jump_reported.exchange(true)) {
+                const uint64_t now  = os_gettime_ns();
+                const uint64_t jump = ctx->action_started_ns.load();
+                const uint64_t dec  = ctx->jump_decoder_ns.load();
+                const uint64_t fst  = ctx->jump_first_decode_ns.load();
+                auto ms = [](uint64_t a, uint64_t b) {
+                    return (a && b && b > a) ? (long long)((b - a) / 1000000ULL) : 0LL;
+                };
+                mlog_info("source: seek to picture %lld ms — restart %lld, "
+                          "first decode +%lld, skipped %llu frame(s) +%lld, "
+                          "handover +%lld",
+                          ms(jump, now), ms(jump, dec), ms(dec, fst),
+                          (unsigned long long)ctx->jump_skipped.load(),
+                          ms(fst, now), 0LL);
+            }
             obs_source_output_video(ctx->source, &frame);
             ctx->frames_out++;
 
@@ -1096,6 +1121,8 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
 
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
+    if (ctx->jump_first_decode_ns.load() == 0)
+        ctx->jump_first_decode_ns = os_gettime_ns();
     ctx->last_out_pts_ns = f.pts_ns;
     // BEFORE the base, deliberately. A resume landing between these two reads
     // gives this frame the OLD epoch and the NEW base, so it is dropped when it
@@ -1630,6 +1657,10 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
             ctx->restart_wall_ms      = 0;
             ctx->restart_wall_pending = true;
+            ctx->jump_decoder_ns = os_gettime_ns();
+            ctx->jump_first_decode_ns = 0;
+            ctx->jump_skipped = 0;
+            ctx->jump_reported = false;
             mlog_info("source: decoder started (init %zu bytes)",
                       seg->init.size());
         }
