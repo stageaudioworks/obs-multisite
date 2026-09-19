@@ -367,6 +367,9 @@ struct SourceCtx : DecoderControls {
     // The event's start on the wall clock — the media clock's origin. See
     // PlayoutTimeline::set_event_start_ms.
     std::atomic<long long> event_started_ms{0};
+    // How many times the feed loop asked for a segment and was refused. See
+    // where it is reported: this is the "seeking is slow" measurement.
+    std::atomic<unsigned long long> feed_waits{0};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -1547,8 +1550,25 @@ static void feed_loop(SourceCtx* ctx) {
         }
 
         if (!seg) {
+            // MEASUREMENT: a seek is reported as slow even when the content is
+            // already on disk, and nothing said where the time went. The feed
+            // loop asks every 50 ms and the session refuses until the segment
+            // at the new head is cached, so counting the refusals says whether
+            // the wait is a download, a decoder teardown, or something else
+            // entirely. Reported once when the wait ends, never per attempt.
+            ctx->feed_waits++;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
+        }
+        if (ctx->feed_waits.load() > 0) {
+            const unsigned long long n = ctx->feed_waits.exchange(0);
+            const uint64_t since = ctx->action_started_ns.load();
+            mlog_info("source: fed segment %llu after waiting %llu ms for it "
+                      "(%llu poll(s); %llu ms since the jump was asked for) — "
+                      "cache holds %zu segment(s)",
+                      (unsigned long long)seg->seq, n * 50ULL, n,
+                      since ? (unsigned long long)((os_gettime_ns() - since) / 1000000ULL) : 0ULL,
+                      sess->cache().count());
         }
 
         // A jump (seek / jump-to-live / new event) means the next fragment
@@ -2685,6 +2705,24 @@ void SourceCtx::seek_media(long long media_ms) {
     // release the decoder, re-anchor, and move the displayed time to where the
     // click is heading rather than where the picture still is.
     after_jump((long long)sess->playhead_wall_ms());
+
+    // The target has to be measured the same way as the position it will be
+    // compared against, or the two never meet.
+    //
+    // after_jump above sets the target from playhead_wall_ms(), which is
+    // `event_start + seq * segment_ms` — SEGMENT granular. The arrival check
+    // compares it against playing_at_ms, which is `event_start + pts` — exact.
+    // Two derivations of one quantity, and they legitimately differ by most of
+    // a segment, which is more than the 2.5 s tolerance the check allows. So
+    // "Going to..." never cleared and sat on screen until the 30 s timeout,
+    // long after the picture had arrived. Measured: a seek to 779.572 s set a
+    // target of event_start + 776576 against a position of event_start +
+    // 780032 — 3456 ms apart, and never converging.
+    //
+    // The exact position asked for is right here. Use it.
+    const long long ev = (long long)sess->event_started_ms();
+    if (ev > 0) seek_target_ms = ev + media_ms;
+
     mlog_info("source: went to %.3fs on the media timeline", media_ms / 1000.0);
 }
 
