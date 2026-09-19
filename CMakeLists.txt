@@ -156,6 +156,9 @@ add_executable(test_playout_timeline tests/test_playout_timeline.cpp)
 target_link_libraries(test_playout_timeline PRIVATE multisite_core)
 add_test(NAME playout_timeline COMMAND test_playout_timeline)
 
+add_executable(test_seek_skip tests/test_seek_skip.cpp)
+add_test(NAME seek_skip COMMAND test_seek_skip)
+
 # Dividing one encoded picture into discrete ones. Every way of getting this
 # geometry wrong is quiet — a rectangle a pixel out still shows a picture.
 add_executable(test_tile_layout tests/test_tile_layout.cpp)

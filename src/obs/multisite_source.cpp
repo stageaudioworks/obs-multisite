@@ -30,6 +30,7 @@
 #include "../core/playout_clock.h"
 #include "../core/position_interp.h"
 #include "../core/playout_timeline.h"
+#include "../core/seek_skip.h"
 
 #ifdef MULTISITE_HAVE_FRONTEND_API
 #include <obs-frontend-api.h>
@@ -378,7 +379,11 @@ struct SourceCtx : DecoderControls {
     // rather than gone. These say which stage actually holds the time.
     std::atomic<uint64_t> jump_decoder_ns{0};   // when the decoder restarted
     std::atomic<uint64_t> jump_first_decode_ns{0};  // first frame out of it
-    std::atomic<unsigned long long> jump_skipped{0};  // frames the skip dropped
+    // Counted per stream, not together. A seek is landing correctly when both
+    // numbers are the same share of their stream's rate; one of them near zero
+    // means that stream's arm never engaged, which is the 2026-09-19 sync bug.
+    std::atomic<unsigned long long> jump_skipped_v{0};
+    std::atomic<unsigned long long> jump_skipped_a{0};
     std::atomic<bool>     jump_reported{true};
     // Nanoseconds the DECODER spent blocked inside enqueue_frame waiting for
     // queue space. Discriminates the two candidate causes of a slow skip: if
@@ -403,11 +408,12 @@ struct SourceCtx : DecoderControls {
     // the media clock either — true by construction rather than by test: such
     // a frame never reaches the delivery loop at all.
     //
-    // base is INT64_MIN until the first frame of the fragment claims it, and
-    // audio and video share it exactly as they did before, because whichever
-    // arrives first defines where the fragment starts.
-    static constexpr long long kUnsetPts = INT64_MIN;
-    std::atomic<long long> skip_base_pts_ns{kUnsetPts};
+    // ONE ARM PER STREAM, and the reasoning is in seek_skip.h. It used to be a
+    // single base claimed by whichever stream spoke first, which was correct
+    // where the skip used to live and wrong here: on this side of the queue
+    // audio and video do not take turns, and the picture ended up running
+    // ~311 ms behind the sound by a different amount after every seek.
+    multisite::SeekSkip skip;
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -447,9 +453,6 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t>  live_edge_seq{0};
     std::atomic<long long> live_edge_wall_ms{0};   // end of the newest segment
     std::atomic<long long> live_edge_seen_ms{0};   // monotonic, when we saw it
-    // After a timed seek, frames earlier than this point in the segment are
-    // dropped, giving roughly one-second accuracy instead of six.
-    std::atomic<long long> skip_until_pts_ns{-1};
 
     // An operator loads an event, lets it buffer, then presses Play on cue.
     // Auto-playing as soon as enough is buffered is wrong for an event.
@@ -851,7 +854,7 @@ static void deliver_loop(SourceCtx* ctx) {
         switch (tl.consider(item_epoch, item_pts)) {
             case multisite::PlayoutTimeline::Action::Discard:     continue;
             case multisite::PlayoutTimeline::Action::DropForSkip:
-                ctx->jump_skipped++;
+                ctx->jump_skipped_v++;
                 continue;
             case multisite::PlayoutTimeline::Action::Play:        break;
         }
@@ -997,12 +1000,19 @@ static void deliver_loop(SourceCtx* ctx) {
                 auto ms = [](uint64_t a, uint64_t b) {
                     return (a && b && b > a) ? (long long)((b - a) / 1000000ULL) : 0LL;
                 };
+                // Video and audio counted separately, deliberately. One
+                // number hid the 2026-09-19 sync bug completely: the totals
+                // looked plausible while video was skipping ~311 ms less than
+                // audio. If these two are not each their stream's own share of
+                // the same duration, the arms have come apart again.
                 mlog_info("source: seek to picture %lld ms — restart %lld, "
-                          "first decode +%lld, skipped %llu frame(s) +%lld "
+                          "first decode +%lld, skipped %llu v + %llu a "
+                          "frame(s) +%lld "
                           "(decoder blocked on the queue %llu ms of that), "
                           "handover +%lld",
                           ms(jump, now), ms(jump, dec), ms(dec, fst),
-                          (unsigned long long)ctx->jump_skipped.load(),
+                          (unsigned long long)ctx->jump_skipped_v.load(),
+                          (unsigned long long)ctx->jump_skipped_a.load(),
                           ms(fst, now),
                           (unsigned long long)(ctx->enqueue_blocked_ns.load() / 1000000ULL),
                           0LL);
@@ -1126,19 +1136,11 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
     return first;
 }
 
-// Is this frame before the moment a seek asked for? Consumes the arming when
-// the moment is reached, so it runs exactly once per seek.
-static bool dropped_by_skip(SourceCtx* ctx, int64_t pts_ns) {
-    const long long skip = ctx->skip_until_pts_ns.load();
-    if (skip < 0) return false;
-    long long base = ctx->skip_base_pts_ns.load();
-    if (base == SourceCtx::kUnsetPts) {
-        ctx->skip_base_pts_ns = pts_ns;
-        base = pts_ns;
-    }
-    if (pts_ns - base < skip) return true;
-    ctx->skip_until_pts_ns = -1;          // arrived
-    return false;
+// Is this frame before the moment a seek asked for? The decision, and the
+// reason it is taken per stream rather than once, are in seek_skip.h and
+// pinned by test_seek_skip.
+static bool dropped_by_skip(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
+    return ctx->skip.drops(pts_ns, is_video);
 }
 
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
@@ -1146,7 +1148,7 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (ctx->jump_first_decode_ns.load() == 0)
         ctx->jump_first_decode_ns = os_gettime_ns();
     // Before the copy and before the queue: see dropped_by_skip.
-    if (dropped_by_skip(ctx, f.pts_ns)) { ctx->jump_skipped++; return; }
+    if (dropped_by_skip(ctx, f.pts_ns, true)) { ctx->jump_skipped_v++; return; }
     ctx->last_out_pts_ns = f.pts_ns;
     // BEFORE the base, deliberately. A resume landing between these two reads
     // gives this frame the OLD epoch and the NEW base, so it is dropped when it
@@ -1171,7 +1173,7 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 
 static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
-    if (dropped_by_skip(ctx, f.pts_ns)) { ctx->jump_skipped++; return; }
+    if (dropped_by_skip(ctx, f.pts_ns, false)) { ctx->jump_skipped_a++; return; }
 
     // Who wants this track? This source carries one of them; companion
     // audio-only sources in the same room carry the others. A track nobody has
@@ -1682,7 +1684,8 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->event_start_pending = true;
             ctx->jump_decoder_ns = os_gettime_ns();
             ctx->jump_first_decode_ns = 0;
-            ctx->jump_skipped = 0;
+            ctx->jump_skipped_v = 0;
+            ctx->jump_skipped_a = 0;
             ctx->enqueue_blocked_ns = 0;
             ctx->jump_reported = false;
             mlog_info("source: decoder started (init %zu bytes)",
@@ -1739,10 +1742,8 @@ static void feed_loop(SourceCtx* ctx) {
         // measures from is claimed by the delivery loop when it picks this up,
         // from a frame it has actually seen — rather than being reset from this
         // thread, seconds ahead, which is how it used to move mid-skip.
-        if (seg->skip_to_ms > 0) {
-            ctx->skip_base_pts_ns  = SourceCtx::kUnsetPts;   // base FIRST
-            ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
-        }
+        if (seg->skip_to_ms > 0)
+            ctx->skip.arm(seg->skip_to_ms * 1000000LL);
 
         // push_fragment blocks when the decoder is full — deliberately not
         // under a lock. It returns false only when the decoder has stopped

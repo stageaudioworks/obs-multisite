@@ -838,6 +838,56 @@ its offset is set. The dock hands over a time and nothing else.
 second segment. A segment-only assertion passes for both the bug and the fix,
 which is how this survived as long as it did.
 
+### 2d. The seek's skip used one base for two streams, so the picture ran ~311 ms behind the sound
+
+**Status: FIXED.** Reported as "audio sync seems to drift", found on a finished
+recording, and caused by 44d33b0 the same afternoon — the commit that moved the
+sub-segment skip out of the delivery loop and into `deliver_video` /
+`deliver_audio`, so a frame the seek was going to throw away is dropped before
+the ~3 MB copy and before the queue. That move was right and is worth keeping.
+What it quietly broke was the ORDER the skip relied on.
+
+In the delivery loop, frames arrive in **presentation order** — the loop takes
+the minimum timestamp in the window. The first frame to reach the target is
+therefore genuinely the earliest moment at or after it, and every frame behind
+it has already gone past. One shared base and one disarm were correct there for
+free, by ordering, without anyone having to think about it. The comment left on
+the field said exactly that, and said it was still true:
+
+> base is INT64_MIN until the first frame of the fragment claims it, and audio
+> and video share it exactly as they did before, because whichever arrives
+> first defines where the fragment starts.
+
+At the producer, frames arrive in **decode and track order**. Audio and video
+do not take turns. The operator's log measured the gap on every re-anchor:
+
+```
+interleave gap this anchor: audio leads by 311 ms (cushion 500 ms, within the cushion)
+lead video mean=+383ms min=+85ms (106) | audio mean=+398ms min=+394ms (149)
+```
+
+Audio always speaks first, so audio always claimed the shared base — about
+311 ms earlier than video's first pts. Every video frame was then measured from
+an origin 311 ms too early, crossed the target that much sooner, and kept
+311 ms of picture the audio had already discarded. The picture ran that far
+behind the sound. It reads as *drift* rather than a fixed offset because the
+gap is re-measured at every re-anchor and came out different each time — 0,
+235, 300, 311, 312, 313, 319 ms across one session. The first anchor in that
+log skipped nothing and had a 0 ms gap: sync was fine until a seek skipped.
+
+The fix is one arm per stream — its own base, its own disarm — in
+`src/core/seek_skip.h`.
+
+**The reason it shipped is the more useful part.** The skip had a test while it
+lived in `PlayoutTimeline`; moving it to the producer moved it out of
+`test_playout_timeline`'s reach, and nothing replaced it. The behaviour went
+from tested to untested in a commit that was about performance and said nothing
+about coverage. `tests/test_seek_skip.cpp` now pins it, and was checked against
+a shim of the old shared-base logic first: it fails five ways there and passes
+here. The seek log also counts the two streams separately now — one total hid
+this completely, because the total looked plausible while video was skipping
+311 ms less than audio.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —
