@@ -696,6 +696,7 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
 
         out.seq = want;
         out.duration_s = m_segment_duration_s.load();
+        out.event_started_at_ms = m_started_at_ms.load();
         for (const auto& sg : m_manifest.segments) {
             if (sg.seq != want) continue;
             if (sg.duration_s > 0.1) out.duration_s = sg.duration_s;

@@ -146,6 +146,15 @@ struct PlayableSegment {
     // from an arithmetic one. Measured first, estimated only when there is
     // nothing to measure.
     bool     starts_at_estimated = false;
+    // The event's start on the wall clock. This is THE anchor for turning a
+    // media position into a time of day, because it is the anchor the ENCODER
+    // used: session.cpp writes every segment's at_ms as
+    // `started_at_ms + pts_offset_s * 1000` — content time, deliberately, so
+    // that network delay on the upload cannot move it. Reading it back the same
+    // way is exact; deriving it from seq and a nominal segment length is a
+    // second formula for the same quantity, and the two agree only while every
+    // segment is exactly the nominal length. See BUGS #2b.
+    int64_t  event_started_at_ms = 0;
     // Milliseconds into this segment at which playback should begin. Set after
     // a seek to a time that falls mid-segment; the host drops earlier frames.
     // Segments are the unit of transfer, but they need not be the unit of

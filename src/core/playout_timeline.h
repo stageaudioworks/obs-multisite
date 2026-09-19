@@ -111,6 +111,25 @@ public:
         if (skip_ns > 0) m_skip_ns = skip_ns;
     }
 
+    // The event's start on the wall clock, which IS the media clock's origin.
+    //
+    // Preferred over pinning a fragment, and it makes the pin's whole class of
+    // bug impossible. The encoder writes each segment's at_ms as
+    // `event_start + pts_offset`, so `origin = at_ms - pts` is always just
+    // event_start — there is nothing a fragment can tell us that this does not
+    // say more directly, and without needing the right fragment to be paired
+    // with the right pts. The decoder's fallback used to derive the same
+    // quantity as `event_start + seq * nominal_duration`, a second formula that
+    // agreed only while every segment was exactly nominal; measured at 67 ms
+    // per 6 s segment out, 1.11%, which put a cue about forty seconds wrong by
+    // the end of an hour. See BUGS #2b.
+    //
+    // Set once per media timeline. Later calls are ignored, the same as the
+    // fragment pin, so a segment arriving mid-playback cannot move the clock.
+    void set_event_start_ms(int64_t wall_ms) {
+        if (wall_ms > 0 && m_offset_ms == kNoClock) m_offset_ms = wall_ms;
+    }
+
     // Wall-clock start of the first fragment after a restart. The pin's base is
     // NOT reset here — it is reset only in restart(), alongside this — so the
     // wall time and the pts it is paired with always describe the same fragment.
@@ -150,7 +169,8 @@ public:
             m_skip_ns = -1;                      // arrived
         }
 
-        // 4. Pin the media clock, once.
+        // 4. Pin the media clock, once — only if the event's own start was not
+        // available. Kept as a fallback for a session that cannot report one.
         if (m_offset_ms == kNoClock && m_restart_wall_ms > 0)
             m_offset_ms = m_restart_wall_ms - m_pin_base_pts / 1000000;
         return Action::Play;

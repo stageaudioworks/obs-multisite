@@ -218,6 +218,45 @@ int main() {
         CHECK(!t.have_clock(), "but a seek unpins it: a new fragment is coming");
     }
 
+    std::printf("== the event's own start is the origin, not a fragment pin ==\n");
+    {
+        // The encoder writes each segment's at_ms as event_start + pts_offset,
+        // so the origin IS the event start. Deriving it from a fragment's wall
+        // time and the first pts seen gives the same answer only when that
+        // fragment's wall time was recorded rather than estimated — and for a
+        // finished recording the manifest keeps only the last 50 segments, so
+        // nearly every segment is estimated as seq * nominal length. Measured
+        // 67 ms out per 6 s segment, which is a cue about forty seconds wrong
+        // by the end of an hour. See BUGS #2b.
+        const int64_t kEventStart = 1789455009498;
+
+        PlayoutTimeline t;
+        t.adopt(1, 1);
+        t.set_event_start_ms(kEventStart);
+        // A fragment wall that is WRONG by 8 s, as the estimate would be
+        // 720 s into the event.
+        t.set_restart_wall_ms(kEventStart + 720000 - 8000);
+        CHECK(t.consider(1, 720 * S) == Action::Play, "a frame plays");
+        CHECK(t.have_clock(), "the clock is set");
+        CHECK(t.clock_offset_ms() == kEventStart,
+              "and the origin is the EVENT START, not the drifted fragment pin");
+        CHECK(t.wall_ms_for(720 * S) == kEventStart + 720000,
+              "so a media position maps to the right time of day");
+
+        // Without an event start, the fragment pin is still the fallback.
+        PlayoutTimeline f;
+        f.adopt(1, 1);
+        f.set_restart_wall_ms(kEventStart);
+        CHECK(f.consider(1, 0) == Action::Play, "fallback: a frame plays");
+        CHECK(f.clock_offset_ms() == kEventStart,
+              "and the fragment pin still provides an origin when it must");
+
+        // A late event start must not move a clock already running.
+        t.set_event_start_ms(kEventStart + 999999);
+        CHECK(t.clock_offset_ms() == kEventStart,
+              "a later event start cannot move a clock that is already set");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL PLAYOUT TIMELINE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

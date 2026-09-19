@@ -675,7 +675,8 @@ three rounds of guessing — keep it, and keep it honest.
 
 ### 2b. The media->wall mapping is position-dependent, by ~1.1% — and the cue system rests on it
 
-**Status: OPEN. This is the one that matters for cues.** Entry 2's fixes make a
+**Status: FIXED 2026-09-19, pending a run on real content. This is the one that
+matters for cues.** Entry 2's fixes make a
 hold behave; this decides whether a cue lands where it was placed.
 
 Two pins from one recording, both taken after genuine decoder restarts, on the
@@ -713,15 +714,51 @@ media clock pinned — fragment wall N (measured, from the manifest), ...
 media clock pinned — fragment wall N (ESTIMATED from seq x nominal duration), ...
 ```
 
-**How to read it.** If the far-into-the-event pin says ESTIMATED while the pts-0
-pin says measured, the drift is the estimate's nominal-length assumption and the
-fix is to stop estimating — carry real segment durations, or record at_ms for
-every segment rather than only the window. If BOTH say measured, then the
-encoder's recorded at_ms genuinely disagrees with media pts by 1.1% and the
-fault is upstream in what the encoder writes, which is a much bigger finding.
+**SETTLED FROM THE CODE, no test run needed.** `session.cpp:355`:
 
-Until this is settled, cue accuracy degrades with distance from the last pin,
-and the pin moves on every seek.
+```c
+// Content time, not upload time: event start plus this segment's offset in
+// the programme. Upload time would drift with network delays.
+ms.at_ms = m_manifest.started_at_ms + (int64_t)(seg.pts_offset_s * 1000.0);
+```
+
+The ENCODER defines a segment's wall time as `event_start + media_pts`. So for
+any measured segment `origin = at_ms - pts` is just `event_start`, constant, by
+construction. The decoder's fallback computes the same quantity by a DIFFERENT
+formula — `event_start + seq * nominal_duration` — and the two agree only while
+every segment is exactly the nominal length. At ~6.067 s (182 frames at 30 fps
+against a nominal 6.000 s) the estimate slips 67 ms per segment: 1.11%, matching
+the measurement to five decimal places across two independent intervals.
+
+And it is not an edge case. A finished recording's manifest keeps only the last
+50 segments, so 558 of this event's 608 segments have no at_ms at all. Nearly
+every cue in the event resolved through the estimate.
+
+**Cues are wall-clock anchored and the encoder stamps them with `now_ms()`
+(`session.cpp:445`)** — a true time of day, with no compensating error. So the
+cue's anchor was right and the mapping that resolved it was wrong: the error did
+not cancel, it just accumulated with distance from the pin.
+
+**The fix: use the encoder's own anchor.** `PlayableSegment` now carries
+`event_started_at_ms`, and `PlayoutTimeline::set_event_start_ms()` takes it as
+the origin directly. The fragment pin remains only as a fallback for a session
+that cannot report an event start. This also retires the whole class of "pinned
+to a position already left" bugs, because there is no longer a pairing to get
+wrong — no fragment wall, no first-pts-seen, just the event's start and the
+frame's own pts.
+
+The pin log line now prints BOTH: the origin taken from the event start, and
+what the fragment pin would have said, with the difference in ms. They should
+agree near the start of an event and diverge by ~11 ms per second of programme
+further in; that difference is the bug, now visible instead of silent.
+
+**Related, and NOT fixed — the two time bases disagree under an encoder stall.**
+Segments use content time (`started + pts_offset`) while markers use true wall
+time (`now_ms()`). While the encoder runs continuously these are the same. If it
+stalls, media time pauses while the wall clock does not, and a marker placed
+after the stall carries a time of day the content-time mapping cannot produce.
+Worth deciding deliberately which base a cue is in — the operator means "this
+moment in the programme", which argues for content time.
 
 ### 3. Clicking the timeline lands on the segment, not the moment
 

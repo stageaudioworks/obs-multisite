@@ -364,6 +364,9 @@ struct SourceCtx : DecoderControls {
     // Whether the wall time the media clock is pinned to was measured or
     // estimated. See the feed loop, and BUGS #2's cue-accuracy note.
     std::atomic<bool> restart_wall_estimated{false};
+    // The event's start on the wall clock — the media clock's origin. See
+    // PlayoutTimeline::set_event_start_ms.
+    std::atomic<long long> event_started_ms{0};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -802,6 +805,8 @@ static void deliver_loop(SourceCtx* ctx) {
             if (armed >= 0) tl.begin_fragment(armed);
             const long long w = ctx->restart_wall_ms.load();
             if (w > 0) tl.set_restart_wall_ms(w);
+            // Exact, and preferred: it is the anchor the encoder used.
+            tl.set_event_start_ms((int64_t)ctx->event_started_ms.load());
         }
 
         const long long item_pts = item.is_video ? item.video.pts_ns
@@ -819,14 +824,22 @@ static void deliver_loop(SourceCtx* ctx) {
             // fragment the seek asked for. The pts here must match the one the
             // playout anchored on in the line above it; when those two differ,
             // the clock has been pinned to a position already left.
-            mlog_info("source: media clock pinned — fragment wall %lld (%s), "
-                      "first pts %.3fs (so pts 0 would be wall %lld)",
-                      tl.pin_wall_ms(),
+            // Both readings, because they disagreeing IS the diagnosis: the
+            // event start is exact, the fragment pin drifts by however far the
+            // segment wall it used was estimated.
+            const long long ev = ctx->event_started_ms.load();
+            const int64_t pinned = tl.pin_wall_ms() > 0
+                ? tl.pin_wall_ms() - tl.pin_base_pts_ns() / 1000000 : 0;
+            mlog_info("source: media clock origin %lld (from the event start) — "
+                      "fragment pin would have said %lld (wall %lld %s, first "
+                      "pts %.3fs), a difference of %lld ms",
+                      tl.clock_offset_ms(), pinned, tl.pin_wall_ms(),
                       ctx->restart_wall_estimated.load()
-                          ? "ESTIMATED from seq x nominal duration"
-                          : "measured, from the manifest",
+                          ? "ESTIMATED from seq x nominal"
+                          : "measured",
                       (double)tl.pin_base_pts_ns() / 1e9,
-                      tl.clock_offset_ms());
+                      pinned > 0 ? (long long)(tl.clock_offset_ms() - pinned) : 0LL);
+            (void)ev;
         }
         // Publish for the dock and the web remote.
         if (tl.have_clock()) {
@@ -1600,6 +1613,9 @@ static void feed_loop(SourceCtx* ctx) {
         // frames — which is the bug this replaced.
         if (ctx->restart_wall_pending.exchange(false)) {
             ctx->restart_wall_ms = (long long)seg->starts_at_ms;
+            // The event's own start, which is what the encoder anchored every
+            // segment's at_ms to. Preferred over the fragment pin below.
+            ctx->event_started_ms = (long long)seg->event_started_at_ms;
             // Every displayed time and every cue position hangs off this
             // pairing, so it matters whether the wall time was recorded by the
             // encoder or worked out from seq * nominal duration. The estimate
