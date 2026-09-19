@@ -386,6 +386,27 @@ struct SourceCtx : DecoderControls {
     // different one entirely.
     std::atomic<unsigned long long> enqueue_blocked_ns{0};
 
+    // The sub-segment skip, applied where the frames are PRODUCED.
+    //
+    // A seek lands on a fragment and then drops frames until the moment asked
+    // for. That dropping used to happen in the delivery loop, which meant every
+    // discarded frame was first deep-copied (~3 MB at 1080p) and pushed through
+    // a 12-frame queue, so the decoder could discard no faster than the loop
+    // handed frames back one at a time. Measured: the decoder spent 92-97% of
+    // every large skip ASLEEP waiting for queue space — 3808 ms of a 4021 ms
+    // skip — while the decode itself took 213 ms for 292 frames (~1370 fps).
+    //
+    // Dropping here costs a comparison. It also makes the rule
+    // playout_timeline.h insists on — a frame dropped by the skip must not pin
+    // the media clock either — true by construction rather than by test: such
+    // a frame never reaches the delivery loop at all.
+    //
+    // base is INT64_MIN until the first frame of the fragment claims it, and
+    // audio and video share it exactly as they did before, because whichever
+    // arrives first defines where the fragment starts.
+    static constexpr long long kUnsetPts = INT64_MIN;
+    std::atomic<long long> skip_base_pts_ns{kUnsetPts};
+
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
     // arrives. Packed into ONE atomic rather than two: cols and rows read
@@ -817,8 +838,10 @@ static void deliver_loop(SourceCtx* ctx) {
             // fragment a seek landed on, and the queue was cleared and the
             // decoder restarted for that seek, so the frame that claims the
             // base here is genuinely that fragment's first.
-            const long long armed = ctx->skip_until_pts_ns.exchange(-1);
-            if (armed >= 0) tl.begin_fragment(armed);
+            // The skip is applied at the decoder now (dropped_by_skip), so a
+            // frame that reaches here is already one that should play. Only the
+            // per-fragment reset is still wanted.
+            tl.begin_fragment(-1);
             const long long w = ctx->restart_wall_ms.load();
             if (w > 0) tl.set_restart_wall_ms(w);
             // Exact, and preferred: it is the anchor the encoder used.
@@ -1131,10 +1154,27 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
     return first;
 }
 
+// Is this frame before the moment a seek asked for? Consumes the arming when
+// the moment is reached, so it runs exactly once per seek.
+static bool dropped_by_skip(SourceCtx* ctx, int64_t pts_ns) {
+    const long long skip = ctx->skip_until_pts_ns.load();
+    if (skip < 0) return false;
+    long long base = ctx->skip_base_pts_ns.load();
+    if (base == SourceCtx::kUnsetPts) {
+        ctx->skip_base_pts_ns = pts_ns;
+        base = pts_ns;
+    }
+    if (pts_ns - base < skip) return true;
+    ctx->skip_until_pts_ns = -1;          // arrived
+    return false;
+}
+
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
     if (ctx->jump_first_decode_ns.load() == 0)
         ctx->jump_first_decode_ns = os_gettime_ns();
+    // Before the copy and before the queue: see dropped_by_skip.
+    if (dropped_by_skip(ctx, f.pts_ns)) { ctx->jump_skipped++; return; }
     ctx->last_out_pts_ns = f.pts_ns;
     // BEFORE the base, deliberately. A resume landing between these two reads
     // gives this frame the OLD epoch and the NEW base, so it is dropped when it
@@ -1159,6 +1199,7 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 
 static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
+    if (dropped_by_skip(ctx, f.pts_ns)) { ctx->jump_skipped++; return; }
 
     // Who wants this track? This source carries one of them; companion
     // audio-only sources in the same room carry the others. A track nobody has
@@ -1735,8 +1776,10 @@ static void feed_loop(SourceCtx* ctx) {
         // measures from is claimed by the delivery loop when it picks this up,
         // from a frame it has actually seen — rather than being reset from this
         // thread, seconds ahead, which is how it used to move mid-skip.
-        if (seg->skip_to_ms > 0)
+        if (seg->skip_to_ms > 0) {
+            ctx->skip_base_pts_ns  = SourceCtx::kUnsetPts;   // base FIRST
             ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
+        }
 
         // push_fragment blocks when the decoder is full — deliberately not
         // under a lock. It returns false only when the decoder has stopped
