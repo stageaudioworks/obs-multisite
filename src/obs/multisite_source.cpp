@@ -816,6 +816,34 @@ static void deliver_loop(SourceCtx* ctx) {
             tl.set_event_start_ms((int64_t)ctx->event_started_ms.load());
         }
 
+        // Reported HERE, where the clock is established — not below consider(),
+        // which was the previous home and is wrong for the case that matters.
+        // After a seek the skip drops the first frames of the landing fragment,
+        // and each of those `continue`s past anything below it; the clock had
+        // already been set by then, so the line printed once at PLAY and never
+        // again on a seek. The origin is a property of the timeline, not of a
+        // frame surviving the skip.
+        //
+        // Both readings, because them disagreeing IS the diagnosis: the event
+        // start is exact, and the fragment pin drifts by however far the
+        // segment wall it would have used was estimated (BUGS #2b).
+        if (!had_clock && tl.have_clock()) {
+            const long long first_pts =
+                item.is_video ? item.video.pts_ns : item.audio.pts_ns;
+            const long long w = ctx->restart_wall_ms.load();
+            const long long pinned = w > 0 ? w - first_pts / 1000000 : 0;
+            mlog_info("source: media clock origin %lld (from the event start) — "
+                      "fragment pin would have said %lld (wall %lld %s, first "
+                      "pts %.3fs), a difference of %lld ms",
+                      (long long)tl.clock_offset_ms(), pinned, w,
+                      ctx->restart_wall_estimated.load()
+                          ? "ESTIMATED from seq x nominal"
+                          : "measured",
+                      (double)first_pts / 1e9,
+                      pinned > 0
+                          ? (long long)tl.clock_offset_ms() - pinned : 0LL);
+        }
+
         const long long item_pts = item.is_video ? item.video.pts_ns
                                                  : item.audio.pts_ns;
         switch (tl.consider(item_epoch, item_pts)) {
@@ -824,29 +852,6 @@ static void deliver_loop(SourceCtx* ctx) {
             case multisite::PlayoutTimeline::Action::Play:        break;
         }
 
-        if (!had_clock && tl.have_clock()) {
-            // Every displayed clock time is built on this pairing, and it is
-            // learned once, so it is logged to stay checkable against the
-            // fragment the seek asked for. The pts here must match the one the
-            // playout anchored on in the line above it; when those two differ,
-            // the clock has been pinned to a position already left.
-            // Both readings, because they disagreeing IS the diagnosis: the
-            // event start is exact, the fragment pin drifts by however far the
-            // segment wall it used was estimated.
-            const long long ev = ctx->event_started_ms.load();
-            const int64_t pinned = tl.pin_wall_ms() > 0
-                ? tl.pin_wall_ms() - tl.pin_base_pts_ns() / 1000000 : 0;
-            mlog_info("source: media clock origin %lld (from the event start) — "
-                      "fragment pin would have said %lld (wall %lld %s, first "
-                      "pts %.3fs), a difference of %lld ms",
-                      tl.clock_offset_ms(), pinned, tl.pin_wall_ms(),
-                      ctx->restart_wall_estimated.load()
-                          ? "ESTIMATED from seq x nominal"
-                          : "measured",
-                      (double)tl.pin_base_pts_ns() / 1e9,
-                      pinned > 0 ? (long long)(tl.clock_offset_ms() - pinned) : 0LL);
-            (void)ev;
-        }
         // Publish for the dock and the web remote.
         if (tl.have_clock()) {
             ctx->pts_wall_offset_ms = tl.clock_offset_ms();
