@@ -48,9 +48,25 @@ at the time of writing that is libavcodec 63 against OBS's 62, and Qt 6.11.2
 against 6.11.1. A second Qt is the worse of the two: the docks attach to the
 host's `QApplication`, and a duplicate `QtCore` has none.
 
-So take the dependencies from **obs-deps at the version OBS itself pins**,
-which is in `CMakePresets.json` in the OBS source under the `dependencies`
-preset. For OBS 32.2.2 that is `2026-07-15`:
+`scripts/setup-mac-build.sh` does all of the below, and configures `build-obs`
+against it:
+
+```sh
+./scripts/setup-mac-build.sh
+cmake --build build-obs --config Release --target obs-multisite -j
+```
+
+**Put the dependencies somewhere durable.** The script uses
+`~/Library/Caches/obs-multisite-build`. They were once fetched into a temporary
+directory, which macOS clears on reboot — after which CMake still held the old
+paths and the build failed with `obs-module.h not found in LIBOBS_INCLUDE_DIR`,
+naming a directory that had simply ceased to exist. The script also notices
+that case and reconfigures from scratch rather than failing in terms of Qt.
+
+The manual version, for reference and for anyone not on a Mac laptop. Take the
+dependencies from **obs-deps at the version OBS itself pins**, which is in
+`CMakePresets.json` in the OBS source under the `dependencies` preset. For OBS
+32.2.2 that is `2026-07-15`:
 
 ```sh
 OBS_TAG=32.2.2; DEPS_VER=2026-07-15
