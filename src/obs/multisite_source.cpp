@@ -615,6 +615,32 @@ static std::shared_ptr<CmafDecoder> get_decoder(SourceCtx* ctx) {
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     std::unique_lock<std::mutex> lk(ctx->dq_mtx);
+
+    // A HOLD MUST NOT CONSUME PROGRAMME.
+    //
+    // pause() stops delivery and stops fetching new segments, but the decoder
+    // keeps decoding the fragments it already holds. Those frames used to reach
+    // the wait below, time out after 250 ms and be DROPPED — so holding quietly
+    // ate programme, and resume continued from wherever the decoder had got to
+    // rather than from where the picture stopped. Measured at 0.20 s lost after
+    // a 1.4 s hold, 1.09 s after 11 s and 3.90 s after 67 s, each matching the
+    // frames dropped across that hold to within a frame or two.
+    //
+    // A recorder freezes the READ head and keeps the write head going. Parking
+    // the producer here freezes the reader properly: the decoder stops pulling,
+    // nothing is decoded, nothing is discarded, and the queue still holds the
+    // programme either side of the hold.
+    //
+    // Polled rather than waited on outright. `flushing` and `running` are what
+    // a stop or a seek uses to release a parked producer — stop_playback() and
+    // after_jump() both set flushing before they join the decoder's worker, so
+    // the deadlock this 250 ms timeout was standing in for is already defended
+    // by the flag that was always the real defence. Re-checking every 100 ms
+    // means even a missed notification cannot wedge the decoder, and a wedged
+    // decoder here is a frozen OBS.
+    while (ctx->paused.load() && ctx->running.load() && !ctx->flushing.load())
+        ctx->dq_cv.wait_for(lk, std::chrono::milliseconds(100));
+    if (!ctx->running.load() || ctx->flushing.load()) return;
     // Bounded wait. This used to wait indefinitely for space, which meant the
     // decoder's worker thread could block inside this callback whenever
     // delivery stopped draining — after Stop, or while a seek tore the decoder
@@ -1999,43 +2025,32 @@ void SourceCtx::resume() {
         dropped = dq.size();
     }
 
-    // The session has to be running again before it will accept a seek.
-    paused = false;
+    // Re-anchor, but do NOT seek back.
+    //
+    // Seeking to the held position was tried (option (a)) and is worse than
+    // what it replaced. Seeking INTO a fragment means decoding and discarding
+    // from that fragment's start to the target, which measured 3.6 s of frozen
+    // picture for a 3.3 s skip and would be a whole segment at worst — the same
+    // multi-second freeze that got 82b4183 and 12a54e4 reverted. It also landed
+    // on the wrong fragment: 940.967 s requested, 948.013 s anchored, seven
+    // seconds forward, because the seek resolves through a media->wall mapping
+    // that is itself drifting (see the origin walk in BUGS #2).
+    //
+    // With the producer no longer discarding while held, the decoder has not
+    // advanced past the hold, so there is nothing to seek BACK to. What still
+    // has to happen is the playout clock: wall time moved on during the hold
+    // and media time did not, so the mapping is re-anchored on the next frame.
+    {
+        std::lock_guard<std::mutex> qlk(dq_mtx);
+        dq.clear();
+        // A frame already popped into the delivery loop's hand is from before
+        // the hold and would put the clock back where the hold started.
+        timeline_epoch++;
+    }
+    first_pts_ns = -1;
+    paused = false;                // delivery and feeding resume at once
     sess->resume();
-
-    bool sought = false;
-    if (resume_pts_ns > 0) {
-        const long long want_ms = (long long)(resume_pts_ns / 1000000);
-        if (sess->seek_to_media_ms(want_ms) != 0) {
-            // Flush, release the decoder for restart, re-anchor — exactly what
-            // a jog does, because this IS a jog: to the moment we stopped at.
-            after_jump((long long)sess->playhead_wall_ms());
-            sought = true;
-            mlog_info("source: RESUMED at %.3fs — continuing from where the "
-                      "picture stopped", (double)resume_pts_ns / 1e9);
-        } else {
-            const std::string why = sess->last_error();
-            mlog_warn("source: cannot resume at %.3fs (%s) — falling back to "
-                      "continuing from wherever the decoder reached, which "
-                      "will skip forward",
-                      (double)resume_pts_ns / 1e9,
-                      why.empty() ? "that moment is no longer stored"
-                                  : why.c_str());
-        }
-    }
-
-    if (!sought) {
-        // Nothing has been on screen yet, or the moment is no longer stored.
-        // The old behaviour: drop what is queued and let the next frame
-        // re-anchor. It skips, and now says so rather than doing it quietly.
-        {
-            std::lock_guard<std::mutex> qlk(dq_mtx);
-            dq.clear();
-            timeline_epoch++;
-        }
-        first_pts_ns = -1;
-        dq_cv.notify_all();
-    }
+    dq_cv.notify_all();            // release the producer parked above
 
     resumed_at_ns = os_gettime_ns();
     frames_at_resume = frames_out.load();
@@ -2055,10 +2070,9 @@ void SourceCtx::resume() {
               v_n, v_span_ms, a_n, a_span_ms);
 
     mlog_info("source: RESUMED at %.0fs behind live (state=%d, %zu queued "
-              "frame(s) discarded, %s)",
+              "frame(s) discarded, clock re-anchoring) — held from %.3fs",
               sess->behind_live_s(), (int)sess->play_state(), dropped,
-              sought ? "sought back to the held position"
-                     : "clock re-anchoring");
+              (double)resume_pts_ns / 1e9);
 }
 
 void SourceCtx::toggle_pause() {

@@ -258,17 +258,62 @@ playout anchored on; when those two differ, the clock has been pinned to a
 position already left". Anchored 45.525 s against pinned 45.188 s, 337 ms apart.
 Logged, never checked, so nobody saw it.
 
-**Fix applied 2026-09-19: resume seeks back to the frame that was on screen.**
-`resume()` now captures `last_out_pts_ns` and calls `seek_to_media_ms()` +
-`after_jump()` — the same path a jog takes. That makes the resume position an
-asserted quantity rather than a consequence of how long the decoder was left
-running, and because a seek DOES feed a new fragment, it re-pins the media clock
-against the fragment it actually landed on. One fix, both defects, which is the
-reason for doing it this way round rather than separating the pin first.
+**Option (a) was tried, measured, and REVERTED the same day. Do not try it
+again.** `resume()` sought back to `last_out_pts_ns` via `seek_to_media_ms()` +
+`after_jump()`. Two runs killed it:
 
-Falls back to the old clear-and-re-anchor when nothing has been on screen yet or
-the moment is no longer stored, and says so in the log rather than skipping
-quietly.
+```
+RESUMED at   9.367s -> anchored  6.019s   (backward, fragment start)
+RESUMED at 940.967s -> anchored 948.013s  (SEVEN SECONDS FORWARD)
+both runs: first 1s after resume — video 0 frame(s), audio 0 frame(s)
+           media clock pinned 3.6 s / 3.7 s AFTER the resume
+```
+
+Three separate faults, any one of them disqualifying:
+
+1. **It stalls.** Seeking INTO a fragment means decoding and discarding from
+   that fragment's start to the target: 3.3 s of skip cost 3.6 s of frozen
+   picture, and a whole segment is the worst case. That is the same
+   multi-second freeze that got `82b4183` and `12a54e4` reverted. A jog pays
+   this and an operator accepts it; a resume cannot.
+2. **It lands on the wrong fragment**, forward by 7 s in the second run, because
+   the seek resolves through the media->wall mapping — and that mapping drifts
+   (below). Broken clock, wrong seek, clock re-pinned wrong.
+3. **The target was wrong anyway.** `last_out_pts_ns` is assigned in
+   `deliver_video` at ENQUEUE time, not when a frame reaches OBS, so it runs a
+   delivery-lead ahead of the picture: `PAUSED ... on screen 8.967s` then
+   `RESUMED at 9.367s`, 400 ms out. It is the head of the queue, not the
+   picture. Anything that wants "where the picture is" needs a different value.
+
+**The clock origin walks independently of all this, and is STILL OPEN.** Across
+942 s of pts the fragment wall advanced only 931.5 s, so the origin moved 10.5 s
+in one playback run. Fragment wall times and media pts disagree by roughly 1%.
+That is upstream of the resume path — it is about what wall time a fragment is
+recorded as starting at — and it is what makes seek-by-time land wrong. Separate
+defect, not yet diagnosed.
+
+**Fix applied instead (option (b)): the producer parks while held.**
+`enqueue_frame()` now parks the producer while `paused` is set, instead of
+timing out after 250 ms and dropping the frame. The decoder stalls naturally:
+nothing is decoded, nothing is discarded, and the decoder has not advanced past
+the hold — so there is nothing to seek back TO. `resume()` re-anchors the playout
+clock (wall time moved on during the hold, media time did not) and otherwise
+leaves the position alone.
+
+Parking is polled at 100 ms rather than waited on outright. `flushing` and
+`running` release a parked producer, and both `stop_playback()` and
+`after_jump()` set `flushing` before joining the decoder's worker — so the
+deadlock the 250 ms timeout stood in for is already defended by the flag that
+was always the real defence. The poll means even a missed notification cannot
+wedge the decoder, and a wedged decoder here is a frozen OBS.
+
+**Expected residual: about 370 ms.** Resume still clears the queue, which holds
+~367 ms of video, so that much is still skipped. It should now be CONSTANT
+rather than growing with the hold, which is the thing to check. Removing it
+means keeping the queue and re-timing it at resume — which is what `82b4183`
+did and why it was reverted. Worth revisiting ONLY because the reason it failed
+(stale frames tripping the stall resync, past a staleness check that compared a
+value with itself) has since been fixed — but not before this is measured.
 
 **Not yet verified.** 50/50 core tests pass and the plugin builds, but the suite
 does not reach `multisite_source.cpp`. What to look for: `RESUMED at X —
