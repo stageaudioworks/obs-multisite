@@ -31,6 +31,102 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.22-alpha
+
+**A second bucket, written independently.** The promise this tier makes is
+"never lost", not "never interrupted", and until now one bucket was one place
+for an event to go missing. A second storage target can now be configured and
+is written **independently** rather than mirrored from the first: two uploads
+from the same spool, each with its own confirmed position, so a stall or an
+outage at one target cannot hold the other up or leave it a step behind. The
+encoder dock says whether the copy is keeping up and, when it is not, why. A
+measured capacity burst can be run **before** an event, so spare uplink is a
+known number rather than a hope.
+
+**And the decoder reads from whichever copy is there.** LAN first, then the
+primary cloud, then the second — so a campus keeps playing through the loss of
+either bucket. A failover ends when the copy being read stops advancing, which
+is the condition that actually matters, rather than on a timer.
+
+**The decoder now behaves like a recorder.** This is the largest single change
+in the release and it took most of a day of measurement to get right. Holding
+playback used to quietly eat programme: the picture stopped but the decoder
+carried on, so resuming continued from wherever it had got to rather than from
+where you stopped it — 0.20 s lost after a 1.4 s hold, 1.09 s after 11 s, and
+3.90 s after 67 s. A hold now freezes the read head and leaves the write head
+running, the way a recorder does. Position loss after a hold is a constant
+~360 ms instead of a figure that grows with how long you held it.
+
+**Scrub the timeline, and it lands where you clicked.** Drag to scrub, nudge
+with the arrow keys, click anywhere. A click used to divide by the segment
+length and throw the remainder away, so it could land up to six seconds from
+where you made it; segments are the unit of transfer, not the unit of seeking.
+Seeking is now accurate to 21–58 ms, and seek-to-picture came down from several
+seconds to 77–263 ms — five separate faults, each measured before and after.
+The largest was the playout gate: every frame the seek was about to discard was
+first waited for at playout rate, so seeking 1.8 s into a fragment cost 1.8 s of
+real time doing nothing.
+
+**Times are elapsed, never a time of day.** A position in this project used to
+be a wall-clock instant, derived from a mapping between media time and time of
+day that was pinned, re-pinned and drifting — by about 1.1%, position-dependent,
+with the cue system resting on it. That entire concept is gone. A position is
+now the frame's own presentation timestamp: how far into the programme it sits,
+with time behind live for a stream that is still running. Nothing to pair,
+nothing to re-pin, nothing that can drift away from the picture. It is also what
+an operator actually wants to read, and it is how a Resi decoder presents it.
+The docks, the Pi player's page and the appliance's API all changed together.
+
+**Cues land on the moment, not the segment.** They now carry where they fall in
+the programme directly, so a jump to a cue goes to the cue rather than to the
+start of the six seconds containing it. Older cues, which carry only a time of
+day, are converted through the event's start — a conversion that is now exact,
+because it was the drifting mapping above that made it inexact. The change is
+additive and the protocol version is deliberately **not** bumped: an old build
+ignores the new field, a new build falls back to the old one, and there is no
+flag day in either direction.
+
+**Audio and video no longer part company after a seek.** Found on real hardware
+after the seek work landed. The sub-segment skip had been moved to where frames
+are made, which is right and is most of the speed-up, but it relied on frames
+arriving in presentation order — true where it used to live, false where it went.
+Audio always spoke first and claimed the shared origin ~311 ms ahead of video, so
+every video frame was measured from too early a start and kept 311 ms of picture
+the audio had already discarded. The measured interleave gap after a seek went
+from 300–319 ms to **1–17 ms**.
+
+**And playback no longer stalls under it.** The delivery queue was bounded by a
+frame count sized as "twelve frames is 400 ms at 30 fps" — but twelve frames
+span eleven intervals, so it held 367 ms against a 400 ms gate. A cap below the
+gate it feeds is a permanent jam. The bound is now a duration, the same for both
+streams, tied to the gate by a compile-time assertion so the two cannot drift
+apart again. It also removes a frame-rate dependence nobody had noticed: at
+60 fps the old twelve frames held 183 ms, under half the gate. The cost is real
+and is written down — about 93 MB of queued video at 1080p30 where it was 37 MB,
+which is the price of wanting a 400 ms lead at all.
+
+**Loading an event is a state you can see.** A load is acknowledged, says what
+it is doing, and asks before interrupting one already in progress. A pinned
+event is not reported ready until it is the thing actually playing, a pinned
+event plays as a recording whatever its manifest claims, and **Stop is no longer
+reported as a fault** — it is a thing you chose.
+
+**Storage cleanup does what the button says.** Deleting events older than N days
+previously appeared to do nothing, with no progress shown and nothing in the
+log. It now runs visibly, reports what it is removing, and says so in the log.
+
+**Smaller things.** The buffering readout quoted the wrong number. Both plugins
+say when a newer build exists. The bucket can be tested before an event instead
+of during one. Settings that had no explanation have one. `scripts/setup-mac-build.sh`
+stands up a macOS plugin build, including dependencies that survive a reboot.
+
+**A note on how this one was found.** Almost every fix above was measured before
+it was made and measured again after — and several times the first explanation
+was wrong and the instrumentation said so. The A/V split and the queue bound were
+both found by an operator on real hardware and diagnosed from log lines that had
+been printing the answer for weeks. Where something is a defensive fix rather
+than a diagnosis, `BUGS.md` says which.
+
 ## What's new in v0.1.21-alpha
 
 **Cues belong to the event, not to the main site.** A cue — "Sermon Start",
@@ -1186,6 +1282,13 @@ Either of these settles it, and both are one command:
   the daemon slaves to a clock, it does not hand one out.
 - **The relay has pushed live streams to YouTube** but has not been through a
   full event.
+- **The relay was not part of the elapsed-time change.** Positions are now
+  elapsed time throughout the encoder, the decoder, the docks and the appliance;
+  the relay was not revisited, so anywhere it reasons about time of day is
+  unreviewed rather than known-good.
+- **The encoder stamping a cue with its position is untested.** The behaviour is
+  straightforward and the round trip through storage is covered, but nothing in
+  the suite asserts that the encoder writes the right value in the first place.
 - **HEVC to a streaming site needs the site to speak Enhanced RTMP.** YouTube
   documents H.264, H.265 and AV1 for RTMP/RTMPS ingest, so an HEVC feed reaches
   it unchanged; somewhere that has never implemented the extension drops the
