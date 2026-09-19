@@ -796,6 +796,13 @@ static void deliver_loop(SourceCtx* ctx) {
         // getting it wrong here — a staleness check below the pin guards
         // nothing, and a frame dropped by the skip must not pin either.
         tl.adopt(ctx->timeline_epoch.load(), ctx->media_epoch.load());
+
+        // Sampled HERE: after adopt(), which is what CLEARS the clock on a new
+        // media timeline, and before the block below, which is what SETS it.
+        // Sampling it after the set instead made "the clock just became
+        // available" impossible to observe, and the pin line silently stopped
+        // appearing in the log at all — which is how this was noticed.
+        const bool had_clock = tl.have_clock();
         {
             // Inputs from the feed loop. A skip is only ever armed for the
             // fragment a seek landed on, and the queue was cleared and the
@@ -811,7 +818,6 @@ static void deliver_loop(SourceCtx* ctx) {
 
         const long long item_pts = item.is_video ? item.video.pts_ns
                                                  : item.audio.pts_ns;
-        const bool had_clock = tl.have_clock();
         switch (tl.consider(item_epoch, item_pts)) {
             case multisite::PlayoutTimeline::Action::Discard:     continue;
             case multisite::PlayoutTimeline::Action::DropForSkip: continue;
