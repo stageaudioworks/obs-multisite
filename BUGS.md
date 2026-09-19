@@ -340,8 +340,68 @@ healthy, everything up to our handoff is exonerated and the question moves to
 what OBS does with timestamps it accepted — which would be the first time that
 has been established rather than assumed.
 
-**Still unmeasured, deliberately:** nobody has yet run this against a real hold.
-Everything above is a reading waiting to be taken, not a finding.
+**READING TAKEN 2026-09-19, ~54 s hold on a pinned recording. The cushion is
+not too small — it is OVERWRITTEN 11 ms after it is set.**
+
+Raw, in order:
+
+```
+08:45:21.430 queue at resume held video 12 frame(s)/367 ms, audio 48 frame(s)/1003 ms
+08:45:21.430 RESUMED at 39207s behind live (dropped 60 queued frames, clock re-anchoring)
+08:45:21.431 playout anchored on first video frame (pts 6.088s)
+08:45:21.431 interleave gap this anchor: audio leads by 355 ms (cushion 500 ms, within the cushion)
+08:45:21.442 playout clock fell 50.4s behind (stall?) — re-anchored
+08:45:22.974 first 1s after resume — video 40 frame(s), 1300 ms of programme, min lead 66 ms;
+                                     audio 47 frame(s),  981 ms of programme, min lead 377 ms
+```
+
+**The cushion is exonerated.** The gap is 355 ms and the cushion is 500 ms, so
+it covers it with 145 ms to spare. The ~344 ms in `playout_clock.h` is confirmed
+as a real figure (355 here), and it also matches the "over by 352 ms" in the
+original report almost exactly.
+
+**The gap is a RESUME-ONLY phenomenon.** Measured at 0 ms at a fresh decoder
+start and 0 ms at a seek — both streams begin a new decoder at the same pts —
+and 355 ms only at a resume, on a decoder that has been running. Two anchors at
+decoder start landed on AUDIO; this resume landed on VIDEO, confirming the
+header's "audio on one resume and video on the next".
+
+**What actually happens: the stall resync fires 11 ms after the re-anchor and
+assigns a new base.** 50.4 s is the hold length; the threshold
+(`kClockResyncThresholdNs`) is 2 s, so ANY hold over two seconds guarantees this
+if a pre-hold timestamp reaches the delivery loop. The resync does
+
+```c
+new_base = now - (pts - first) + kMaxDeliveryLeadNs;   // 400 ms
+```
+
+which REPLACES the 500 ms cushion `anchor_pts` set 11 ms earlier with a 400 ms
+delivery lead, computed from whichever frame tripped it, and then rewrites every
+queued frame's timestamp against it. So the answer to "why does the cushion not
+cover the gap on resume" is that by the time the gap matters, the cushion is no
+longer there.
+
+**The damage is one-sided, and D4 is why.** Video was handed 1300 ms of
+programme in 1000 ms of wall clock — 1.3x real time — and its lead collapsed
+from ~400 ms to 66 ms. Audio ran at real time (981 ms in 1000 ms) with its lead
+intact at 377 ms. The queue reading is the reason the two are not alike: at
+resume video held 367 ms and audio 1003 ms, BOTH AT THEIR CAPS. D4 predicted
+"about 0.4 s and 1 s" from the 12/48 counts; measured 367 ms and 1003 ms. D4 is
+no longer a suspicion, it is a measurement, and it is coupled to this bug.
+
+**Still inferred, not measured:** that the resync's reassignment is what
+compressed video's lead. The readings are all consistent with it, but nothing
+yet records WHICH frame tripped the resync or what base it was computed against
+— a frame whose epoch survived the bump, or one whose timestamp was built from
+the pre-hold base that `resume()` never clears (it resets `first_pts_ns` and not
+`playout_base_ns`). That is the next two-line measurement, and it should be
+taken before anything is changed.
+
+**Note for whoever fixes this:** the lever this points at is the resync
+overwriting the base, NOT the anchor. Re-deriving the anchor is the trap this
+entry has already warned about three times, and this reading does not implicate
+it — one anchor, correctly placed, 355 ms of gap, a cushion big enough to hold
+it.
 
 **Earlier instrumentation that stays.** `PAUSED` now prints the pts of the last
 frame handed to OBS and the queue depth, and `RESUMED` prints what it continued
