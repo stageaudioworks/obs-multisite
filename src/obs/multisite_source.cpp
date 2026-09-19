@@ -361,6 +361,9 @@ struct SourceCtx : DecoderControls {
     // so the pts->wall mapping stays valid and must not be re-learned from a
     // fragment nobody fed. See PlayoutTimeline::adopt.
     std::atomic<uint64_t> media_epoch{0};
+    // Whether the wall time the media clock is pinned to was measured or
+    // estimated. See the feed loop, and BUGS #2's cue-accuracy note.
+    std::atomic<bool> restart_wall_estimated{false};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -816,9 +819,13 @@ static void deliver_loop(SourceCtx* ctx) {
             // fragment the seek asked for. The pts here must match the one the
             // playout anchored on in the line above it; when those two differ,
             // the clock has been pinned to a position already left.
-            mlog_info("source: media clock pinned — fragment wall %lld, "
+            mlog_info("source: media clock pinned — fragment wall %lld (%s), "
                       "first pts %.3fs (so pts 0 would be wall %lld)",
-                      tl.pin_wall_ms(), (double)tl.pin_base_pts_ns() / 1e9,
+                      tl.pin_wall_ms(),
+                      ctx->restart_wall_estimated.load()
+                          ? "ESTIMATED from seq x nominal duration"
+                          : "measured, from the manifest",
+                      (double)tl.pin_base_pts_ns() / 1e9,
                       tl.clock_offset_ms());
         }
         // Publish for the dock and the web remote.
@@ -1591,8 +1598,16 @@ static void feed_loop(SourceCtx* ctx) {
         // touch it: their wall times are correct, but by then the delivery
         // thread is several seconds behind and would pair them with the wrong
         // frames — which is the bug this replaced.
-        if (ctx->restart_wall_pending.exchange(false))
+        if (ctx->restart_wall_pending.exchange(false)) {
             ctx->restart_wall_ms = (long long)seg->starts_at_ms;
+            // Every displayed time and every cue position hangs off this
+            // pairing, so it matters whether the wall time was recorded by the
+            // encoder or worked out from seq * nominal duration. The estimate
+            // assumes every segment is exactly the nominal length; two pins
+            // taken 714 s apart on one recording disagreed by 7.94 s, which is
+            // 1.11% and would put a cue a minute out by the end of a service.
+            ctx->restart_wall_estimated = seg->starts_at_estimated;
+        }
         // Arming the skip is all the feed loop does here now. The base it
         // measures from is claimed by the delivery loop when it picks this up,
         // from a frame it has actually seen — rather than being reset from this

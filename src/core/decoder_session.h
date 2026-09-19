@@ -137,6 +137,15 @@ struct PlayableSegment {
     // Wall-clock time of the start of this segment, so the host can report the
     // playing time precisely rather than per-segment.
     int64_t  starts_at_ms = 0;
+    // Whether starts_at_ms was MEASURED (the manifest recorded this segment's
+    // at_ms) or ESTIMATED as event-start + seq * nominal-duration, which the
+    // fallback does when the segment has aged out of the manifest's rolling
+    // window. The estimate assumes every segment is exactly the nominal length,
+    // and every displayed clock and every cue position is built on this pairing
+    // — so a caller that cannot tell the two apart cannot tell a measured time
+    // from an arithmetic one. Measured first, estimated only when there is
+    // nothing to measure.
+    bool     starts_at_estimated = false;
     // Milliseconds into this segment at which playback should begin. Set after
     // a seek to a time that falls mid-segment; the host drops earlier frames.
     // Segments are the unit of transfer, but they need not be the unit of

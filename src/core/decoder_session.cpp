@@ -701,9 +701,16 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
             if (sg.duration_s > 0.1) out.duration_s = sg.duration_s;
             if (sg.at_ms > 0) out.starts_at_ms = sg.at_ms;
         }
-        if (out.starts_at_ms == 0 && m_started_at_ms.load() > 0)
+        if (out.starts_at_ms == 0 && m_started_at_ms.load() > 0) {
+            // No at_ms for this segment: it has aged out of the manifest's
+            // rolling window. Estimate it, and SAY it is an estimate — this
+            // number is what the media clock is pinned to, so an estimate that
+            // cannot be distinguished from a measurement puts every displayed
+            // time and every cue on arithmetic rather than on the event.
             out.starts_at_ms = m_started_at_ms.load() +
                 (int64_t)((double)want * m_segment_duration_s.load() * 1000.0);
+            out.starts_at_estimated = true;
+        }
         need_init = !m_init_sent;
         // Reading the init segment can fail — most often just after an event
         // change, when the head is ready but init.mp4 is still downloading.

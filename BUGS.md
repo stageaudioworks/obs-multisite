@@ -673,6 +673,56 @@ from.
 Without that figure the two candidate causes were indistinguishable and cost
 three rounds of guessing — keep it, and keep it honest.
 
+### 2b. The media->wall mapping is position-dependent, by ~1.1% — and the cue system rests on it
+
+**Status: OPEN. This is the one that matters for cues.** Entry 2's fixes make a
+hold behave; this decides whether a cue lands where it was placed.
+
+Two pins from one recording, both taken after genuine decoder restarts, on the
+build where the pin is otherwise correct:
+
+```
+pts   0.000 s -> segment wall 1789455009498
+pts 714.008 s -> segment wall 1789455715564
+```
+
+Wall advanced 706.066 s while media advanced 714.008 s. **Media runs 7.94 s fast
+over 714 s: 1.11%.** A cue stored against the wall clock therefore resolves to a
+media position that is wrong in proportion to its distance from wherever the
+clock was last pinned — about a minute out by the end of a 90-minute service.
+No amount of pause/resume correctness helps with this.
+
+**Prime suspect, now instrumented.** `DecoderSession::next_segment()` fills
+`starts_at_ms` from the manifest's `at_ms` when it can, and otherwise ESTIMATES
+it as `event_start + seq * nominal_duration` — which assumes every segment is
+exactly the nominal length. The manifest holds a rolling window (50 entries), so
+any older segment takes the estimate. That estimate was returned
+indistinguishably from a measured value, and it is what the media clock is
+pinned to.
+
+Note the ratio: 6067/6000 = 1.0111, and 182 frames at 30 fps is 6.0667 s. A GOP
+rounded to a frame count would make every segment 6.067 s of media while the
+estimate advances 6.000 s — which is the observed drift almost exactly. Not
+confirmed, but it is the first thing to check.
+
+**Instrumented 2026-09-19, measurement only:** `PlayableSegment` now carries
+`starts_at_estimated`, and the pin line says which it got:
+
+```
+media clock pinned — fragment wall N (measured, from the manifest), ...
+media clock pinned — fragment wall N (ESTIMATED from seq x nominal duration), ...
+```
+
+**How to read it.** If the far-into-the-event pin says ESTIMATED while the pts-0
+pin says measured, the drift is the estimate's nominal-length assumption and the
+fix is to stop estimating — carry real segment durations, or record at_ms for
+every segment rather than only the window. If BOTH say measured, then the
+encoder's recorded at_ms genuinely disagrees with media pts by 1.1% and the
+fault is upstream in what the encoder writes, which is a much bigger finding.
+
+Until this is settled, cue accuracy degrades with distance from the last pin,
+and the pin moves on every seek.
+
 ### 3. Clicking the timeline lands on the segment, not the moment
 
 **Status: FIXED.** The dock divided the clicked time by the segment length and
