@@ -106,6 +106,14 @@ struct Status {
     bool        was_live = false;       // seen live since it was loaded
     bool        interrupted = false;    // the encoder died rather than finished
 
+    // THE answer to "is what we are playing a recording rather than a live
+    // feed", straight from DecoderSession::plays_as_recording(). Do not
+    // re-derive it from `ended` and `interrupted` above: that expression is
+    // missing the pinned case, which is exactly how the OBS dock came to span
+    // its timeline wrongly for a pinned interrupted event. Anything that needs
+    // this question answered — the page included — reads this field.
+    bool        plays_as_recording = false;
+
     // ── Reliability readout ──────────────────────────────────────────────────
     double      buffered_ahead_s = 0.0;
     size_t      cached_segments = 0;

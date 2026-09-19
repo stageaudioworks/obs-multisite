@@ -273,14 +273,37 @@ resume can hand OBS an unbalanced batch.
 Both were reverted together; the resume path is back to clearing the queue and
 re-anchoring on the next frame, which is known to skip a little and to not stall.
 
-**The fix to attempt next.** Anchor BOTH streams on ONE reference at resume — the
-position that was being held — rather than letting each take its own first frame.
-That is a change to how the playout clock is established (`anchor_pts`,
-`first_pts_ns`, `playout_base_ns`, and the delivery loop's stall resync in
-`src/obs/multisite_source.cpp`), and it needs a test that asserts the two
-streams' anchors agree to within a frame after a resume. A time-balanced queue
-(the 12/48 asymmetry) is a separate, smaller question worth settling at the same
-time; it is not itself the cause.
+**SUPERSEDED — kept visible because it is the trap, not the fix.** What follows
+was written under the "two anchors" diagnosis that the CORRECTION above refutes.
+Read in order, this entry used to talk a reader out of the wrong fix and then
+hand it to them anyway as the next action; it is the fourth variant of the same
+misreading and it must not be implemented.
+
+> ~~Anchor BOTH streams on ONE reference at resume — the position that was being
+> held — rather than letting each take its own first frame. That is a change to
+> how the playout clock is established (`anchor_pts`, `first_pts_ns`,
+> `playout_base_ns`, and the delivery loop's stall resync in
+> `src/obs/multisite_source.cpp`), and it needs a test that asserts the two
+> streams' anchors agree to within a frame after a resume.~~
+
+There is nothing to make agree: `anchor_pts` already sets ONE `first_pts_ns` for
+both streams, and a test asserting the two anchors agree would pass today,
+against the unfixed bug, and prove nothing.
+
+**What to do next is a MEASUREMENT, not a change.** The cushion is supposed to
+absorb the interleave gap and on resume it demonstrably does not. Four candidates
+are named above and the logs so far cannot separate them: the 500 ms cushion
+itself, `kMaxDeliveryLeadNs`, the epoch bump, and frames released immediately
+because they are already due. The discriminating measurement is **what the audio
+path hands OBS in the first 500 ms after a resume** — how many frames and what
+pts span, not merely where the anchor landed. Take that reading before changing
+any arithmetic.
+
+Worth taking in the same pass: the 12/48 queue-cap asymmetry (D4) is what lets a
+resumed queue be unbalanced, so log both queue depths in MILLISECONDS at resume
+rather than in frames. If audio is holding ~1 s and video ~0.4 s, that is a
+measurement pointing at this symptom, and it also settles D4's open question with
+a number instead of an opinion. It is still not claimed to be the cause.
 
 **Instrumentation that stays.** `PAUSED` now prints the pts of the last frame
 handed to OBS and the queue depth, and `RESUMED` prints what it continued from.
@@ -1406,10 +1429,52 @@ argument.
 the snapshot and the dock's three hand-written copies are gone (the timeline
 span, the position text, and the cue-list times). The third was found only by
 grepping for the pattern after the first two were replaced — which is the
-argument for the sweep happening at all. Still outstanding: the status strings in
-`multisite_source.cpp` and `player.cpp` and the page's mapping in
-`src/appliance/web/app.js` classify independently, and a page that disagrees with
-its box is a smaller version of the same fault.
+argument for the sweep happening at all.
+
+**CORRECTION (2026-09-19) — what remains on the page is not what this entry
+said, and it is not cosmetic.** The line above named the page's
+`EVENT = {LIVE, RECORDING, INTERRUPTED}` mapping. That enum is used in exactly
+one place (`app.js:456-458`) and it badges entries in the EVENT LIST from the
+catalog's per-event state. That is a different question from "is what I am
+playing right now a recording", and replacing it would break the list. Leave it.
+
+The page's actual second copies were SIX expressions, not the mapping this entry
+named — and finding six when three were expected is the same lesson the dock
+taught, one layer out:
+
+- the timeline span, `s.ended ? (s.end_ms || s.live_ms) : s.live_ms`;
+- the timeline's right-hand label, `s.ended ? hhmmss(to) : ... + ' (now)'`;
+- the cue times, `const vod = !!s.ended || !!s.interrupted;`;
+- the position readout, `} else if (s.ended) {` — "elapsed of total" vs behind-live;
+- the transport, `const live = !s.ended;` — which offers "Catch up to now";
+- the readout row, `if (!s.ended) push('Behind the main site', ...)`.
+
+The first three came from reading the entry. The last three were found only by
+grepping `s.ended` after the first three were replaced — exactly how the dock's
+third copy surfaced. **Grep for the pattern after you think you are done; the
+count you started with is not the count.**
+
+Every one omitted the `pinned` term the authority carries (`is_vod` OR pinned),
+so for a pinned event the page spanned its timeline to a live edge that was not
+moving, printed cue times as times of day, offered "Catch up to now" for an
+event the operator had deliberately stepped away from, and reported how far
+behind live a recording was. The SAME defect the dock had.
+
+**DONE (2026-09-19).** `Status::plays_as_recording` is filled from
+`DecoderSession::plays_as_recording()` in `player.cpp`, served as
+`plays_as_recording` by `/api/status`, and all six page sites read it. The
+`EVENT` enum is untouched and now carries a comment saying what it is for, so
+the next sweep does not "finish the job" and break the event-list badges.
+
+`tests/test_decoder.cpp` (test 6) now covers the authority, which had no test at
+all — it was extracted and three call sites rewired without one. The assertion
+that matters pins the event that is CURRENTLY LIVE: the room is neither ended
+nor interrupted, so every hand-written copy evaluated to false, while
+`plays_as_recording()` is true. A test using an ended event — as the existing
+one did — passes for the bug and the fix alike.
+
+The status strings in `multisite_source.cpp` and `player.cpp` remain genuinely
+cosmetic and are the lowest-value part of D1.
 
 ### D2. Segment length — two fallbacks
 

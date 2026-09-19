@@ -464,11 +464,33 @@ int main() {
         CHECK(dec.live_event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB",
               "and which event that is, so a jump can be offered");
 
+        // Pinned to the OLD, ended event: a recording by either reading.
+        CHECK(dec.plays_as_recording(),
+              "a pinned ended event plays as a recording");
+
         // Unpinning returns to the room.
         dec.unpin();
         dec.poll(now.clock_ms);
         CHECK(dec.event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB", "unpin follows the room again");
         CHECK(!dec.live_elsewhere(), "and is no longer live-elsewhere");
+        CHECK(!dec.plays_as_recording(),
+              "and following a live room is not playing a recording");
+
+        // ── The case that separates the authority from its copies ───────────
+        // Pin the event that is CURRENTLY LIVE. The operator has stepped off
+        // the live edge deliberately, so this plays as a recording — but the
+        // room is not ended and not interrupted, so the hand-written
+        // `ended || interrupted` that the dock and the appliance page each
+        // carried evaluates to FALSE here. Every one of those copies was
+        // therefore wrong in exactly this case, and a test using an ENDED
+        // event (as the one above does) passes for the bug and the fix alike.
+        dec.pin_event("01EVENTNEWBBBBBBBBBBBBBBBB");
+        const RoomState pinned_live = dec.poll(now.clock_ms);
+        CHECK(!is_vod(pinned_live),
+              "the room itself is not a recording: neither ended nor interrupted");
+        CHECK(dec.plays_as_recording(),
+              "yet a pinned event plays as a recording — the case the "
+              "hand-written copies got wrong");
     }
 
     std::printf("== 7. Clean end is reported as Ended ==\n");

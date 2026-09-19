@@ -17,6 +17,10 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 // Matches multisite::RoomState.
 const ROOM = { UNKNOWN: 0, OFFLINE: 1, LIVE: 2, ENDED: 3, INTERRUPTED: 4 };// Matches multisite::EventState.
+// Per-event state from the catalog, for badging rows in the EVENT LIST below.
+// This is NOT "is what I am playing now a recording" — that question has one
+// answer, s.plays_as_recording, and this enum must not be pressed into
+// answering it. See BUGS.md D1.
 const EVENT = { UNKNOWN: 0, LIVE: 1, RECORDING: 2, INTERRUPTED: 3 };
 
 // Where an operator is sent when a newer build exists: the releases page lists
@@ -198,9 +202,10 @@ function drawStatus() {
     sub = 'Holding the picture. Still downloading.';
   } else if (s.buffering) {
     sub = 'Gathering enough to start…';
-  } else if (s.ended) {
-    // A finished recording has an end, so it reports position out of length
-    // the way a media player does. "Behind live" means nothing here.
+  } else if (s.plays_as_recording) {
+    // A recording has an end, so it reports position out of length the way a
+    // media player does. "Behind live" means nothing here — and that is true
+    // of a PINNED event too, while the room it came from is still live.
     const into = s.started_ms ? s.playhead_ms - s.started_ms : 0;
     sub = `${elapsed(into)} of ${elapsed(s.total_ms)}` +
           (s.at_end ? ' · at the end' : '');
@@ -235,7 +240,10 @@ function drawStatus() {
 }
 
 function drawTransport(s) {
-  const live = !s.ended;
+  // Whether "now" is somewhere this transport can go. Pinned to a past event,
+  // it is not: the button has to offer the end of the recording, not the live
+  // edge of a room the operator deliberately stepped away from.
+  const live = !s.plays_as_recording;
   $('#btn-play').disabled = !s.configured || (s.playing && !s.paused);
   $('#btn-hold').disabled = !s.playing || s.paused;
   $('#btn-stop').disabled = !s.playing;
@@ -250,7 +258,10 @@ function drawTransport(s) {
 // live edge and necessarily grows.
 function drawTimeline(s) {
   const from = s.earliest_ms || s.started_ms;
-  const to = s.ended ? (s.end_ms || s.live_ms) : s.live_ms;
+  // s.plays_as_recording, not s.ended: a pinned event is played as a recording
+  // while the room is still live, and spanning it to the live edge made the bar
+  // grow under a playhead that was not moving.
+  const to = s.plays_as_recording ? (s.end_ms || s.live_ms) : s.live_ms;
   const el = $('#timeline');
   if (!from || !to || to <= from) {
     el.dataset.from = ''; el.dataset.to = '';
@@ -284,7 +295,8 @@ function drawTimeline(s) {
 
   $('#tl-head').style.left = pct(s.playhead_ms) + '%';
   $('#tl-left').textContent = hhmmss(from);
-  $('#tl-right').textContent = s.ended ? hhmmss(to) : hhmmss(to) + ' (now)';
+  $('#tl-right').textContent =
+    s.plays_as_recording ? hhmmss(to) : hhmmss(to) + ' (now)';
 }
 
 function drawCues(s) {
@@ -293,7 +305,7 @@ function drawCues(s) {
   if (!markers.length) { box.innerHTML = ''; return; }
   // A recording's cue times run 00:00 to the end of the event; live they are
   // times of day. Same rule the playhead readout follows.
-  const vod = !!s.ended || !!s.interrupted;
+  const vod = !!s.plays_as_recording;
   const started = s.started_ms || 0;
   box.innerHTML = markers.map((m) => {
     const passed = m.at_ms && s.playhead_ms && m.at_ms <= s.playhead_ms;
@@ -333,7 +345,9 @@ function drawReadout(s) {
   push('Could keep going for', spoken(s.buffered_ahead_s),
        offline || (s.playing && !s.paused && s.buffered_ahead_s < 30));
   push('Ready on disk', s.cached_segments ? spoken(s.cached_segments * 6) : '—');
-  if (!s.ended) push('Behind the main site', spoken(s.behind_live_s));
+  // Meaningless against a recording: there is no live edge to be behind.
+  if (!s.plays_as_recording)
+    push('Behind the main site', spoken(s.behind_live_s));
   push('Picture', s.video_width ? `${s.video_width}×${s.video_height}` : '—');
   push('Sound', s.audio_channels ? s.audio_channels + ' channels' : '—');
   // Where the sound is actually going, not just where it was asked to go. The

@@ -71,6 +71,9 @@ json status_json(const Player& player) {
     j["at_end"]      = s.at_end;
     j["was_live"]    = s.was_live;
     j["interrupted"] = s.interrupted;
+    // The authority's own answer, so the page never has to assemble it from the
+    // two fields above — that expression omits the pinned case.
+    j["plays_as_recording"] = s.plays_as_recording;
 
     j["buffered_ahead_s"]  = s.buffered_ahead_s;
     j["cached_segments"]   = (unsigned long long)s.cached_segments;

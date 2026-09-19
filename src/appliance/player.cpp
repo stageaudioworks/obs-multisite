@@ -1941,6 +1941,7 @@ void Player::status(Status& out) const {
     out.at_end      = sess->at_end();
     out.was_live    = sess->was_live_this_session();
     out.interrupted = sess->was_interrupted();
+    out.plays_as_recording = sess->plays_as_recording();
 
     out.live_ms     = sess->live_wall_ms();
     out.earliest_ms = sess->earliest_wall_ms();
