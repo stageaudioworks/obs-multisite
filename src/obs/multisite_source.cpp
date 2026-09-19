@@ -833,18 +833,17 @@ static void deliver_loop(SourceCtx* ctx) {
         if (!had_clock && tl.have_clock()) {
             const long long first_pts =
                 item.is_video ? item.video.pts_ns : item.audio.pts_ns;
-            const long long w = ctx->restart_wall_ms.load();
-            const long long pinned = w > 0 ? w - first_pts / 1000000 : 0;
-            mlog_info("source: media clock origin %lld (from the event start) — "
-                      "fragment pin would have said %lld (wall %lld %s, first "
-                      "pts %.3fs), a difference of %lld ms",
-                      (long long)tl.clock_offset_ms(), pinned, w,
-                      ctx->restart_wall_estimated.load()
-                          ? "ESTIMATED from seq x nominal"
-                          : "measured",
-                      (double)first_pts / 1e9,
-                      pinned > 0
-                          ? (long long)tl.clock_offset_ms() - pinned : 0LL);
+            // Just the origin. The comparison against what a fragment pin
+            // would have said used to be printed here and was noise: this
+            // fires on the first frame after the timeline is adopted, which
+            // is before the feed loop has set restart_wall_ms for the new
+            // fragment, so it read a constant "would have said 0". The origin
+            // itself is sound — it comes from the event start and does not
+            // depend on which frame triggers it — and a misleading zero beside
+            // a correct number is worse than no number.
+            mlog_info("source: media clock origin %lld (from the event start), "
+                      "first frame pts %.3fs",
+                      (long long)tl.clock_offset_ms(), (double)first_pts / 1e9);
         }
 
         const long long item_pts = item.is_video ? item.video.pts_ns
@@ -1630,12 +1629,34 @@ static void feed_loop(SourceCtx* ctx) {
         // or the first frames of each fragment arrive late (visible as a burst
         // of lateness at every fragment boundary).
         static constexpr uint64_t kFeedLeadNs = 2500000000ULL;   // 2.5 s
+
+        // Wake for a JUMP, not only for the clock.
+        //
+        // This waited on `running` alone, so it slept in 20 ms slices straight
+        // through a seek, a hold and a stop. Feeding runs up to kFeedLeadNs
+        // ahead and then parks here until playout catches up, so a seek landing
+        // mid-park went unnoticed for as long as that lead — measured at two to
+        // four seconds from "went to" to "decoder started" on content that was
+        // ENTIRELY on disk, with the session never once refusing a segment.
+        // The wait was the whole of the delay; nothing was being downloaded and
+        // nothing was being decoded.
+        //
+        // Cheap to check: discontinuity_id() is a plain atomic load, and the
+        // decoder_started flag is cleared by the teardown a jump performs.
+        const uint64_t feeding_disc = sess->discontinuity_id();
+        bool jumped = false;
         while (ctx->running.load()) {
+            if (ctx->paused.load() || !ctx->decoder_started.load() ||
+                sess->discontinuity_id() != feeding_disc) { jumped = true; break; }
             const uint64_t elapsed = os_gettime_ns() - ctx->feed_start_ns;
             if (ctx->pushed_media_ns <= elapsed + kFeedLeadNs) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (!ctx->running.load()) break;
+        // The fragment in hand belongs to the position just left. Drop it and
+        // go round: the top of the loop handles the hold, and the next
+        // next_segment() serves the place we are actually going.
+        if (jumped) continue;
 
         // The FIRST fragment since the decoder started defines the media
         // timeline's offset from the wall clock. Later fragments must not
