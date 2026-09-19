@@ -1089,9 +1089,12 @@ void Player::deliver_loop() {
             const int64_t pts = item.is_video ? item.video.pts_ns
                                               : item.audio.pts_ns;
             if (base < 0) { m_seg_first_pts_ns = pts; base = pts; }
-            const long long segstart = m_seg_starts_at_ms.load();
-            if (segstart > 0)
-                m_playing_at_ms = segstart + (pts - base) / 1000000LL;
+            // The position IS the frame's pts: how far into the programme it
+            // sits. This used to be the segment's recorded wall time plus the
+            // offset within it, which needed the segment's at_ms to be right —
+            // and for anything outside the manifest's rolling window that was
+            // an estimate that drifted (BUGS #2b). A frame knows where it is.
+            m_playing_at_ms = pts / 1000000LL;
             // The segment of the frame going to air, from the frame itself. A
             // cue is placed with this rather than a clock reading, because the
             // media clock is re-pinned on every seek.
@@ -1936,18 +1939,21 @@ void Player::status(Status& out) const {
     out.interrupted = sess->was_interrupted();
     out.plays_as_recording = sess->plays_as_recording();
 
-    out.live_ms     = sess->live_wall_ms();
-    out.earliest_ms = sess->earliest_wall_ms();
+    // Positions in MEDIA time — how far into the programme. started_ms stays a
+    // time of day: it is when the event was recorded, which is its identity,
+    // not a position within it. See BUGS #2b.
+    out.live_ms     = sess->live_media_ms();
+    out.earliest_ms = sess->earliest_media_ms();
     out.started_ms  = sess->event_started_ms();
-    out.end_ms      = sess->end_wall_ms();
-    if (out.ended && out.end_ms > 0 && out.started_ms > 0)
-        out.total_ms = out.end_ms - out.started_ms;
+    out.end_ms      = sess->end_media_ms();
+    // Media time begins at zero, so the end IS the length.
+    if (out.ended && out.end_ms > 0) out.total_ms = out.end_ms;
 
     // The delivered time is the honest one — it is what is actually on the
     // screen. Fall back to the playhead before anything has gone out.
     const long long playing_at = m_playing_at_ms.load();
     out.playhead_ms = playing_at > 0 ? playing_at
-                                     : (long long)sess->playhead_wall_ms();
+                                     : (long long)sess->playhead_media_ms();
     // Never report past the end of a recording: once playback runs past the
     // last segment the playhead points at a position that does not exist.
     if (out.ended && out.end_ms > 0 && out.playhead_ms > out.end_ms)
@@ -1971,9 +1977,12 @@ void Player::status(Status& out) const {
     if (out.last_error.empty()) out.last_error = sess->last_error();
 
     for (const auto& span : sess->cached_ranges()) {
-        const int64_t a = sess->wall_clock_ms(span.first);
-        const int64_t b = sess->wall_clock_ms(span.second);
-        if (a > 0 && b >= a) out.cached_spans.emplace_back((long long)a,
+        // [start, END boundary] and >= 0, for the reasons given in the OBS
+        // source: the far edge is the boundary AFTER the last segment, and
+        // segment 0 sits at media time 0 so a `> 0` guard would drop it.
+        const int64_t a = sess->media_ms_for_seq(span.first);
+        const int64_t b = sess->media_ms_for_seq(span.second + 1);
+        if (a >= 0 && b >= a) out.cached_spans.emplace_back((long long)a,
                                                            (long long)b);
     }
 

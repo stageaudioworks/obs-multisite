@@ -37,14 +37,8 @@ let clockSkewMs = 0;
 
 /* ── Small helpers ───────────────────────────────────────────────────────── */
 
-function hhmmss(ms) {
-  if (!ms) return '--:--:--';
-  const d = new Date(ms);
-  return d.toLocaleTimeString('en-GB', { hour12: false });
-}
-
-// Elapsed time within an event: "4:05", or "1:24:15" for a long one. Distinct
-// from hhmmss(), which is a time of day.
+// Elapsed time within an event: "4:05", or "1:24:15" for a long one. This is
+// how every position on this page is stated.
 function elapsedClock(ms) {
   if (!ms || ms < 0) ms = 0;
   const t = Math.floor(ms / 1000);
@@ -186,7 +180,7 @@ function drawStatus() {
 
   // ── The reading that matters ───────────────────────────────────────────
   const clock = $('#clock');
-  clock.textContent = hhmmss(s.playhead_ms);
+  clock.textContent = elapsedClock(s.playhead_ms);
   // While a jump is in flight the time shown is where playback is GOING, not
   // where the picture is. Say so rather than letting it read as fact.
   clock.classList.toggle('provisional', !!s.seek_target_ms);
@@ -206,8 +200,10 @@ function drawStatus() {
     // A recording has an end, so it reports position out of length the way a
     // media player does. "Behind live" means nothing here — and that is true
     // of a PINNED event too, while the room it came from is still live.
-    const into = s.started_ms ? s.playhead_ms - s.started_ms : 0;
-    sub = `${elapsed(into)} of ${elapsed(s.total_ms)}` +
+    // playhead_ms IS how far in, so there is no event start to subtract. It
+    // used to be a time of day and this line turned it back into a position —
+    // the conversion that drifted.
+    sub = `${elapsed(s.playhead_ms)} of ${elapsed(s.total_ms)}` +
           (s.at_end ? ' · at the end' : '');
   } else if (s.link_known && s.link_health === 2 && s.buffered_ahead_s > 1) {
     // The internet is gone but the buffer still has content: the one thing an
@@ -257,7 +253,11 @@ function drawTransport(s) {
 // whole event and it must not move; while live the right-hand edge is the
 // live edge and necessarily grows.
 function drawTimeline(s) {
-  const from = s.earliest_ms || s.started_ms;
+  // Media time, and `|| started_ms` would be two faults at once: it mixes a
+  // position with a time of day, and it treats earliest_ms === 0 as absent
+  // when 0 is exactly where a recording with its first segment still in
+  // storage begins. Explicit, and numeric.
+  const from = (typeof s.earliest_ms === 'number') ? s.earliest_ms : 0;
   // s.plays_as_recording, not s.ended: a pinned event is played as a recording
   // while the room is still live, and spanning it to the live edge made the bar
   // grow under a playhead that was not moving.
@@ -294,9 +294,9 @@ function drawTimeline(s) {
     .join('');
 
   $('#tl-head').style.left = pct(s.playhead_ms) + '%';
-  $('#tl-left').textContent = hhmmss(from);
+  $('#tl-left').textContent = elapsedClock(from);
   $('#tl-right').textContent =
-    s.plays_as_recording ? hhmmss(to) : hhmmss(to) + ' (now)';
+    s.plays_as_recording ? elapsedClock(to) : elapsedClock(to) + ' (now)';
 }
 
 function drawCues(s) {
@@ -320,8 +320,9 @@ function drawCues(s) {
     const who = m.author
       ? ' <span class="muted">' + escapeHtml(m.author) + '</span>' : '';
     // Elapsed for a recording; time of day only while following a live event.
-    const when = (media !== null && vod) ? elapsedClock(media)
-               : (m.at_ms ? hhmmss(m.at_ms) : '');
+    // Elapsed whether live or recorded: a cue means "this moment in the
+    // service", and that reads the same either way.
+    const when = (media !== null) ? elapsedClock(media) : '';
     return `<button class="${passed ? 'passed' : ''}" data-marker="${escapeHtml(m.id)}">
               ${escapeHtml(m.label)}${who} <span class="muted">${when}</span>
             </button>`;
@@ -442,7 +443,7 @@ timeline.addEventListener('pointermove', (e) => {
   if (!from || !to) { $('#tl-hover').textContent = ''; return; }
   const r = timeline.getBoundingClientRect();
   const at = from + ((e.clientX - r.left) / r.width) * (to - from);
-  $('#tl-hover').textContent = hhmmss(at);
+  $('#tl-hover').textContent = elapsedClock(at);
 });
 timeline.addEventListener('pointerleave', () => { $('#tl-hover').textContent = ''; });
 
