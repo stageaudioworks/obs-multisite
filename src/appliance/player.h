@@ -274,7 +274,10 @@ public:
     void resume();
     void toggle_pause();
     void jump_to_live();
-    void seek_to_time(long long wall_ms);
+    // Go to a position in the programme: milliseconds from the event's start.
+    // Was seek_to_time(wall_ms) and took a time of day, which had to be
+    // converted back to a position by machinery that drifted (BUGS #2b).
+    void seek_to_media(long long media_ms);
     void jog(double seconds);
     void set_delay_from_live(double seconds);
     void jump_to_marker(const std::string& id);

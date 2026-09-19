@@ -149,7 +149,11 @@ struct DecoderControls {
     virtual void play() = 0;
     virtual void stop_playback() = 0;
     virtual bool is_playing() const = 0;
-    // Seek by clock time (roughly one-second accuracy).
+    // Seek by TIME OF DAY. Kept for the Companion module, whose published
+    // action sends one and which is a separate repo on its own release cycle;
+    // changing what `ms` means underneath it would break every button already
+    // programmed into a Stream Deck. Everything inside this project uses
+    // seek_media() — a position, in media time. See BUGS #2b.
     virtual void seek_to_time(long long wall_ms) = 0;
     // Jog by a number of seconds, positive or negative.
     virtual void jog(double seconds) = 0;

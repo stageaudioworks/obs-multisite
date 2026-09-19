@@ -2796,24 +2796,28 @@ void SourceCtx::jog(double seconds) {
         // they intend to start from. Jog from where the playhead SITS rather
         // than refusing until something has gone to air.
         auto sess = get_session(this);
-        if (sess) from = (long long)sess->playhead_wall_ms();
+        if (sess) from = (long long)sess->playhead_media_ms();
     }
     if (from <= 0) {
         mlog_warn("source: cannot jog until the recording has loaded");
         return;
     }
-    seek_to_time(from + (long long)(seconds * 1000.0));
+    // Media time throughout: `from` is a position and so is the target. It
+    // briefly was not — playing_at_ms became a position while this still
+    // handed it to a wall-clock seek, which would have jogged to a moment
+    // fifty-six years before the event.
+    seek_media(from + (long long)(seconds * 1000.0));
 }
 
 void SourceCtx::set_delay_from_live(double seconds) {
     auto sess = get_session(this);
     if (!sess) return;
-    const int64_t live = sess->live_wall_ms();
+    const int64_t live = sess->live_media_ms();
     if (live <= 0) {
-        mlog_warn("source: live time not known yet");
+        mlog_warn("source: the live edge is not known yet");
         return;
     }
-    seek_to_time((long long)live - (long long)(seconds * 1000.0));
+    seek_media((long long)live - (long long)(seconds * 1000.0));
     mlog_info("source: holding %.0f minutes behind live", seconds / 60.0);
 }
 

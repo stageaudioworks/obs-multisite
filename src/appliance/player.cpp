@@ -1707,10 +1707,10 @@ void Player::jump_to_live() {
     plog_info("CAUGHT UP TO NOW");
 }
 
-void Player::seek_to_time(long long wall_ms) {
+void Player::seek_to_media(long long media_ms) {
     auto sess = session_ref();
     if (!sess) return;
-    const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
+    const int64_t got = sess->seek_to_media_ms((int64_t)media_ms);
     if (got == 0) {
         // The session knows which bound was hit; repeating a guess here is how
         // "past the end of the recording" came to be reported as storage
@@ -1744,25 +1744,25 @@ void Player::jog(double seconds) {
         // Nothing delivered yet — a recording loaded but not played, which is
         // exactly when an operator wants to move to their intended start
         // point. Jog from where the playhead SITS rather than refusing.
-        if (auto sess = session_ref()) from = (long long)sess->playhead_wall_ms();
+        if (auto sess = session_ref()) from = (long long)sess->playhead_media_ms();
     }
     if (from <= 0) {
         plog_warn("cannot jog until the recording has loaded");
         return;
     }
-    seek_to_time(from + (long long)(seconds * 1000.0));
+    seek_to_media(from + (long long)(seconds * 1000.0));
 }
 
 void Player::set_delay_from_live(double seconds) {
     auto sess = session_ref();
     if (!sess) return;
-    const int64_t live = sess->live_wall_ms();
+    const int64_t live = sess->live_media_ms();
     if (live <= 0) {
-        plog_warn("the live time is not known yet");
+        plog_warn("the live edge is not known yet");
         return;
     }
     m_delay_from_live_s = seconds;
-    seek_to_time((long long)live - (long long)(seconds * 1000.0));
+    seek_to_media((long long)live - (long long)(seconds * 1000.0));
     plog_info("holding %.0f minute(s) behind live", seconds / 60.0);
 }
 

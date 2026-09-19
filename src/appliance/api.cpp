@@ -461,7 +461,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         [&player](const HttpRequest&) { player.jump_to_live(); }));
     server.route("POST", "/api/seek", control("go to",
         [&player](const HttpRequest& req) {
-            player.seek_to_time((long long)num_param(req, "ms", 0));
+            player.seek_to_media((long long)num_param(req, "ms", 0));
         }));
     server.route("POST", "/api/jog", control("jog",
         [&player](const HttpRequest& req) {

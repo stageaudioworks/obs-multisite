@@ -80,9 +80,12 @@ void register_decoder_api(multisite::HttpServer& server) {
             decoder_jog(num_param(req, "seconds", 0.0));
         }));
 
+    // `ms` is a POSITION — milliseconds into the programme — because that is
+    // what this plugin's own page draws its timeline in now. It was a time of
+    // day, which the page then had to convert back (BUGS #2b).
     server.route("POST", path("decoder/seek"), decoder_control(
         [](const HttpRequest& req) {
-            decoder_seek_time((long long)num_param(req, "ms", 0.0));
+            decoder_seek_media((long long)num_param(req, "ms", 0.0));
         }));
 
     server.route("POST", path("decoder/delay"), decoder_control(
