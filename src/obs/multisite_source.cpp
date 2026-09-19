@@ -2311,12 +2311,14 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
 
     if (auto cur = sess->current_marker()) out.current_marker = cur->label;
     for (const auto& m : sess->markers())
-        // The clock time of the cue's CONTENT, derived from the event timeline
-        // rather than from whoever dropped it — the same thing the Pi player
-        // reports. A satellite whose clock is out then still draws its cue at
-        // the right place on every other site's timeline.
+        // Where in the programme, from the cue's own anchor — one answer, no
+        // conversion, and the same one every site resolves. The time of day
+        // rides along for the live display only.
         out.markers.push_back({ m.label, m.id, m.author,
-                                (long long)sess->wall_clock_ms(m.seq), m.seq });
+                                (long long)sess->wall_clock_ms(m.seq),
+                                (long long)multisite::marker_media_ms(
+                                    m, sess->event_started_ms()),
+                                m.seq });
 }
 
 void SourceCtx::event_listing(EventListing& out) const {

@@ -308,13 +308,20 @@ function drawCues(s) {
   const vod = !!s.plays_as_recording;
   const started = s.started_ms || 0;
   box.innerHTML = markers.map((m) => {
-    const passed = m.at_ms && s.playhead_ms && m.at_ms <= s.playhead_ms;
+    // Where in the programme this cue sits, from its own anchor. The box used
+    // to subtract the event start from a time of day, which needed a wall->media
+    // mapping that drifted 1.11% — about forty seconds by the end of an hour.
+    // -1 means a cue older than the field with no event start to convert it.
+    const media = (m.at_media_ms >= 0)
+      ? m.at_media_ms
+      : ((m.at_ms && started && m.at_ms >= started) ? m.at_ms - started : null);
+    const passed = media !== null && s.playhead_ms && started
+                 && (started + media) <= s.playhead_ms;
     const who = m.author
       ? ' <span class="muted">' + escapeHtml(m.author) + '</span>' : '';
-    const when = m.at_ms
-      ? ((vod && started && m.at_ms >= started)
-          ? elapsedClock(m.at_ms - started) : hhmmss(m.at_ms))
-      : '';
+    // Elapsed for a recording; time of day only while following a live event.
+    const when = (media !== null && vod) ? elapsedClock(media)
+               : (m.at_ms ? hhmmss(m.at_ms) : '');
     return `<button class="${passed ? 'passed' : ''}" data-marker="${escapeHtml(m.id)}">
               ${escapeHtml(m.label)}${who} <span class="muted">${when}</span>
             </button>`;

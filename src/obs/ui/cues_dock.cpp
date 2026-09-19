@@ -138,14 +138,25 @@ void CuesDock::refresh() {
     for (const auto& c : cues)
         sig += QString::fromStdString(c.id) + "|" + QString::fromStdString(c.label) +
                "|" + QString::fromStdString(c.author) + "|" +
-               QString::number((long long)c.at_ms) + "\n";
+               QString::number((long long)c.at_media_ms) + "\n";
     if (sig != m_signature) {
         m_signature = sig;
         const QString keep = m_cues->currentData().toString();
         m_cues->clear();
         for (const auto& c : cues) {
             QString when;
-            if (c.at_ms > 0) {
+            // Elapsed into the programme, from the cue's own media anchor —
+            // no subtraction of one clock from another, and nothing to drift.
+            // The time of day is shown only while following a live event,
+            // where an operator genuinely thinks in clock time.
+            if (c.at_media_ms >= 0 && vod) {
+                when = elapsed(c.at_media_ms);
+            } else if (c.at_media_ms >= 0) {
+                when = QDateTime::fromMSecsSinceEpoch((qint64)c.at_ms)
+                           .toString("HH:mm");
+            } else if (c.at_ms > 0) {
+                // A cue older than at_media_ms and with no event start to
+                // convert it. Fall back rather than show nothing.
                 when = (vod && started > 0 && c.at_ms >= started)
                     ? elapsed(c.at_ms - started)
                     : QDateTime::fromMSecsSinceEpoch((qint64)c.at_ms).toString("HH:mm");

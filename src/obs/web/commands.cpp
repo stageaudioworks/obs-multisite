@@ -406,7 +406,9 @@ std::string decoder_status_json() {
     json markers = json::array();
     for (const auto& m : s.markers)
         markers.push_back(json{{"label", m.label}, {"id", m.id},
-                               {"at_ms", m.at_ms}});
+                               {"author", m.author},
+                               {"at_ms", m.at_ms},
+                               {"at_media_ms", m.at_media_ms}});
     j["markers"] = std::move(markers);
 
     const DecoderSettings& cfg = decoder_settings();

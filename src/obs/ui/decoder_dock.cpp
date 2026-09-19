@@ -1661,7 +1661,13 @@ void DecoderDock::refresh() {
             // disagreeing is worse than either being wrong.
             const bool vod = s.plays_as_recording;
             QString when;
-            if (m.at_ms > 0) {
+            // The cue's own media anchor: where in the programme it sits, with
+            // no clock subtracted from another clock. Time of day only while
+            // following a live event.
+            if (m.at_media_ms >= 0) {
+                when = vod ? position(m.at_media_ms) : clock_time(m.at_ms);
+            } else if (m.at_ms > 0) {
+                // Older than at_media_ms, and no event start to convert it.
                 when = (vod && s.started_ms > 0 && m.at_ms >= s.started_ms)
                          ? position(m.at_ms - s.started_ms)
                          : clock_time(m.at_ms);

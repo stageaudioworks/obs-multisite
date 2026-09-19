@@ -20,10 +20,23 @@ struct CueEntry {
     std::string label;
     std::string id;
     std::string author;       // site name; empty reads as the main site
+    // Time of day. Display only, and only for a live event — an operator
+    // watching live thinks in clock time. Never used to place a cue.
     long long   at_ms = 0;
-    // The media segment it sits on. The timeline is drawn from THIS, not from
-    // at_ms: the two disagree on an event whose encoder restarted, and only the
-    // segment number agrees with what is on screen.
+    // WHERE IN THE PROGRAMME the cue sits, in milliseconds from the start of
+    // the event. This is what places it: on the timeline, in the list, and when
+    // an operator jumps to it.
+    //
+    // It replaces two worse answers that were both here. at_ms needed a
+    // wall->media conversion that drifted 1.11% (BUGS #2b). seq placed the cue
+    // to the nearest SEGMENT — up to six seconds — which is exactly the
+    // coarseness BUGS #3 had just removed from timeline clicks. This is exact
+    // and needs no conversion. -1 when the cue predates the field and no event
+    // start is known to convert its at_ms.
+    long long   at_media_ms = -1;
+    // The media segment it sits on. Still carried for merge and de-duplication
+    // (cues are ordered by seq, which no clock skew can reorder), not for
+    // placing anything.
     unsigned long long seq = 0;
 };
 

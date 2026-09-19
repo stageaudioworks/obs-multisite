@@ -1982,6 +1982,12 @@ void Player::status(Status& out) const {
         e.label = m.label;
         e.id    = m.id;
         e.author = m.author;
+        // The cue's OWN anchor. This used to throw it away and recompute a
+        // time from the segment NUMBER, which placed every cue on a segment
+        // boundary — up to six seconds out, the exact coarseness BUGS #3 had
+        // just removed from timeline clicks — and then drifted 1.11% on top.
+        e.at_media_ms = (long long)multisite::marker_media_ms(
+            m, sess->event_started_ms());
         e.at_ms = (long long)sess->wall_clock_ms(m.seq);
         out.markers.push_back(std::move(e));
     }

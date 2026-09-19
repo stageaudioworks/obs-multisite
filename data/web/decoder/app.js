@@ -276,9 +276,14 @@ function drawTimeline(s) {
     return `<i style="left:${a}%;width:${Math.max(0.4, b - a)}%"></i>`;
   }).join('');
 
+  // A cue's position comes from its media anchor — where in the programme it
+  // sits — placed on this timeline against the event start. Its own at_ms
+  // needed a wall->media mapping that drifted 1.11%, about forty seconds by the
+  // end of an hour. cueAt() falls back for cues older than the field.
   $('#tl-markers').innerHTML = (s.markers || [])
-    .filter((m) => m.at_ms >= from && m.at_ms <= to)
-    .map((m) => `<i style="left:${pct(m.at_ms)}%" title="${escapeHtml(m.label)}"></i>`)
+    .map((m) => ({ at: cueAt(m, s), label: m.label }))
+    .filter((m) => m.at !== null && m.at >= from && m.at <= to)
+    .map((m) => `<i style="left:${pct(m.at)}%" title="${escapeHtml(m.label)}"></i>`)
     .join('');
 
   $('#tl-head').style.left = pct(s.seek_target_ms || s.playhead_ms) + '%';
@@ -286,14 +291,31 @@ function drawTimeline(s) {
   $('#tl-right').textContent = s.ended ? hhmmss(to) : hhmmss(to) + ' (now)';
 }
 
+// Where a cue sits on this page's timeline, in the same units the timeline uses.
+//
+// at_media_ms is the cue's own anchor: milliseconds into the programme, exact
+// and needing no conversion. Placing it here is event start plus that. A cue
+// written before the field falls back to its recorded time of day, which is all
+// there is for it.
+function cueAt(m, s) {
+  if (m.at_media_ms >= 0 && s.started_ms) return s.started_ms + m.at_media_ms;
+  return m.at_ms || null;
+}
+
 function drawCues(s) {
   const box = $('#cues');
   const markers = s.markers || [];
   if (!markers.length) { box.innerHTML = ''; return; }
+  const vod = !!s.plays_as_recording;
   box.innerHTML = markers.map((m) => {
-    const passed = m.at_ms && s.playhead_ms && m.at_ms <= s.playhead_ms;
+    const at = cueAt(m, s);
+    const passed = at && s.playhead_ms && at <= s.playhead_ms;
+    // Elapsed into the programme for a recording; time of day while live.
+    const when = (m.at_media_ms >= 0 && vod)
+      ? elapsed(m.at_media_ms)
+      : (at ? hhmmss(at) : '');
     return `<button class="${passed ? 'passed' : ''}" data-marker="${escapeHtml(m.id)}">
-              ${escapeHtml(m.label)} <span class="muted">${hhmmss(m.at_ms)}</span>
+              ${escapeHtml(m.label)} <span class="muted">${when}</span>
             </button>`;
   }).join('');
 }

@@ -135,8 +135,11 @@ struct Status {
     int         audio_channels = 0;
     std::vector<std::string> channel_labels;
 
+    // at_media_ms is where in the programme the cue sits, and is what places
+    // it. at_ms is a time of day, for display while following a live event
+    // only. -1 means the cue predates at_media_ms and could not be converted.
     struct MarkerEntry { std::string label; std::string id; std::string author;
-                         long long at_ms; };
+                         long long at_ms = 0; long long at_media_ms = -1; };
     std::vector<MarkerEntry> markers;
     std::string current_marker;
 
