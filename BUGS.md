@@ -760,6 +760,71 @@ after the stall carries a time of day the content-time mapping cannot produce.
 Worth deciding deliberately which base a cue is in — the operator means "this
 moment in the programme", which argues for content time.
 
+### 2c. Seeking was slow and landed late — five faults, all measured
+
+**Status: FIXED 2026-09-19 and verified on real content.**
+
+| | before | after |
+|---|---|---|
+| seek to picture | 1816-5355 ms | 77-263 ms |
+| landing error | 1.5-6.7 s late | 21-58 ms |
+| decoder blocked on the queue | 3-4 s per seek | 0 ms |
+| "SEEKING..." | stuck to the 30 s timeout | clears on arrival |
+| "playout clock fell Ns behind" | every few seeks | gone |
+
+Found by measuring in stages rather than guessing, and that mattered: the
+first two fixes each removed a real delay and changed nothing an operator
+felt, because the wait MOVED rather than went.
+
+1. **The feed loop slept through jumps.** It waits until playout catches up
+   before feeding the next fragment, and tested `running` alone — so a seek
+   landing mid-wait was invisible for up to the 2.5 s feed lead. Decoder
+   restart went from 2060/3360/4120 ms to 23/30/30.
+
+2. **The delivery loop waited for frames it was about to discard.** It held
+   each frame until nearly due and THEN asked whether to keep it, so a seek
+   1.8 s into a fragment cost 1.8 s of real time. The wait now sits below the
+   decision.
+
+3. **Discarded frames still went through the queue.** Each was deep-copied
+   (~3 MB) and pushed through a 12-frame queue to be dropped at the far end,
+   so the decoder spent 92-97% of every skip ASLEEP waiting for space — 3808
+   ms of a 4021 ms skip, while the decode itself was 213 ms for 292 frames
+   (~1370 fps). The skip now runs in deliver_video/deliver_audio, before the
+   copy and before the queue: 432 frames in 193 ms. It also makes the rule
+   playout_timeline.h insists on — a frame dropped by the skip must not pin
+   the clock — true by construction, because such a frame never reaches the
+   delivery loop.
+
+4. **seek_to_media_ms picked the segment with the NOMINAL duration** while
+   everything else had moved to the measured one, so a click landed
+   `seq * (true - nominal)` late: proportional to depth, invisible near the
+   start. Predicted and observed agree — seq 44 predicted 1474 ms late and
+   measured 1539; seq 200 predicted 6700 and measured 6710. This is also what
+   stuck the interface: the arrival check allows 2.5 s, and past ~75 segments
+   in the overshoot exceeded it, so "SEEKING..." never cleared however long
+   the picture had been playing. Two sibling sites fixed with it
+   (seek_to_wall_ms's out-of-window fallback, and a cue's time of day to a
+   segment in add_marker), making FIVE places this one formula was written.
+
+5. **The pacing credited a fragment its full duration** even when the seek
+   discarded most of it, so the feed loop thought it was ahead by the whole
+   fragment when it was ahead by the remainder. It waited that much too long
+   for the next one, playback ran dry, and the 2 s stall resync fired — a
+   mechanism for network stalls, triggered by arithmetic. Only visible once
+   the skip got fast; while discarding 400 frames took four seconds, the loop
+   had spent that time waiting anyway.
+
+**Still open, deliberately.** A seek into a COLD cache waits for the segment
+to download — measured at 9.65 s once, correctly reported by the feed-wait
+line as "cache holds 9 segment(s)". `pump_downloads` does start from the new
+head, so the target is prioritised; the wait is the in-flight batch finishing
+first, because a pump computes its list under the lock and then downloads
+without it. Cancelling in-flight downloads on a seek would fix it and is NOT
+obviously safe: sticky cancellation is what broke End Broadcast for six days
+(entry above). Low value — it only bites on a cold cache — and worth doing
+only with that history in mind.
+
 ### 3. Clicking the timeline lands on the segment, not the moment
 
 **Status: FIXED.** The dock divided the clicked time by the segment length and
