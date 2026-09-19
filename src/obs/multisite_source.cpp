@@ -378,6 +378,13 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> jump_first_decode_ns{0};  // first frame out of it
     std::atomic<unsigned long long> jump_skipped{0};  // frames the skip dropped
     std::atomic<bool>     jump_reported{true};
+    // Nanoseconds the DECODER spent blocked inside enqueue_frame waiting for
+    // queue space. Discriminates the two candidate causes of a slow skip: if
+    // this is most of the skip, the 12-frame queue and its per-frame lock
+    // round-trip are the bottleneck and the decoder is being starved; if it is
+    // near zero, the decoder really is only managing ~70 fps and the fix is a
+    // different one entirely.
+    std::atomic<unsigned long long> enqueue_blocked_ns{0};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -678,6 +685,7 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     // they drift out of step and stall the decoder against a phantom full
     // queue.
     const bool want_video = item.is_video;
+    const uint64_t block_t0 = os_gettime_ns();
     const bool space = ctx->dq_cv.wait_for(
         lk, std::chrono::milliseconds(250), [ctx, want_video] {
             if (!ctx->running.load() || ctx->flushing.load()) return true;
@@ -688,6 +696,7 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
                 });
             return n < (want_video ? kMaxQueuedVideo : kMaxQueuedAudio);
         });
+    ctx->enqueue_blocked_ns += (os_gettime_ns() - block_t0);
     if (!ctx->running.load() || ctx->flushing.load()) return;
     if (!space) {
         // Delivery is not keeping up (or is stopped). Drop this frame.
@@ -994,11 +1003,14 @@ static void deliver_loop(SourceCtx* ctx) {
                     return (a && b && b > a) ? (long long)((b - a) / 1000000ULL) : 0LL;
                 };
                 mlog_info("source: seek to picture %lld ms — restart %lld, "
-                          "first decode +%lld, skipped %llu frame(s) +%lld, "
+                          "first decode +%lld, skipped %llu frame(s) +%lld "
+                          "(decoder blocked on the queue %llu ms of that), "
                           "handover +%lld",
                           ms(jump, now), ms(jump, dec), ms(dec, fst),
                           (unsigned long long)ctx->jump_skipped.load(),
-                          ms(fst, now), 0LL);
+                          ms(fst, now),
+                          (unsigned long long)(ctx->enqueue_blocked_ns.load() / 1000000ULL),
+                          0LL);
             }
             obs_source_output_video(ctx->source, &frame);
             ctx->frames_out++;
@@ -1660,6 +1672,7 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->jump_decoder_ns = os_gettime_ns();
             ctx->jump_first_decode_ns = 0;
             ctx->jump_skipped = 0;
+            ctx->enqueue_blocked_ns = 0;
             ctx->jump_reported = false;
             mlog_info("source: decoder started (init %zu bytes)",
                       seg->init.size());
