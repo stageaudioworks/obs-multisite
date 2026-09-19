@@ -436,7 +436,36 @@ Note what this did NOT touch: the anchor, the cushion, `playout_due_ns`, and the
 resync arithmetic are all unchanged. The lever was the one the reading pointed
 at.
 
-**NOT YET VERIFIED against a real hold.** The reasoning accounts for every
+**FIRST ATTEMPT AT THE FIX WAS WRONG — stamped in the right spirit, the wrong
+place (2026-09-19).** The epoch was stamped in `enqueue_frame`, AFTER its
+up-to-250 ms wait, on the argument that the wait is exactly where a resume
+overtakes a frame. That argument is backwards. A frame waiting there wakes up
+into the NEW epoch and gets stamped with it, so it still looks current — the bug
+again, with a label on it.
+
+Three resumes proved it, and the short one proved it best:
+
+```
+hold  1.4 s: NO resync (1.4 s is under the 2 s threshold), but
+             first 1s after resume — video min lead -441 ms  ← frames 441 ms LATE
+hold 11   s: playout clock fell 9.1s behind — re-anchored, video min lead  +97 ms
+hold 67   s: playout clock fell 62.3s behind — re-anchored, video min lead +389 ms
+```
+
+The short hold is the useful one: with no resync to mask it, the stale frames
+simply went out 441 ms late — which is the jump, seen directly for the first
+time. It also shows the resync was never the disease. It is a dressing over
+stale frames, and on the 67 s hold it happened to leave the leads healthy, which
+is why this fault reads as intermittent.
+
+**The epoch that matters is the one the TIMESTAMP was computed under**, since
+that is what makes the timestamp meaningful or stale. Now stamped beside
+`playout_due_ns` in `deliver_video`/`deliver_audio` (all four construction
+sites, companion audio included), reading the epoch BEFORE `playout_base_ns` so
+that a resume landing between the two reads errs towards dropping a good frame
+rather than passing a stale one.
+
+**STILL NOT VERIFIED against a real hold.** The reasoning accounts for every
 number in the log above, and 50/50 tests pass, but the suite does not cover
 `multisite_source.cpp` — this is plugin glue, not core — so the only proof is a
 hold and a resume on the real thing. What success looks like: NO "playout clock

@@ -91,6 +91,19 @@ struct PendingFrame {
     // the playout base eleven milliseconds after the resume anchored it with a
     // 500 ms cushion. That is BUGS #2 — the cushion never failed to cover the
     // interleave gap, it was overwritten before the gap mattered.
+    //
+    // WHERE it is stamped is the whole of the fix, and the first attempt got it
+    // backwards. Stamping in enqueue_frame — after its up-to-250 ms wait, on the
+    // argument that the wait is where a resume overtakes a frame — hands the
+    // waiting frame the epoch it wakes up into, which is the NEW one. That is
+    // the bug again with a label on it, and the logs showed the resync still
+    // firing at 9.1 s and 62.3 s after holds of 11 s and 67 s.
+    //
+    // The epoch that matters is the one the TIMESTAMP was computed under,
+    // because that is what makes the timestamp meaningful or stale. So it is
+    // stamped beside playout_due_ns in deliver_video/deliver_audio, and read
+    // BEFORE playout_base_ns so that a resume landing mid-read errs towards
+    // dropping a good frame rather than passing a stale one.
     uint64_t epoch = 0;
     DecodedVideoFrame video;
     DecodedAudioFrame audio;
@@ -634,16 +647,8 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
         if (item.is_video) ctx->dropped_video++; else ctx->dropped_audio++;
         return;
     }
-    // Stamped HERE, not where the frame was built: this thread may have waited
-    // above for up to 250 ms, and a resume can bump the epoch while it waits.
-    // A frame that waited across a resume carries a timestamp from the timeline
-    // it was built on, and stamping after the wait is what lets the delivery
-    // loop recognise it as stale instead of re-basing the clock on it.
-    //
-    // The stamp is taken under dq_mtx, which resume() also holds while it bumps
-    // the epoch and clears the queue, so a frame is never stamped half-way
-    // through a timeline change.
-    item.epoch = ctx->timeline_epoch.load();
+    // NOTE: item.epoch is stamped where the TIMESTAMP is computed, not here.
+    // Stamping here was tried and is wrong — see the field's comment.
     ctx->dq.push_back(std::move(item));
     lk.unlock();
     ctx->dq_cv.notify_all();
@@ -1017,10 +1022,18 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
     ctx->last_out_pts_ns = f.pts_ns;
+    // BEFORE the base, deliberately. A resume landing between these two reads
+    // gives this frame the OLD epoch and the NEW base, so it is dropped when it
+    // did not have to be — one frame, at a moment the picture is restarting
+    // anyway. The other order gives it the NEW epoch and the OLD base, which is
+    // a stale timestamp wearing a fresh label: exactly the frame that trips the
+    // stall resync and destroys the cushion.
+    const uint64_t epoch = ctx->timeline_epoch.load();
     const int64_t first = anchor_pts(ctx, f.pts_ns, true);
 
     PendingFrame item;
     item.is_video  = true;
+    item.epoch     = epoch;
     item.timestamp = multisite::playout_due_ns(
         ctx->playout_base_ns.load(), f.pts_ns, first);
     item.video     = f;              // owns its plane buffer (deep copy)
@@ -1047,7 +1060,9 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (!for_us && companions.empty()) return;
 
     // Anchored once, off the same clock as the video, so every track shares one
-    // playout base.
+    // playout base. The epoch is read before the base for the reason given in
+    // deliver_video.
+    const uint64_t epoch = ctx->timeline_epoch.load();
     const int64_t first = anchor_pts(ctx, f.pts_ns, false);
 
     // Packed multi-channel guard. OBS resamples every source to its GLOBAL
@@ -1083,6 +1098,7 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     for (obs_source_t* dest : companions) {
         PendingFrame item;
         item.is_video  = false;
+        item.epoch     = epoch;
         item.timestamp = ts;
         item.audio     = f;
         item.target    = dest;
@@ -1091,6 +1107,7 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (for_us) {
         PendingFrame item;
         item.is_video  = false;
+        item.epoch     = epoch;
         item.timestamp = ts;
         item.audio     = f;
         enqueue_frame(ctx, std::move(item));
