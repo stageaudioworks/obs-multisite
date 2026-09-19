@@ -72,24 +72,15 @@ public:
     //                nothing about the media changed, and no new fragment is
     //                fed.
     //
-    // When a resume cleared the pin, the mapping was rebuilt from the current
-    // position's pts against `restart_wall_ms` — which still held the wall time
-    // of the fragment fed at the LAST decoder restart, because a resume feeds
-    // none. The pair described two different fragments, so the origin moved by
-    // however far had been played since:
-    //
-    //   fragment wall 1789455501964, first pts 505.533 -> origin 1789454996431
-    //   fragment wall 1789455501964, first pts 510.133 -> origin 1789454991831
-    //   fragment wall 1789455501964, first pts 516.633 -> origin 1789454985331
-    //
-    // Same wall, advancing pts, origin walking back by exactly the pts advance.
+    // Conflating the two is what made every displayed clock walk backwards
+    // across a hold: a resume re-learned the pts->wall mapping from the current
+    // position's pts against a fragment wall nobody had refreshed, so the
+    // origin moved by however far had been played. That mapping is gone now
+    // (see the note above consider()), but the distinction still matters —
+    // frames in flight are stale after a resume, and the per-fragment state is
+    // not.
     void adopt(uint64_t timeline_id, uint64_t media_id) {
-        if (media_id != m_media_epoch) {
-            m_media_epoch     = media_id;
-            m_pin_base_pts    = kUnset;
-            m_restart_wall_ms = 0;
-            m_offset_ms       = kNoClock;
-        }
+        if (media_id != m_media_epoch) m_media_epoch = media_id;
         if (timeline_id != m_epoch) {
             m_epoch          = timeline_id;
             m_skip_base_pts  = kUnset;
@@ -111,31 +102,19 @@ public:
         if (skip_ns > 0) m_skip_ns = skip_ns;
     }
 
-    // The event's start on the wall clock, which IS the media clock's origin.
+    // NOTE: this class no longer holds a media clock.
     //
-    // Preferred over pinning a fragment, and it makes the pin's whole class of
-    // bug impossible. The encoder writes each segment's at_ms as
-    // `event_start + pts_offset`, so `origin = at_ms - pts` is always just
-    // event_start — there is nothing a fragment can tell us that this does not
-    // say more directly, and without needing the right fragment to be paired
-    // with the right pts. The decoder's fallback used to derive the same
-    // quantity as `event_start + seq * nominal_duration`, a second formula that
-    // agreed only while every segment was exactly nominal; measured at 67 ms
-    // per 6 s segment out, 1.11%, which put a cue about forty seconds wrong by
-    // the end of an hour. See BUGS #2b.
+    // It used to map a pts to a time of day, pinned from a fragment's recorded
+    // wall time and the first pts seen. Every position an operator saw was
+    // built on that pairing, and getting it wrong was this project's most
+    // persistent fault — eea902c paired one fragment's wall time with another
+    // fragment's pts, a resume re-pinned it against a stale fragment and walked
+    // the origin 24 s backwards, and the wall times themselves were estimated
+    // as seq * a NOMINAL segment length, drifting 1.11%.
     //
-    // Set once per media timeline. Later calls are ignored, the same as the
-    // fragment pin, so a segment arriving mid-playback cannot move the clock.
-    void set_event_start_ms(int64_t wall_ms) {
-        if (wall_ms > 0 && m_offset_ms == kNoClock) m_offset_ms = wall_ms;
-    }
-
-    // Wall-clock start of the first fragment after a restart. The pin's base is
-    // NOT reset here — it is reset only in restart(), alongside this — so the
-    // wall time and the pts it is paired with always describe the same fragment.
-    void set_restart_wall_ms(int64_t wall_ms) {
-        if (m_restart_wall_ms == 0) m_restart_wall_ms = wall_ms;
-    }
+    // A position is now the frame's own pts: how far into the programme it
+    // sits. Nothing has to be paired with anything, so none of those faults has
+    // a place to live. See BUGS #2b and #2c.
 
     enum class Action {
         Discard,      // from a timeline already left; believe nothing about it
@@ -148,44 +127,15 @@ public:
         // 1. Staleness, before anything reads the frame.
         if (frame_epoch != m_epoch) return Action::Discard;
 
-        // 2. Claim the pin's base — on the FIRST frame of the fragment, before
-        // the skip can drop it.
-        //
-        // It pairs with restart_wall_ms, which is that fragment's START, so it
-        // has to be the pts of the fragment's start too. Claiming it after the
-        // skip instead paired the fragment's start time with a pts up to a
-        // whole segment later, and every displayed time then read that much
-        // early. Measured: a seek asking for ...649732 landed correctly and
-        // reported ...647789, 1943ms early — exactly the skip.
-        //
-        // Still after the staleness check, never before it: a frame from a
-        // position already left must not define this.
-        if (m_pin_base_pts == kUnset) m_pin_base_pts = pts_ns;
-
-        // 3. The sub-segment skip.
+        // 2. The sub-segment skip.
         if (m_skip_ns >= 0) {
             if (m_skip_base_pts == kUnset) m_skip_base_pts = pts_ns;
             if (pts_ns - m_skip_base_pts < m_skip_ns) return Action::DropForSkip;
             m_skip_ns = -1;                      // arrived
         }
 
-        // 4. Pin the media clock, once — only if the event's own start was not
-        // available. Kept as a fallback for a session that cannot report one.
-        if (m_offset_ms == kNoClock && m_restart_wall_ms > 0)
-            m_offset_ms = m_restart_wall_ms - m_pin_base_pts / 1000000;
         return Action::Play;
     }
-
-    bool    have_clock()   const { return m_offset_ms != kNoClock; }
-    int64_t clock_offset_ms() const { return m_offset_ms; }
-    // Wall-clock time of a frame, once the clock is pinned.
-    int64_t wall_ms_for(int64_t pts_ns) const {
-        return m_offset_ms == kNoClock ? 0 : m_offset_ms + pts_ns / 1000000;
-    }
-    // What the pin was built from, for the log line that made these bugs
-    // visible in the first place.
-    int64_t pin_wall_ms()    const { return m_restart_wall_ms; }
-    int64_t pin_base_pts_ns() const { return m_pin_base_pts; }
 
 private:
     static constexpr int64_t kUnset = INT64_MIN;
@@ -193,9 +143,6 @@ private:
     uint64_t m_media_epoch = 0;
     int64_t  m_skip_ns        = -1;
     int64_t  m_skip_base_pts  = kUnset;
-    int64_t  m_pin_base_pts   = kUnset;
-    int64_t  m_restart_wall_ms = 0;
-    int64_t  m_offset_ms      = kNoClock;
 };
 
 } // namespace multisite

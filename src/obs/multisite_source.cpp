@@ -330,15 +330,16 @@ struct SourceCtx : DecoderControls {
     // fragment in. Every reading after that is the frame's own pts plus a
     // constant — no shared state between the two threads at all.
     static constexpr long long kOffsetUnset = LLONG_MIN;
-    std::atomic<long long> pts_wall_offset_ms{kOffsetUnset};
     // Wall time of the first fragment pushed since the decoder started, and a
     // flag consumed by that fragment. The flag matters: if the first fragment
     // has no wall time, this must stay unlatched and fall back to the
     // segment-granular clock — taking a LATER fragment's wall time would
     // pair it with the first fragment's pts and reintroduce exactly the
     // mispairing being fixed.
-    std::atomic<long long> restart_wall_ms{0};
-    std::atomic<bool>      restart_wall_pending{true};
+    // Set when the decoder restarts, so the next fragment hands over the
+    // event's start for the status snapshot. Once per restart: later fragments
+    // carry the same value and rewriting it every time is pointless work.
+    std::atomic<bool>      event_start_pending{true};
     // The skip's base and the media-clock pin's base used to live here as two
     // more atomics. They belong to PlayoutTimeline now — they are written only
     // by the delivery loop, and keeping them out here is what let the feed loop
@@ -363,10 +364,11 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> media_epoch{0};
     // Whether the wall time the media clock is pinned to was measured or
     // estimated. See the feed loop, and BUGS #2's cue-accuracy note.
-    std::atomic<bool> restart_wall_estimated{false};
     // The event's start on the wall clock — the media clock's origin. See
     // PlayoutTimeline::set_event_start_ms.
     std::atomic<long long> event_started_ms{0};
+    // Which media timeline the line above has already been said for.
+    uint64_t logged_media_epoch = ~0ULL;
     // How many times the feed loop asked for a segment and was refused. See
     // where it is reported: this is the "seeking is slow" measurement.
     std::atomic<unsigned long long> feed_waits{0};
@@ -544,7 +546,7 @@ struct SourceCtx : DecoderControls {
     // indication. Shared by seek and jump-to-live: jumping to live used to do
     // none of this, so it moved the picture with nothing on the dock to say
     // it had been asked to.
-    void after_jump(long long to_wall_ms);
+    void after_jump(long long to_media_ms);
 
     // Release the decoder and everything derived from the media timeline, so
     // the next fragment rebuilds both. Shared by the seek path and the poll
@@ -827,52 +829,21 @@ static void deliver_loop(SourceCtx* ctx) {
         // nothing, and a frame dropped by the skip must not pin either.
         tl.adopt(ctx->timeline_epoch.load(), ctx->media_epoch.load());
 
-        // Sampled HERE: after adopt(), which is what CLEARS the clock on a new
-        // media timeline, and before the block below, which is what SETS it.
-        // Sampling it after the set instead made "the clock just became
-        // available" impossible to observe, and the pin line silently stopped
-        // appearing in the log at all — which is how this was noticed.
-        const bool had_clock = tl.have_clock();
-        {
-            // Inputs from the feed loop. A skip is only ever armed for the
-            // fragment a seek landed on, and the queue was cleared and the
-            // decoder restarted for that seek, so the frame that claims the
-            // base here is genuinely that fragment's first.
-            // The skip is applied at the decoder now (dropped_by_skip), so a
-            // frame that reaches here is already one that should play. Only the
-            // per-fragment reset is still wanted.
-            tl.begin_fragment(-1);
-            const long long w = ctx->restart_wall_ms.load();
-            if (w > 0) tl.set_restart_wall_ms(w);
-            // Exact, and preferred: it is the anchor the encoder used.
-            tl.set_event_start_ms((int64_t)ctx->event_started_ms.load());
-        }
+        // A new media timeline means a new fragment: reset the per-fragment
+        // state. The skip itself is applied at the decoder now
+        // (dropped_by_skip), so a frame reaching here is already one that
+        // should play, and there is no clock to establish — positions are the
+        // frames' own pts. See BUGS #2b.
+        tl.begin_fragment(-1);
 
-        // Reported HERE, where the clock is established — not below consider(),
-        // which was the previous home and is wrong for the case that matters.
-        // After a seek the skip drops the first frames of the landing fragment,
-        // and each of those `continue`s past anything below it; the clock had
-        // already been set by then, so the line printed once at PLAY and never
-        // again on a seek. The origin is a property of the timeline, not of a
-        // frame surviving the skip.
-        //
-        // Both readings, because them disagreeing IS the diagnosis: the event
-        // start is exact, and the fragment pin drifts by however far the
-        // segment wall it would have used was estimated (BUGS #2b).
-        if (!had_clock && tl.have_clock()) {
-            const long long first_pts =
-                item.is_video ? item.video.pts_ns : item.audio.pts_ns;
-            // Just the origin. The comparison against what a fragment pin
-            // would have said used to be printed here and was noise: this
-            // fires on the first frame after the timeline is adopted, which
-            // is before the feed loop has set restart_wall_ms for the new
-            // fragment, so it read a constant "would have said 0". The origin
-            // itself is sound — it comes from the event start and does not
-            // depend on which frame triggers it — and a misleading zero beside
-            // a correct number is worse than no number.
-            mlog_info("source: media clock origin %lld (from the event start), "
-                      "first frame pts %.3fs",
-                      (long long)tl.clock_offset_ms(), (double)first_pts / 1e9);
+        // Said once per media timeline, because knowing the source received the
+        // event's start is worth a line and it is not otherwise visible.
+        if (ctx->media_epoch.load() != ctx->logged_media_epoch) {
+            ctx->logged_media_epoch = ctx->media_epoch.load();
+            mlog_info("source: playing event started %lld, first frame %.3fs in",
+                      (long long)ctx->event_started_ms.load(),
+                      (double)(item.is_video ? item.video.pts_ns
+                                             : item.audio.pts_ns) / 1e9);
         }
 
         const long long item_pts = item.is_video ? item.video.pts_ns
@@ -1708,9 +1679,7 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->pushed_media_ns = 0;
             // Also on a first start, not only on a restart: this is reached
             // without going through the teardown above.
-            ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
-            ctx->restart_wall_ms      = 0;
-            ctx->restart_wall_pending = true;
+            ctx->event_start_pending = true;
             ctx->jump_decoder_ns = os_gettime_ns();
             ctx->jump_first_decode_ns = 0;
             ctx->jump_skipped = 0;
@@ -1760,19 +1729,12 @@ static void feed_loop(SourceCtx* ctx) {
         // touch it: their wall times are correct, but by then the delivery
         // thread is several seconds behind and would pair them with the wrong
         // frames — which is the bug this replaced.
-        if (ctx->restart_wall_pending.exchange(false)) {
-            ctx->restart_wall_ms = (long long)seg->starts_at_ms;
-            // The event's own start, which is what the encoder anchored every
-            // segment's at_ms to. Preferred over the fragment pin below.
+        // The event's start, for the status snapshot. This block used to also
+        // capture the fragment's recorded wall time to pin a media clock with;
+        // that clock is gone and positions are the frames' own pts.
+        if (ctx->event_start_pending.exchange(false))
             ctx->event_started_ms = (long long)seg->event_started_at_ms;
-            // Every displayed time and every cue position hangs off this
-            // pairing, so it matters whether the wall time was recorded by the
-            // encoder or worked out from seq * nominal duration. The estimate
-            // assumes every segment is exactly the nominal length; two pins
-            // taken 714 s apart on one recording disagreed by 7.94 s, which is
-            // 1.11% and would put a cue a minute out by the end of a service.
-            ctx->restart_wall_estimated = seg->starts_at_estimated;
-        }
+
         // Arming the skip is all the feed loop does here now. The base it
         // measures from is claimed by the delivery loop when it picks this up,
         // from a frame it has actually seen — rather than being reset from this
@@ -2283,7 +2245,7 @@ void SourceCtx::jump_to_live() {
     sess->jump_to_live();
     // The same re-anchor a seek does. Jumping to live is a seek to the live
     // edge; it only ever looked different because it did none of this.
-    after_jump((long long)sess->playhead_wall_ms());
+    after_jump((long long)sess->playhead_media_ms());
     mlog_info("source: JUMPED TO LIVE (segment %llu)",
               (unsigned long long)sess->playback_head());
 }
@@ -2665,9 +2627,7 @@ void SourceCtx::stop_playback() {
     // or Play would interpret the next fragment's pts against an anchor from
     // before the stop.
     first_pts_ns        = -1;
-    pts_wall_offset_ms  = kOffsetUnset;
-    restart_wall_ms     = 0;
-    restart_wall_pending = true;
+    event_start_pending = true;
     seek_target_ms      = 0;
     awaiting_frames     = false;
     dq_cv.notify_all();
@@ -2708,16 +2668,14 @@ void SourceCtx::release_decoder_for_restart() {
     first_pts_ns     = -1;           // re-anchor the playout clock
     // The media timeline restarts with the new decoder, so the mapping from
     // pts to wall clock has to be learned again.
-    pts_wall_offset_ms   = kOffsetUnset;
-    restart_wall_ms      = 0;
-    restart_wall_pending = true;
+    event_start_pending = true;
     // The lead window measures the current clock, and the clock is about to be
     // re-anchored.
     lead_video_sum_ns = 0; lead_video_count = 0; lead_video_min_ns = INT64_MAX;
     lead_audio_sum_ns = 0; lead_audio_count = 0; lead_audio_min_ns = INT64_MAX;
 }
 
-void SourceCtx::after_jump(long long to_wall_ms) {
+void SourceCtx::after_jump(long long to_media_ms) {
     // Treat as a discontinuity: drop what is queued and re-anchor. `flushing`
     // releases the decoder if it is waiting for queue space, so the restart
     // that follows can never block.
@@ -2752,7 +2710,11 @@ void SourceCtx::after_jump(long long to_wall_ms) {
     // then jumped. The dock marks this as provisional until frames arrive, so
     // the operator sees the intent honoured at once without being told the
     // picture has already moved.
-    if (to_wall_ms > 0) playing_at_ms = to_wall_ms;
+    // A position, in media time, like the field it is being written into.
+    // This took a wall clock while playing_at_ms and seek_target_ms had already
+    // become positions — so a jump briefly published a 1.7-trillion-millisecond
+    // "position" until the first frame corrected it.
+    if (to_media_ms > 0) playing_at_ms = to_media_ms;
     action_started_ns = os_gettime_ns();
     poll_now          = true;    // fetch what the new position needs now
 
@@ -2762,7 +2724,7 @@ void SourceCtx::after_jump(long long to_wall_ms) {
     // recording is exactly who needs telling that the click landed. No frames
     // will arrive to answer it in that state, so the poll loop clears it on
     // the content being ready instead.
-    seek_target_ms  = to_wall_ms > 0 ? to_wall_ms : 0;
+    seek_target_ms  = to_media_ms > 0 ? to_media_ms : 0;
     awaiting_frames = true;
 }
 
@@ -2782,7 +2744,11 @@ void SourceCtx::seek_to_time(long long wall_ms) {
         }
         return;
     }
-    after_jump((long long)got);
+    // `got` is the wall time actually reached — this is the compatibility
+    // entry point and speaks times of day. Convert once, here, so nothing
+    // downstream has to know that.
+    const long long ev = (long long)sess->event_started_ms();
+    after_jump(ev > 0 && got >= ev ? (long long)got - ev : 0);
 
     mlog_info("source: went to %lld (%.0fs behind live)",
               (long long)got, sess->behind_live_s());
@@ -2842,23 +2808,20 @@ void SourceCtx::seek_media(long long media_ms) {
     // The same housekeeping a segment seek or a jog gets: flush what is queued,
     // release the decoder, re-anchor, and move the displayed time to where the
     // click is heading rather than where the picture still is.
-    after_jump((long long)sess->playhead_wall_ms());
+    after_jump((long long)sess->playhead_media_ms());
 
     // The target has to be measured the same way as the position it will be
     // compared against, or the two never meet.
     //
-    // after_jump above sets the target from playhead_wall_ms(), which is
-    // `event_start + seq * segment_ms` — SEGMENT granular. The arrival check
-    // compares it against playing_at_ms, which is `event_start + pts` — exact.
-    // Two derivations of one quantity, and they legitimately differ by most of
-    // a segment, which is more than the 2.5 s tolerance the check allows. So
+    // after_jump sets it from the playhead, which is SEGMENT granular. The
+    // arrival check compares it against playing_at_ms, which is the frame's own
+    // pts and therefore exact. Two derivations of one quantity, differing by up
+    // to most of a segment — more than the 2.5 s the check allows — so
     // "Going to..." never cleared and sat on screen until the 30 s timeout,
-    // long after the picture had arrived. Measured: a seek to 779.572 s set a
-    // target of event_start + 776576 against a position of event_start +
-    // 780032 — 3456 ms apart, and never converging.
+    // long after the picture had arrived.
     //
     // The exact position asked for is right here. Use it.
-    seek_target_ms = media_ms;      // media time, like the position it meets
+    seek_target_ms = media_ms;
 
     mlog_info("source: went to %.3fs on the media timeline", media_ms / 1000.0);
 }
@@ -2885,7 +2848,7 @@ void SourceCtx::seek(unsigned long long seq) {
     // release the decoder, re-anchor the clock, and set the position the dock
     // shows as provisional — so the click is confirmed the moment it lands
     // instead of being indistinguishable from a dropped one.
-    after_jump((long long)sess->playhead_wall_ms());
+    after_jump((long long)sess->playhead_media_ms());
     mlog_info("source: seeked to segment %llu (%.0fs behind live)", seq,
               sess->behind_live_s());
 }

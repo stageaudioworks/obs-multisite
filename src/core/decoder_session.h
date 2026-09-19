@@ -303,7 +303,6 @@ public:
     // are different things to an operator, and only this distinguishes them.
     bool    was_live_this_session() const { return m_saw_live.load(); }
     // Wall-clock time just past the last frame of the recording.
-    int64_t end_wall_ms() const;
     // True once playback has run past the last segment there is.
     bool    at_end() const;
 
@@ -326,6 +325,10 @@ public:
     int64_t earliest_media_ms() const;    // oldest still in storage
     int64_t end_media_ms() const;         // end of what exists = total length
 
+    // The wall-clock time of a segment. The LAST wall-clock accessor left, and
+    // it survives for one reason: cues written before at_media_ms existed carry
+    // only a time of day, and placing one needs this. Nothing about playback
+    // uses it — positions are media time throughout. See BUGS #2b.
     int64_t wall_clock_ms(uint64_t seq) const;
 
     // Milliseconds of programme per segment, MEASURED rather than assumed.
@@ -344,9 +347,6 @@ public:
     // window rather than one pair also averages out the per-entry rounding.
     // Falls back to the nominal only when no manifest has been read yet.
     int64_t segment_ms() const;
-    int64_t playhead_wall_ms() const;
-    int64_t live_wall_ms() const;
-    int64_t earliest_wall_ms() const;
     int64_t event_started_ms() const;
 
     // How far behind live the campus currently is, in seconds.

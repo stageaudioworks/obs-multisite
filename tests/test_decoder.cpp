@@ -665,13 +665,17 @@ int main() {
         CHECK(dec.wall_clock_ms(4) == expect4,
               "a position converts to the clock time of its content");
         CHECK(dec.seek(4), "seek to that position");
-        CHECK(dec.playhead_wall_ms() == expect4,
-              "playhead reports the clock time being shown");
-        CHECK(dec.live_wall_ms() > dec.playhead_wall_ms(),
-              "live edge is later than the playhead when behind");
-        std::printf("     (showing %lld ms into the epoch, live at %lld)\n",
-                    (long long)dec.playhead_wall_ms(),
-                    (long long)dec.live_wall_ms());
+        // Positions are MEDIA time now — how far into the programme. The
+        // wall-clock forms of these were deleted with the rest of the clock
+        // (BUGS #2b); wall_clock_ms survives only for cues written before
+        // at_media_ms existed, which is what the assertion above covers.
+        CHECK(dec.playhead_media_ms() == 24000,
+              "the playhead reports how far into the programme it is");
+        CHECK(dec.live_media_ms() > dec.playhead_media_ms(),
+              "the live edge is further in than the playhead when behind");
+        std::printf("     (showing %lld ms in, live at %lld)\n",
+                    (long long)dec.playhead_media_ms(),
+                    (long long)dec.live_media_ms());
 
         // Outside the rolling window it must still estimate rather than give up.
         Manifest m; m.started_at_ms = enc.started_at_ms;
@@ -807,7 +811,10 @@ int main() {
         dec.poll(enc.clock_ms);
 
         // Jump back 15 minutes, the case that previously refused to buffer.
-        const int64_t fifteen_back = dec.live_wall_ms() - 15 * 60 * 1000;
+        // seek_to_wall_ms is the compatibility entry point and still speaks
+        // times of day, so the target is built from the event start.
+        const int64_t fifteen_back =
+            dec.event_started_ms() + dec.live_media_ms() - 15 * 60 * 1000;
         CHECK(dec.seek_to_wall_ms(fifteen_back) != 0,
               "seek back 15 minutes by clock time");
 
@@ -905,21 +912,20 @@ int main() {
         CHECK(dec.playback_head() == 0,
               "STARTS AT THE BEGINNING, not near the end");
 
-        // The end time must be the end of the last segment, not its start.
-        const int64_t expect_end = enc.started_at_ms + 20 * 6000;
-        CHECK(dec.end_wall_ms() == expect_end,
-              "end time is the end of the recording");
+        // The end must be the end of the last segment, not its start.
+        CHECK(dec.end_media_ms() == 20 * 6000,
+              "the end is the end of the recording, not the last segment's start");
 
         // Play right through.
         int served = 0;
         while (dec.next_segment().has_value() && served < 40) ++served;
         CHECK(served == 20, "played every segment through to the end");
         CHECK(dec.at_end(), "reports having reached the end");
-        CHECK(dec.playhead_wall_ms() <= dec.end_wall_ms(),
-              "the displayed time NEVER runs past the end of the recording");
+        CHECK(dec.playhead_media_ms() <= dec.end_media_ms(),
+              "the reported position NEVER runs past the end of the recording");
         std::printf("     (played %d segments; ends at %lld, playhead %lld)\n",
-                    served, (long long)dec.end_wall_ms(),
-                    (long long)dec.playhead_wall_ms());
+                    served, (long long)dec.end_media_ms(),
+                    (long long)dec.playhead_media_ms());
     }
 
     std::printf("== 17. Ending mid-playback plays through to the end ==\n");
@@ -951,8 +957,8 @@ int main() {
               "kept playing to the last segment rather than stopping");
         CHECK(served == (int)(9 - from + 1),
               "served exactly the segments that remained");
-        CHECK(dec.playhead_wall_ms() <= dec.end_wall_ms(),
-              "time stays within the recording after it finishes");
+        CHECK(dec.playhead_media_ms() <= dec.end_media_ms(),
+              "the position stays within the recording after it finishes");
     }
 
     std::printf("== 18. 'Ended' means two different things ==\n");
@@ -1030,7 +1036,8 @@ int main() {
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
 
-        const int64_t total = dec.end_wall_ms() - dec.event_started_ms();
+        // Media time starts at zero, so the end is the length.
+        const int64_t total = dec.end_media_ms();
         CHECK(total == 100 * 6000,
               "total length is the whole recording, not the manifest window");
         std::printf("     (reports %lld min %lld s)\n",
@@ -1040,9 +1047,9 @@ int main() {
         // an expanding bar makes positions meaningless.
         for (int i = 0; i < 20; ++i) dec.pump_downloads(64);
         dec.start();
-        const int64_t span_before = dec.end_wall_ms() - dec.event_started_ms();
+        const int64_t span_before = dec.end_media_ms();
         for (int i = 0; i < 20; ++i) dec.next_segment();
-        const int64_t span_after = dec.end_wall_ms() - dec.event_started_ms();
+        const int64_t span_after = dec.end_media_ms();
         CHECK(span_before == span_after,
               "the timeline span is FIXED once the recording has ended");
 

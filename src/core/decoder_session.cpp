@@ -981,12 +981,6 @@ int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
     return started + (int64_t)seq * segment_ms();
 }
 
-int64_t DecoderSession::end_wall_ms() const {
-    const uint64_t last = m_latest_seq.load();
-    const int64_t at = wall_clock_ms(last);
-    if (at <= 0) return 0;
-    return at + segment_ms();
-}
 
 bool DecoderSession::at_end() const {
     return m_head_set.load() && m_head.load() > m_latest_seq.load();
@@ -1015,25 +1009,8 @@ int64_t DecoderSession::end_media_ms() const {
     return media_ms_for_seq(m_latest_seq.load()) + segment_ms();
 }
 
-int64_t DecoderSession::playhead_wall_ms() const {
-    if (!m_head_set.load()) return 0;
-    const int64_t t = wall_clock_ms(m_head.load());
-    // Once playback runs past the last segment the head points at a position
-    // that does not exist, and the reported time ran beyond the end of the
-    // recording. Clamp it: the displayed time must never exceed what was
-    // actually recorded.
-    const int64_t end = end_wall_ms();
-    if (end > 0 && t > end) return end;
-    return t;
-}
 
-int64_t DecoderSession::live_wall_ms() const {
-    return wall_clock_ms(m_latest_seq.load());
-}
 
-int64_t DecoderSession::earliest_wall_ms() const {
-    return wall_clock_ms(m_first_available_seq.load());
-}
 
 int64_t DecoderSession::event_started_ms() const {
     return m_started_at_ms.load();

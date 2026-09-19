@@ -68,7 +68,7 @@ int main(){
         d.poll(m.updated_at_ms);
         CHECK(d.room_state() == RoomState::Live, "room reports Live");
         CHECK(!d.event_ended(), "event_ended() agrees it is not ended");
-        CHECK(d.end_wall_ms() > 0, "an end time exists (the live edge)");
+        CHECK(d.end_media_ms() > 0, "an end position exists (the live edge)");
     }
 
     std::printf("== the same event, ended ==\n");
@@ -81,8 +81,10 @@ int main(){
         CHECK(d.room_state() == RoomState::Ended, "room reports Ended");
         CHECK(d.event_ended(),
               "event_ended() AGREES with room_state (they must never differ)");
-        const int64_t total = d.end_wall_ms() - d.event_started_ms();
-        CHECK(total == 30 * 6000, "total length is the whole recording");
+        // Media time begins at zero, so the end IS the length — no subtraction
+        // of one clock from another.
+        CHECK(d.end_media_ms() == 30 * 6000,
+              "total length is the whole recording");
         CHECK(d.event_started_ms() == start, "start time is the event's start");
     }
     fs::remove_all(base);
