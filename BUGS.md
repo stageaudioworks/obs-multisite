@@ -285,7 +285,49 @@ Three separate faults, any one of them disqualifying:
    `RESUMED at 9.367s`, 400 ms out. It is the head of the queue, not the
    picture. Anything that wants "where the picture is" needs a different value.
 
-**The clock origin walks independently of all this, and is STILL OPEN.** Across
+**Option (b) MEASURED AND WORKING, 2026-09-19.** Four holds on a pinned
+recording:
+
+| hold | on screen at PAUSE | resumed at | loss |
+|------|--------------------|------------|------|
+| 5.2 s | 505.500 s | 505.859 s | 359 ms |
+| 4.0 s | 510.100 s | 510.424 s | 324 ms |
+| 10.3 s | 516.600 s | 516.633 s | 33 ms |
+| 2.9 s | 733.333 s | 733.699 s | 366 ms |
+
+Constant and INDEPENDENT of hold length — the longest hold lost the least.
+No stall on any resume (frames flowing in every first-second window), no
+"playout clock fell behind" line at all, and drops fell from 135 v / 175 a to
+0-3. The residual ~350 ms is the queue clear at resume, as predicted.
+
+**The clock origin walk: DIAGNOSED AND FIXED 2026-09-19.**
+
+The same run isolated it exactly:
+
+```
+fragment wall 1789455501964, first pts 505.533 -> origin 1789454996431
+fragment wall 1789455501964, first pts 510.133 -> origin 1789454991831
+fragment wall 1789455501964, first pts 516.633 -> origin 1789454985331
+```
+
+The SAME fragment wall against an advancing pts, so the origin walked back by
+exactly the pts advance (4.6 s, then 6.5 s). `adopt()` cleared the media->wall
+pin on every epoch bump, so a resume re-pinned — but a resume feeds no new
+fragment, so `restart_wall_ms` still held the wall time of the fragment fed at
+the last DECODER restart. The pair described two different fragments.
+
+Fixed by separating two things that were one: `PlayoutTimeline::adopt` now takes
+a playout epoch AND a media epoch. A resume bumps only the playout epoch (wall
+time moved on, media time did not, frames in flight are stale). A seek, jump,
+stop or decoder restart bumps both. `test_playout_timeline` pins it: adopting a
+new playout epoch against the same media epoch must leave `clock_offset_ms()`
+untouched.
+
+Note this was NOT the 1% wall-vs-pts drift suspected earlier when option (a) was
+in place — that reading was contaminated by the seek landing on a different
+fragment each time. One mechanism, not two.
+
+**Earlier suspicion, now retired:** Across
 942 s of pts the fragment wall advanced only 931.5 s, so the origin moved 10.5 s
 in one playback run. Fragment wall times and media pts disagree by roughly 1%.
 That is upstream of the resume path — it is about what wall time a fragment is

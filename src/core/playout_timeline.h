@@ -48,8 +48,9 @@ public:
     static constexpr int64_t kNoClock = INT64_MIN;
 
     // A seek, a jump, or a decoder restart. Frames already in flight belong to
-    // the position being left and must not be believed about anything.
-    void restart() { adopt(m_epoch + 1); }
+    // the position being left and must not be believed about anything, AND the
+    // media clock has to be learned again because a new fragment is coming.
+    void restart() { adopt(m_epoch + 1, m_media_epoch + 1); }
 
     // Adopt a timeline id maintained outside this object. The delivery loop
     // owns a PlayoutTimeline but the seek that invalidates it happens on
@@ -57,14 +58,43 @@ public:
     // value it has not seen before IS the restart. Keeping the counter outside
     // is what lets this object stay lock-free and single-threaded while still
     // reacting to a seek made anywhere.
-    void adopt(uint64_t timeline_id) {
-        if (timeline_id == m_epoch) return;
-        m_epoch = timeline_id;
-        m_skip_base_pts   = kUnset;
-        m_pin_base_pts    = kUnset;
-        m_restart_wall_ms = 0;
-        m_offset_ms       = kNoClock;
-        m_skip_ns         = -1;
+    void adopt(uint64_t timeline_id) { adopt(timeline_id, timeline_id); }
+
+    // TWO discontinuities, and they are not the same thing — conflating them is
+    // what made every displayed clock walk backwards across a hold.
+    //
+    //   timeline_id  the PLAYOUT clock restarts: frames in flight are from
+    //                before and must be discarded. A resume does this, because
+    //                wall time moved on while media time did not.
+    //   media_id     the MEDIA timeline restarts: a new fragment is coming, so
+    //                the pts->wall mapping must be learned again. A seek, a
+    //                jump or a decoder restart does this. A RESUME DOES NOT:
+    //                nothing about the media changed, and no new fragment is
+    //                fed.
+    //
+    // When a resume cleared the pin, the mapping was rebuilt from the current
+    // position's pts against `restart_wall_ms` — which still held the wall time
+    // of the fragment fed at the LAST decoder restart, because a resume feeds
+    // none. The pair described two different fragments, so the origin moved by
+    // however far had been played since:
+    //
+    //   fragment wall 1789455501964, first pts 505.533 -> origin 1789454996431
+    //   fragment wall 1789455501964, first pts 510.133 -> origin 1789454991831
+    //   fragment wall 1789455501964, first pts 516.633 -> origin 1789454985331
+    //
+    // Same wall, advancing pts, origin walking back by exactly the pts advance.
+    void adopt(uint64_t timeline_id, uint64_t media_id) {
+        if (media_id != m_media_epoch) {
+            m_media_epoch     = media_id;
+            m_pin_base_pts    = kUnset;
+            m_restart_wall_ms = 0;
+            m_offset_ms       = kNoClock;
+        }
+        if (timeline_id != m_epoch) {
+            m_epoch          = timeline_id;
+            m_skip_base_pts  = kUnset;
+            m_skip_ns        = -1;
+        }
     }
 
     // Stamp for frames leaving the queue now. Compare with what comes back.
@@ -140,6 +170,7 @@ public:
 private:
     static constexpr int64_t kUnset = INT64_MIN;
     uint64_t m_epoch = 0;
+    uint64_t m_media_epoch = 0;
     int64_t  m_skip_ns        = -1;
     int64_t  m_skip_base_pts  = kUnset;
     int64_t  m_pin_base_pts   = kUnset;

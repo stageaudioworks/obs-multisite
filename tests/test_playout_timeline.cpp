@@ -185,6 +185,39 @@ int main() {
               "and frames from the old id no longer play");
     }
 
+    std::printf("== a resume re-anchors playout WITHOUT re-pinning the clock ==\n");
+    {
+        // A hold restarts the PLAYOUT clock — wall time moved on while media
+        // time did not — but changes nothing about the media: no seek, no new
+        // fragment. Clearing the pin here is what made every displayed clock
+        // walk backwards, because the mapping was then rebuilt from the current
+        // position's pts against the wall time of the fragment fed at the LAST
+        // decoder restart. Two different fragments, one pairing.
+        PlayoutTimeline t;
+        t.adopt(1, 1);
+        t.set_restart_wall_ms(1000000);          // this fragment starts here
+        CHECK(t.consider(1, 10 * S) == Action::Play, "the first frame plays");
+        CHECK(t.have_clock(), "and pins the clock");
+        const int64_t origin = t.clock_offset_ms();
+
+        // Play on, then hold and resume: playout epoch moves, media does not.
+        CHECK(t.consider(1, 40 * S) == Action::Play, "playback continues");
+        t.adopt(2, 1);
+        CHECK(t.have_clock(),
+              "a resume keeps the media clock — nothing about the media moved");
+        CHECK(t.clock_offset_ms() == origin,
+              "and the origin does NOT move, which is the whole bug");
+        CHECK(t.consider(1, 50 * S) == Action::Discard,
+              "while frames from before the hold are still discarded");
+        CHECK(t.consider(2, 50 * S) == Action::Play, "and fresh ones play");
+        CHECK(t.clock_offset_ms() == origin,
+              "the origin still has not moved after the resume's first frame");
+
+        // A seek DOES restart the media timeline.
+        t.adopt(3, 2);
+        CHECK(!t.have_clock(), "but a seek unpins it: a new fragment is coming");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL PLAYOUT TIMELINE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

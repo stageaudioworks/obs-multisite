@@ -356,6 +356,11 @@ struct SourceCtx : DecoderControls {
     // 2712.003s and pinned on 1933.464s, 778 seconds apart, because the frame
     // that got there first was from the previous position.
     std::atomic<uint64_t> timeline_epoch{0};
+    // Bumped only when the MEDIA timeline restarts — a seek, a jump, a stop, a
+    // decoder restart. NOT on a resume: a hold changes nothing about the media,
+    // so the pts->wall mapping stays valid and must not be re-learned from a
+    // fragment nobody fed. See PlayoutTimeline::adopt.
+    std::atomic<uint64_t> media_epoch{0};
 
     // How the encoder composited this feed, read by the delivery thread on
     // every video frame and written by the poll thread when the manifest
@@ -723,7 +728,7 @@ static void deliver_loop(SourceCtx* ctx) {
         // Checked here as well as after the wait below. The stall resync sits
         // between the two and re-bases the playout clock from this frame's
         // pts, so it must not see one from a timeline already left either.
-        tl.adopt(ctx->timeline_epoch.load());
+        tl.adopt(ctx->timeline_epoch.load(), ctx->media_epoch.load());
         if (item_epoch != tl.epoch()) continue;
 
         // If a frame is far past due, the playout clock has drifted behind
@@ -784,7 +789,7 @@ static void deliver_loop(SourceCtx* ctx) {
         // test_playout_timeline, because every bug in this area came from
         // getting it wrong here — a staleness check below the pin guards
         // nothing, and a frame dropped by the skip must not pin either.
-        tl.adopt(ctx->timeline_epoch.load());
+        tl.adopt(ctx->timeline_epoch.load(), ctx->media_epoch.load());
         {
             // Inputs from the feed loop. A skip is only ever armed for the
             // fragment a seek landed on, and the queue was cleared and the
@@ -2418,7 +2423,9 @@ void SourceCtx::stop_playback() {
         dq.clear();
         // Same invariant as a seek: a frame the delivery loop has already
         // popped predates the stop and must not be believed about anything.
+        // The media timeline restarts too: the decoder is torn down here.
         timeline_epoch++;
+        media_epoch++;
     }
 
     // Cancel whatever is in flight. Without this a poll that has just gone out
@@ -2483,7 +2490,8 @@ void SourceCtx::stop_playback() {
 void SourceCtx::release_decoder_for_restart() {
     // Bump first, under the queue lock, so any frame the delivery loop has
     // already popped is stamped with the old timeline and will be discarded.
-    { std::lock_guard<std::mutex> qlk(dq_mtx); timeline_epoch++; }
+    // A decoder restart: both clocks start again.
+    { std::lock_guard<std::mutex> qlk(dq_mtx); timeline_epoch++; media_epoch++; }
     std::shared_ptr<CmafDecoder> old;
     { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
     if (old) old->stop();            // blocks; outside the lock, flushing set
