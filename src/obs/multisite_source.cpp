@@ -482,6 +482,10 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> frames_dropped{0};
     std::atomic<uint64_t> dropped_video{0};
     std::atomic<uint64_t> dropped_audio{0};
+    // When the delivery loop last handed a frame to OBS, so a drop can say
+    // whether delivery was merely behind or had stopped entirely.
+    std::atomic<uint64_t> last_delivery_ns{0};
+    std::atomic<uint64_t> last_drop_log_ns{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
     // ── Immediate feedback ───────────────────────────────────────────────────
@@ -585,7 +589,7 @@ struct SourceCtx : DecoderControls {
     uint64_t feed_start_ns = 0;      // wall clock when this decoder started
     uint64_t pushed_media_ns = 0;    // media duration handed over so far
 
-    // Ordered delivery queue (see the note above kMaxQueuedVideo).
+    // Ordered delivery queue (see the note above kMaxQueuedNs).
     std::deque<PendingFrame> dq;
     std::mutex               dq_mtx;
     std::condition_variable  dq_cv;
@@ -625,17 +629,44 @@ static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
 // video's allowance no longer depends on how many audio tracks a campus
 // takes.
 //
-// Sized from the gate rather than guessed: 12 video frames is 400ms at 30fps,
-// which is what kMaxDeliveryLeadNs is trying to hold. Audio frames are small
-// (an AAC frame is ~21ms of samples) so 48 costs almost nothing and covers
-// several tracks at once.
+// EXPRESSED IN TIME, because the gate it has to clear is a time.
 //
-// Memory is now predictable, which the flat bound also failed at: the cap is
-// 12 video frames regardless of track count. At 1080p an I420 frame is
-// ~3.1 MB, so ~37 MB worst case — where a flat 64 would have risked 200 MB
-// had a stall filled it with video.
-static constexpr size_t   kMaxQueuedVideo = 12;
-static constexpr size_t   kMaxQueuedAudio = 48;
+// It used to be a frame count, sized as "12 video frames is 400ms at 30fps,
+// which is what kMaxDeliveryLeadNs is trying to hold". Two faults, and the
+// operator found them as stalls on 2026-09-19:
+//
+//   1. N frames span N-1 intervals, not N. At 29.97fps twelve frames hold
+//      367ms, which the resume log measured and printed for weeks without
+//      anyone reading it against the 400ms gate it was meant to match.
+//   2. Even at thirteen it would sit EXACTLY on the gate. A queue whose
+//      capacity equals the lead the delivery loop is trying to hold is full
+//      by construction: the producer blocks on every frame, and any hesitation
+//      downstream turns straight into a dropped frame instead of being
+//      absorbed. A cap is a bound, not a target.
+//
+// So the bound is a duration with real headroom over the gate, and the same
+// duration for both streams — which is the point of D4. A count cannot be
+// compared across streams (audio runs ~48 frames/s against video's 30) and
+// cannot survive a change of frame rate: at 60fps the old twelve held 183ms,
+// less than half the gate.
+//
+// MEMORY. This is the cost and it is worth stating plainly rather than
+// discovering later. At 1080p an I420 frame is ~3.1 MB, so a second of 30fps
+// video is ~93 MB where the old cap was ~37 MB. That is a consequence of
+// wanting a 400ms lead at all, not of this bound: any queue that can feed a
+// 400ms gate without jamming has to hold appreciably more than 400ms. At 4K
+// the same second is ~370 MB, which is why the count backstop below is not
+// merely defensive.
+static constexpr uint64_t kMaxQueuedNs = 1000000000ULL;   // 1.0 s per stream
+static_assert(kMaxQueuedNs > kMaxDeliveryLeadNs * 2,
+              "the queue must hold appreciably more than the delivery gate, "
+              "or the producer is jammed against the cap permanently");
+// Backstop, not the bound. A stream whose pts are nonsense (a discontinuity
+// the decoder did not flag, a corrupt fragment) would otherwise give a span of
+// zero or of hours, and grow the queue without limit or reject every frame.
+// Generous enough never to bind on sane media at sane rates.
+static constexpr size_t   kQueueHardCapVideo = 120;
+static constexpr size_t   kQueueHardCapAudio = 480;
 // If frames fall further behind wall time than this, the playout clock is
 // re-anchored rather than dumping a backlog into OBS.
 static constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
@@ -664,6 +695,32 @@ static std::shared_ptr<DecoderSession> get_session(SourceCtx* ctx) {
 static std::shared_ptr<CmafDecoder> get_decoder(SourceCtx* ctx) {
     std::lock_guard<std::mutex> lk(ctx->obj_mtx);
     return ctx->decoder;
+}
+
+// How much PROGRAMME one stream is holding: the span of its pts in the queue.
+//
+// Measured rather than counted (see kMaxQueuedNs). Returns the hard cap when
+// the backstop binds, so the caller's single comparison covers both.
+//
+// Scanned rather than tracked in parallel counters, for the reason the old
+// count was: a counter would have to be kept in step with the delivery loop's
+// erase, every flush and every dq.clear() on a seek, which is how it drifts out
+// of step and stalls the decoder against a phantom full queue. The deque holds
+// a couple of hundred items at most and this runs a few hundred times a second.
+static uint64_t queued_span_ns(SourceCtx* ctx, bool want_video) {
+    int64_t lo = INT64_MAX, hi = INT64_MIN;
+    size_t  n  = 0;
+    for (const auto& f : ctx->dq) {
+        if (f.is_video != want_video) continue;
+        const int64_t p = f.is_video ? f.video.pts_ns : f.audio.pts_ns;
+        if (p < lo) lo = p;
+        if (p > hi) hi = p;
+        ++n;
+    }
+    if (n == 0) return 0;
+    if (n >= (want_video ? kQueueHardCapVideo : kQueueHardCapAudio))
+        return kMaxQueuedNs;          // backstop: report full
+    return (uint64_t)(hi - lo);
 }
 
 // Push a stamped frame for delivery. Blocks while the queue is full, which
@@ -715,12 +772,7 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     const bool space = ctx->dq_cv.wait_for(
         lk, std::chrono::milliseconds(250), [ctx, want_video] {
             if (!ctx->running.load() || ctx->flushing.load()) return true;
-            const size_t n = (size_t)std::count_if(
-                ctx->dq.begin(), ctx->dq.end(),
-                [want_video](const PendingFrame& f) {
-                    return f.is_video == want_video;
-                });
-            return n < (want_video ? kMaxQueuedVideo : kMaxQueuedAudio);
+            return queued_span_ns(ctx, want_video) < kMaxQueuedNs;
         });
     ctx->enqueue_blocked_ns += (os_gettime_ns() - block_t0);
     if (!ctx->running.load() || ctx->flushing.load()) return;
@@ -728,6 +780,28 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
         // Delivery is not keeping up (or is stopped). Drop this frame.
         ctx->frames_dropped++;
         if (item.is_video) ctx->dropped_video++; else ctx->dropped_audio++;
+        // WHY, not just how many. On 2026-09-19 the counters said 25 video and
+        // 22 audio and could not distinguish the two explanations: a cap too
+        // small for the gate (which would drop video only, since audio held
+        // 1003 ms against a 400 ms gate) from a delivery loop that stopped
+        // draining altogether (which drops both, as it did). The cap is fixed;
+        // if this still fires, the gap below is the answer — a gap near 250 ms
+        // means delivery did nothing at all while this frame waited, and the
+        // fault is in the loop or in OBS's handover, not in the bound.
+        const uint64_t last = ctx->last_delivery_ns.load();
+        const uint64_t now  = os_gettime_ns();
+        const uint64_t lastlog = ctx->last_drop_log_ns.load();
+        if (now - lastlog > 2000000000ULL) {
+            ctx->last_drop_log_ns = now;
+            mlog_warn("source: dropped a %s frame after waiting 250 ms — "
+                      "delivery last handed over %llu ms ago, %s, this stream "
+                      "held %.0f ms of programme (bound %.0f ms)",
+                      item.is_video ? "video" : "audio",
+                      (unsigned long long)(last ? (now - last) / 1000000ULL : 0),
+                      ctx->paused.load() ? "PAUSED" : "playing",
+                      (double)queued_span_ns(ctx, item.is_video) / 1e6,
+                      (double)kMaxQueuedNs / 1e6);
+        }
         return;
     }
     // NOTE: item.epoch is stamped where the TIMESTAMP is computed, not here.
@@ -887,6 +961,9 @@ static void deliver_loop(SourceCtx* ctx) {
         // used to be the pts mapped through the media clock into a time of day,
         // and then mapped back to a position by every consumer.
         ctx->playing_at_ms = item_pts / 1000000;
+        // Stamped where the frame actually goes to air, so the drop diagnostic
+        // measures the loop's real handover interval and not its wake-ups.
+        ctx->last_delivery_ns = os_gettime_ns();
 
         // Has playback actually ARRIVED where it was sent?
         //
@@ -1025,7 +1102,7 @@ static void deliver_loop(SourceCtx* ctx) {
             // frame per tile at delivery. That is deliberate and it is the
             // whole reason tiles are free: the delivery queue is bounded per
             // stream, so four tiles enqueued separately would divide
-            // kMaxQueuedVideo by four and starve video exactly the way two
+            // video's share by four and starve it exactly the way two
             // audio tracks once did. One frame is queued, one frame is decoded,
             // and the tiles are views of it.
             //
@@ -2227,7 +2304,8 @@ void SourceCtx::resume() {
     rw_a_pts_lo = -1; rw_a_pts_hi = -1;
 
     mlog_info("source: queue at resume held video %zu frame(s)/%.0f ms, "
-              "audio %zu frame(s)/%.0f ms (caps are counts: 12 video, 48 audio)",
+              "audio %zu frame(s)/%.0f ms (the bound is %.0f ms of programme "
+              "per stream)",
               v_n, v_span_ms, a_n, a_span_ms);
 
     mlog_info("source: RESUMED at %.0fs behind live (state=%d, %zu queued "

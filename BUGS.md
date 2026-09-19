@@ -2075,13 +2075,55 @@ kind is an invitation: it is what the *next* person reaches for when they want t
 show progress, which is how the "84 s of 60 s" readout happened in the first
 place. Either remove it or document it as legacy.
 
-### D4. The queue caps are counts, not durations
+### D4. The queue caps were counts, not durations — and one of them was under the gate
 
-`kMaxQueuedVideo` is 12 frames and `kMaxQueuedAudio` 48 — about 0.4 s and 1 s of
-programme, so the two streams do not hold equivalent amounts. Not a duplication,
-but the same family of error (a quantity compared across two things that are not
-commensurate) and it is what lets a resumed queue be unbalanced. Worth deciding
-whether these should be expressed in time.
+**Status: FIXED, and it was not cosmetic.** Filed as tidiness ("worth deciding
+whether these should be expressed in time") and under-rated: `kMaxQueuedVideo`
+at 12 frames holds **367 ms** at 29.97 fps, while `kMaxDeliveryLeadNs` — the
+lead the delivery loop is trying to hold — is **400 ms**. A cap below the gate
+is a permanent jam: video can never build its working set, so the producer sits
+against the cap, blocks the full 250 ms and drops the frame.
+
+The operator reported it as playback stalls on 2026-09-19 and the log showed it
+plainly, every window:
+
+```
+queue at resume held video 12 frame(s)/367 ms, audio 48 frame(s)/1003 ms
+lead video mean=+398ms min=+100ms | audio mean=+398ms min=+375ms | dropped 25 v / 22 a
+```
+
+Audio, with 1003 ms against the same 400 ms gate, held `min +375ms`. Video
+collapsed to `min +100ms`. That asymmetry is the whole diagnosis.
+
+Two faults in the original sizing, which was `lead / frame_interval`:
+
+1. **N frames span N-1 intervals.** Twelve frames hold eleven intervals =
+   367 ms. The resume log had been printing that number for weeks; nobody read
+   it against the 400 ms it was meant to equal.
+2. **Even thirteen would sit exactly ON the gate.** A cap equal to the lead is
+   full by construction. A cap is a bound, not a target, and needs headroom for
+   the hesitation it exists to absorb.
+
+Now `kMaxQueuedNs`, one duration for both streams, with a `static_assert` tying
+it to `kMaxDeliveryLeadNs` so the two cannot drift apart again, and count
+backstops for nonsense pts. Expressing it in time also fixes the frame-rate
+dependence nobody had noticed: at 60 fps the old twelve frames held 183 ms,
+under half the gate.
+
+**Cost, stated rather than discovered later:** ~93 MB of queued video at 1080p30
+where the old cap was ~37 MB. That is the price of a 400 ms lead, not of this
+bound — any queue that feeds a 400 ms gate without jamming must hold
+appreciably more than 400 ms. At 4K it is ~370 MB, which is what the count
+backstops are really for.
+
+**Not fully explained: 22 of the 47 drops were audio.** Audio had 1003 ms
+against a 400 ms gate and should never have jammed on capacity, so the delivery
+loop itself must have stopped draining for ≥250 ms at a stretch. The cap fix
+does not address that and may not cure it. Rather than stack a second guess on
+the first, the drop path now logs how long since the loop last handed a frame
+to OBS, whether it was paused, and how much programme the stream was holding —
+a gap near 250 ms means delivery did nothing at all and the fault is in the
+loop or the handover, not the bound.
 
 ## Design questions raised but not decided (not bugs — separate from the above)
 
