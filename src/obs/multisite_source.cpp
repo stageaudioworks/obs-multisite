@@ -781,17 +781,6 @@ static void deliver_loop(SourceCtx* ctx) {
             }
         }
 
-        // Hold until nearly due, in slices so shutdown stays responsive.
-        // A frame that is already due (or late) is released immediately.
-        while (ctx->running.load()) {
-            const uint64_t now = os_gettime_ns();
-            if (item.timestamp <= now + kMaxDeliveryLeadNs) break;
-            uint64_t wait_ns = item.timestamp - now - kMaxDeliveryLeadNs;
-            if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;
-            std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
-        }
-        if (!ctx->running.load()) break;
-
         // One ordered decision: is this frame stale, is it before the moment a
         // seek asked for, and only then may it define the clock and go to air.
         // The order lives in PlayoutTimeline and is pinned by
@@ -853,6 +842,28 @@ static void deliver_loop(SourceCtx* ctx) {
             case multisite::PlayoutTimeline::Action::DropForSkip: continue;
             case multisite::PlayoutTimeline::Action::Play:        break;
         }
+
+        // Hold until nearly due, in slices so shutdown stays responsive.
+        // A frame that is already due (or late) is released immediately.
+        //
+        // AFTER the decision, not before it. Waiting first meant every frame
+        // the sub-segment skip was about to THROW AWAY was first waited for at
+        // playout rate: seeking 1.8 s into a fragment cost 1.8 s of real time,
+        // and a seek near the end of a six-second segment cost most of six.
+        // That is the "slow to seek" left over once the decoder restart came
+        // down from seconds to ~25 ms — the machine was not fetching or
+        // decoding, it was sleeping through frames it had already decided to
+        // discard.
+        //
+        // Only a frame that is going to air needs to wait for its moment.
+        while (ctx->running.load()) {
+            const uint64_t now = os_gettime_ns();
+            if (item.timestamp <= now + kMaxDeliveryLeadNs) break;
+            uint64_t wait_ns = item.timestamp - now - kMaxDeliveryLeadNs;
+            if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;
+            std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
+        }
+        if (!ctx->running.load()) break;
 
         // Publish for the dock and the web remote.
         if (tl.have_clock()) {
