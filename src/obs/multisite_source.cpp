@@ -1789,7 +1789,18 @@ static void feed_loop(SourceCtx* ctx) {
                 mlog_warn("source: decoder stopped consuming video (%s)",
                           dec->error().c_str());
         }
-        ctx->pushed_media_ns += (uint64_t)(seg->duration_s * 1e9);
+        // Credit only what will actually PLAY. A fragment a seek landed in has
+        // its first skip_to_ms discarded, so crediting the whole duration told
+        // the pacing loop it was further ahead than it was — by exactly the
+        // skip. It then waited that much too long before the next fragment,
+        // playback ran dry, and the clock fell behind far enough to trip the
+        // 2 s stall resync. Seen as "playout clock fell 2.2s behind (stall?)"
+        // a few seconds after a seek, on content entirely in cache with
+        // nothing actually stalled.
+        const double playable_s =
+            seg->duration_s - (double)seg->skip_to_ms / 1000.0;
+        ctx->pushed_media_ns +=
+            (uint64_t)(std::max(0.0, playable_s) * 1e9);
     }
     mlog_info("source: feed loop exiting");
 }
