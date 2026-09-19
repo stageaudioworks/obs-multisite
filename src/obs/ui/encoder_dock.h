@@ -113,6 +113,11 @@ private:
     // to the bucket everything depends on).
     QPushButton* m_testConnection = nullptr;
     QLabel*      m_testConnectionResult = nullptr;
+    // The measured burst. On the storage page rather than inside the second
+    // bucket's box, because it measures the LINK: an operator with no second
+    // bucket still needs to know what their uplink has spare.
+    QPushButton* m_testUplink = nullptr;
+    QLabel*      m_testUplinkResult = nullptr;
     void showTestConnection(const ProbeResult& r);
 
     QPushButton* m_checkSecond = nullptr;

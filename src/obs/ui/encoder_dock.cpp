@@ -370,6 +370,73 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         }).detach();
     });
 
+    // ── The measured burst ──────────────────────────────────────────────────
+    // Operator-initiated and nothing else. It is a burst of real traffic and a
+    // venue's link is not ours to fill uninvited; but it is also the ONLY way
+    // to know spare capacity before an event, because the live stream never
+    // produces more than its own bitrate and so can never reveal what is left.
+    //
+    // HERE, not inside the second bucket's box, where it started. It measures
+    // the link — which an operator needs to know about whether or not they keep
+    // a second copy — and putting it in that box made it unreachable without
+    // one, and invisible while the box was collapsed. It tests the primary with
+    // the values AS TYPED, like the button above it, and the second bucket as
+    // well when one is configured, because "can this link carry both copies at
+    // once" is the question it exists to answer.
+    m_testUplink = new QPushButton(tr_("Dock.TestUplink"), storePage);
+    m_testUplink->setToolTip(tr_("Dock.TestUplinkHint"));
+    storePageLayout->addWidget(m_testUplink);
+    m_testUplinkResult = new QLabel(QString(), storePage);
+    m_testUplinkResult->setWordWrap(true);
+    storePageLayout->addWidget(m_testUplinkResult);
+    connect(m_testUplink, &QPushButton::clicked, this, [this] {
+        const std::string bucket = m_bucket->text().trimmed().toStdString();
+        if (bucket.empty()) {
+            m_testUplinkResult->setStyleSheet(QString());
+            m_testUplinkResult->setText(tr_("Dock.TestUplinkNone"));
+            return;
+        }
+        multisite::S3Config primary;
+        fill_s3_config(primary, m_provider->currentData().toString().toStdString(),
+                       m_accountId->text().trimmed().toStdString(),
+                       m_endpoint->text().trimmed().toStdString(),
+                       m_region->text().trimmed().toStdString(), bucket,
+                       m_keyId->text().trimmed().toStdString(),
+                       m_secret->text().toStdString());
+        multisite::S3Config second;
+        const bool have_second = secondary_s3_config(second);
+
+        m_testUplink->setEnabled(false);
+        m_testUplinkResult->setStyleSheet(QString());
+        m_testUplinkResult->setText(tr_("Dock.TestUplinkRunning"));
+        QPointer<EncoderDock> self(this);
+        std::thread([self, primary, second, have_second] {
+            const UplinkTestResult a = uplink_test(primary);
+            UplinkTestResult b;
+            // Sequentially, never together: two bursts at once would measure
+            // them competing with each other rather than measuring the link.
+            if (have_second) b = uplink_test(second);
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, a, b, have_second] {
+                if (!self) return;
+                self->m_testUplink->setEnabled(true);
+                QStringList lines;
+                auto say = [&](const QString& which, const UplinkTestResult& r) {
+                    lines << (r.ok ? tr_("Dock.TestUplinkResult")
+                                         .arg(which).arg(QString::number(r.mbps, 'f', 1))
+                                   : tr_("Dock.TestUplinkFailed").arg(which) + " (" +
+                                         QString::fromStdString(r.error) + ")");
+                };
+                say(tr_("Dock.TestUplinkPrimary"), a);
+                if (have_second) say(tr_("Dock.TestUplinkSecond"), b);
+                self->m_testUplinkResult->setText(lines.join("\n"));
+                const bool all_ok = a.ok && (!have_second || b.ok);
+                self->m_testUplinkResult->setStyleSheet(
+                    all_ok ? "color: #35c489;" : "color: #e5484d;");
+            }, Qt::QueuedConnection);
+        }).detach();
+    });
+
     // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide rather
     // than part of these settings, because the other dock's half reads the
     // same answer — see storage_secondary.h. Nothing is written to it yet:

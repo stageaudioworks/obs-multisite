@@ -27,8 +27,9 @@ class SecondaryTargetBox : public QGroupBox {
 public:
     // `main_site` changes what the box SAYS, because the same bucket means two
     // different things: a main site writes a copy to it, a campus reads from it
-    // when the primary cannot be reached. A satellite is also not offered the
-    // upload test — it does not upload, and may not even have write access.
+    // when the primary cannot be reached. That is now all it changes — the
+    // upload test this box used to carry moved to the encoder dock's storage
+    // page, since it measures the link rather than this bucket.
     explicit SecondaryTargetBox(bool main_site, QWidget* parent = nullptr);
 
     void loadFromStore();
@@ -40,8 +41,11 @@ signals:
     void changed();
 
 private:
-    void updateProviderFields();
-    void updateEnabled();
+    // ONE authority for which rows are visible. It used to be two — an
+    // "is the box ticked" pass and a "does this provider want this field"
+    // pass — which fought over the same three rows and left the block half
+    // open until something toggled it. See the comment on the definition.
+    void updateRows();
 
     QCheckBox* m_enabled   = nullptr;
     QComboBox* m_provider  = nullptr;
@@ -51,11 +55,6 @@ private:
     QLineEdit* m_keyId     = nullptr;
     QLineEdit* m_secret    = nullptr;
     QLineEdit* m_region    = nullptr;
-    // The measured burst (Phase 9): the only way to know spare capacity before
-    // an event, since the live stream only produces at its own bitrate.
-    QPushButton* m_test = nullptr;
-    QLabel*      m_testResult = nullptr;
-
     // loadFromStore() sets fields programmatically; those setText calls must
     // not read as the operator editing something.
     bool m_loading = false;

@@ -11,12 +11,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMetaObject>
-#include <QPointer>
-#include <QPushButton>
 #include <QStandardItemModel>
-
-#include <thread>
 
 namespace multisite_obs {
 
@@ -71,96 +66,53 @@ SecondaryTargetBox::SecondaryTargetBox(bool main_site, QWidget* parent)
     form->addRow(tr_("Region"), m_region);
 
     connect(m_enabled, &QCheckBox::toggled, this, [this] {
-        updateEnabled();
+        updateRows();
         if (!m_loading) emit changed();
     });
     connect(m_provider, &QComboBox::currentIndexChanged, this, [this] {
-        updateProviderFields();
+        updateRows();
         if (!m_loading) emit changed();
     });
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret, m_region })
         connect(e, &QLineEdit::textEdited, this,
                 [this] { if (!m_loading) emit changed(); });
 
-    // ── The measured burst ──────────────────────────────────────────────────
-    // Operator-initiated and nothing else. It is a burst of real traffic, and a
-    // venue's link is not ours to fill uninvited; but it is also the ONLY way
-    // to know spare capacity before an event, because the live stream never
-    // produces more than its own bitrate and so can never reveal what is left.
-    // Only a main site uploads at all, and only it can be expected to hold
-    // write access to the second bucket — offering this on a campus would be
-    // offering something that cannot work.
-    m_test = m_main_site ? new QPushButton(tr_("Dock.TestUplink"), this) : nullptr;
-    if (m_test) {
-        m_test->setToolTip(tr_("Dock.TestUplinkHint"));
-        m_testResult = new QLabel(QString(), this);
-        m_testResult->setWordWrap(true);
-        form->addRow(QString(), m_test);
-        form->addRow(QString(), m_testResult);
-
-        connect(m_test, &QPushButton::clicked, this, [this] {
-            if (!secondary_target().configured()) {
-                m_testResult->setText(tr_("Dock.TestUplinkNone"));
-                m_testResult->setStyleSheet(QString());
-                return;
-            }
-            m_test->setEnabled(false);
-            m_testResult->setStyleSheet(QString());
-            m_testResult->setText(tr_("Dock.TestUplinkRunning"));
-            // Off the UI thread, and guarded: the dialog outlives the click but
-            // the test does not have to, and reporting into a destroyed widget
-            // would be a crash for the sake of a progress line.
-            QPointer<SecondaryTargetBox> self(this);
-            std::thread([self] {
-                const UplinkTestResult r = secondary_uplink_test();
-                if (!self) return;
-                QMetaObject::invokeMethod(self, [self, r] {
-                    if (!self) return;
-                    self->m_test->setEnabled(true);
-                    if (!r.ok) {
-                        self->m_testResult->setText(
-                            tr_("Dock.TestUplinkFailed") + " (" +
-                            QString::fromStdString(r.error) + ")");
-                        self->m_testResult->setStyleSheet("color: #e5484d;");
-                    } else {
-                        self->m_testResult->setText(tr_("Dock.TestUplinkResult")
-                                                        .arg(QString::number(r.mbps, 'f', 1)));
-                        self->m_testResult->setStyleSheet("color: #35c489;");
-                    }
-                }, Qt::QueuedConnection);
-            }).detach();
-        });
-    }
-
-    updateEnabled();
-    updateProviderFields();
+    updateRows();
 }
 
-void SecondaryTargetBox::updateEnabled() {
+// Which rows are visible, decided in ONE place from BOTH conditions.
+//
+// HIDDEN, not merely greyed out. An operator who is not using a second bucket
+// should not have to look past seven empty credential fields to find the rest
+// of the storage settings; ticking the box is what asks for them.
+//
+// This used to be two functions, and they fought. `updateEnabled` hid all seven
+// rows when the box was unticked, and `updateProviderFields` then re-showed
+// account id, endpoint and region if the provider wanted them — without
+// consulting the tick at all. The constructor ran them in that order, so a
+// fresh dock opened with the block half exposed: three credential fields
+// visible through a box that was supposed to be shut. The `toggled` handler
+// called only the first, so ticking and unticking let the hide win uncontested
+// and the block finally closed properly. The correct state was reachable only
+// by toggling, which is exactly how an operator reported it.
+//
+// A row's visibility depends on two facts, so one function reads both. Do not
+// split this again: the second pass will not know about the first.
+void SecondaryTargetBox::updateRows() {
+    auto* form = qobject_cast<QFormLayout*>(layout());
+    if (!form) return;
+
     const bool on = m_enabled->isChecked();
-    // HIDDEN, not merely greyed out. An operator who is not using a second
-    // bucket should not have to look past seven empty credential fields to find
-    // the rest of the storage settings; ticking the box is what asks for them.
-    if (auto* form = qobject_cast<QFormLayout*>(layout())) {
-        for (QWidget* w : { (QWidget*)m_provider, (QWidget*)m_accountId,
-                            (QWidget*)m_endpoint, (QWidget*)m_bucket,
-                            (QWidget*)m_keyId, (QWidget*)m_secret,
-                            (QWidget*)m_region })
-            form->setRowVisible(w, on);
-        if (m_test) form->setRowVisible(m_test, on);
-        if (m_testResult) form->setRowVisible(m_testResult, on);
-    }
-}
+    const auto& info = multisite::provider_info(multisite::provider_from_key(
+        m_provider->currentData().toString().toStdString()));
 
-void SecondaryTargetBox::updateProviderFields() {
-    auto provider = multisite::provider_from_key(
-        m_provider->currentData().toString().toStdString());
-    const auto& info = multisite::provider_info(provider);
-    if (auto* form = qobject_cast<QFormLayout*>(layout())) {
-        form->setRowVisible(m_accountId, info.needs_account_id);
-        form->setRowVisible(m_endpoint,  info.needs_endpoint);
-        form->setRowVisible(m_region,    info.needs_region);
-    }
+    form->setRowVisible(m_provider,  on);
+    form->setRowVisible(m_bucket,    on);
+    form->setRowVisible(m_keyId,     on);
+    form->setRowVisible(m_secret,    on);
+    form->setRowVisible(m_accountId, on && info.needs_account_id);
+    form->setRowVisible(m_endpoint,  on && info.needs_endpoint);
+    form->setRowVisible(m_region,    on && info.needs_region);
 }
 
 void SecondaryTargetBox::loadFromStore() {
@@ -179,8 +131,7 @@ void SecondaryTargetBox::loadFromStore() {
     m_secret->setText(QString::fromStdString(t.secret_access_key));
     m_region->setText(QString::fromStdString(t.region));
 
-    updateEnabled();
-    updateProviderFields();
+    updateRows();
     m_loading = false;
 }
 

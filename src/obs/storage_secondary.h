@@ -42,18 +42,8 @@ struct SecondaryTarget {
     }
 };
 
-// A measured burst into the second bucket — the only way to learn spare
-// capacity, since the live stream only ever produces at its own bitrate and so
-// can never show what is left over (PROJECT-SCOPE.md §10 Phase 9).
-//
-// Puts a payload of `bytes`, times it, then removes it. Blocking, and it is
-// real traffic: call it OFF the UI thread and never automatically.
-struct UplinkTestResult {
-    bool        ok = false;
-    double      mbps = 0.0;
-    std::string error;
-};
-UplinkTestResult secondary_uplink_test(size_t bytes = 8u << 20);
+// The measured burst moved to storage_probe.h and now takes the bucket as an
+// argument: it measures the LINK, which is not the second bucket's property.
 
 // Fills `out` from the stored target. False when it is not configured, so a
 // caller cannot build a transport for a half-typed bucket. Both halves use this

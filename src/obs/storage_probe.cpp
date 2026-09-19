@@ -4,6 +4,9 @@
 #include "../core/s3_transport.h"
 #include "../core/storage_providers.h"
 
+#include <chrono>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 namespace multisite_obs {
@@ -93,6 +96,41 @@ ProbeResult probe_bucket(const multisite::S3Config& cfg, bool write,
         r.detail = explain(g.http_status, g.error);
     }
     return r;
+}
+
+
+UplinkTestResult uplink_test(const multisite::S3Config& cfg, size_t bytes) {
+    UplinkTestResult out;
+    multisite::S3Transport tx(cfg);
+
+    // Incompressible-ish and cheap to build: the point is to move bytes, not to
+    // be clever. A repeated pattern would be compressed by a proxy and measure
+    // the proxy instead of the link.
+    std::vector<uint8_t> payload(bytes);
+    uint32_t x = 0x9e3779b9u;
+    for (size_t i = 0; i < bytes; ++i) {
+        x = x * 1664525u + 1013904223u;
+        payload[i] = (uint8_t)(x >> 24);
+    }
+
+    const std::string key = "multisite-uplink-test.bin";
+    const auto t0 = std::chrono::steady_clock::now();
+    multisite::PutResult r = tx.put(key, payload, "application/octet-stream", {});
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0).count();
+
+    // Clean up whatever landed, even on a failure part-way through.
+    tx.remove(key);
+
+    if (!r.success) {
+        out.error = "upload failed: HTTP " + std::to_string(r.http_status) +
+                    (r.error.empty() ? "" : " " + r.error);
+        return out;
+    }
+    if (ms <= 0) { out.ok = true; out.mbps = 0.0; return out; }  // too fast to time
+    out.ok = true;
+    out.mbps = ((double)bytes * 8.0 / 1e6) / ((double)ms / 1000.0);
+    return out;
 }
 
 } // namespace multisite_obs

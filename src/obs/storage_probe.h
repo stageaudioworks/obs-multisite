@@ -11,6 +11,7 @@
 // Every one of those is cheap to find now and expensive to find at Go Live, and
 // every one of them reads differently in the answer.
 //
+#include <cstddef>
 #include <string>
 
 namespace multisite { struct S3Config; }
@@ -32,6 +33,27 @@ struct ProbeResult {
 // a campus will make). Blocking — call it off the UI thread.
 ProbeResult probe_bucket(const multisite::S3Config& cfg, bool write,
                          const std::string& room_id);
+
+// A measured burst into a bucket — the only way to learn spare uplink capacity,
+// since the live stream only ever produces at its own bitrate and so can never
+// show what is left over (PROJECT-SCOPE.md §10 Phase 9).
+//
+// It lives here, beside the other question asked of a bucket before an event,
+// and it takes the bucket as an argument. It used to be `secondary_uplink_test`
+// with the second bucket wired in, which filed a measurement of THE LINK under
+// one of the things using the link: an operator with no second bucket could not
+// measure their uplink at all, and the button was hidden inside a collapsed
+// block. Capacity is a property of the connection, not of a destination.
+//
+// Puts a payload of `bytes`, times it, then removes it. Blocking, and it is
+// real traffic: call it OFF the UI thread and never automatically.
+struct UplinkTestResult {
+    bool        ok = false;
+    double      mbps = 0.0;
+    std::string error;
+};
+UplinkTestResult uplink_test(const multisite::S3Config& cfg,
+                             size_t bytes = 8u << 20);
 
 // The one place an operator's typed fields become an S3Config. Shared so the
 // two docks, the check and the probe cannot normalise a provider differently.
