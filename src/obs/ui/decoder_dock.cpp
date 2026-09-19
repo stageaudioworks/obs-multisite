@@ -1545,10 +1545,19 @@ void DecoderDock::refresh() {
         // Where in the programme, not what the clock said when it was
         // recorded. An operator lining up a cue is thinking "seven minutes in",
         // and a time of day is a number they have to convert in their head.
-        m_posText  = tr_("Dock.GoingTo").arg(
-            s.started_ms > 0 && s.seek_target_ms >= s.started_ms
-                ? position(s.seek_target_ms - s.started_ms)
-                : position(s.seek_target_ms));
+        // "Going to 17:59" is elapsed — seventeen minutes fifty-nine — but
+        // M:SS is exactly how a time of day looks, and at 17:59 the two are
+        // indistinguishable. Removing the clock from this dock is worth
+        // nothing if what replaced it still READS as one. Saying it against
+        // the total settles it: "17:59 of 24:16" can only be a position.
+        const long long target_in =
+            (s.started_ms > 0 && s.seek_target_ms >= s.started_ms)
+                ? s.seek_target_ms - s.started_ms
+                : s.seek_target_ms;
+        m_posText = s.total_ms > 0
+            ? tr_("Dock.GoingToOf").arg(position(target_in))
+                                   .arg(position((long long)s.total_ms))
+            : tr_("Dock.GoingTo").arg(position(target_in));
         m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.loading && !s.ready_to_play) {
         m_posText  = m_loadingName.isEmpty()
