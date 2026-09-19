@@ -863,9 +863,9 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
                 seq = best;
             } else {
                 const int64_t started = m_started_at_ms.load();
-                const double dur = m_segment_duration_s.load();
-                if (started > 0 && dur > 0.1 && operator_at_ms > started)
-                    seq = (uint64_t)((operator_at_ms - started) / (dur * 1000.0));
+                const int64_t dur_ms = segment_ms();   // measured, see BUGS #2b
+                if (started > 0 && dur_ms > 0 && operator_at_ms > started)
+                    seq = (uint64_t)((operator_at_ms - started) / dur_ms);
             }
         }
         have_hub = static_cast<bool>(m_cfg.cue_hub);
@@ -1039,9 +1039,22 @@ std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const
 // limited to the segment boundary.
 int64_t DecoderSession::seek_to_media_ms(int64_t media_ms) {
     if (media_ms < 0) media_ms = 0;
-    const double seg_s = m_segment_duration_s.load() > 0.1
-                             ? m_segment_duration_s.load() : 6.0;
-    const int64_t seg_ms = (int64_t)(seg_s * 1000.0 + 0.5);
+    // MEASURED, not nominal. This decides which segment a click lands on, and
+    // using the configured value here put every seek late in proportion to how
+    // far into the event it was: the segment picked is media_ms / seg_ms, so an
+    // error of d ms per segment lands seq * d late. Measured on a recording
+    // whose segments are really 6033 ms against a nominal 6000 — a click at
+    // 269.9 s (seq 44) landed 1539 ms late, predicted 44 * 33 = 1474; a click
+    // at 1205.9 s (seq 200) landed 6710 ms late, predicted 200 * 33 = 6700.
+    //
+    // It also broke the arrival indication, which is how it was found: the
+    // check allows 2.5 s between where playback reached and where it was sent,
+    // and a seek near the end of an hour overshot by more than that, so
+    // "SEEKING..." never cleared however long the picture had been playing.
+    //
+    // segment_ms() takes the figure from the encoder's own recorded times. See
+    // BUGS #2b — this is the fifth place the same derivation was written.
+    const int64_t seg_ms = segment_ms();
     if (seg_ms <= 0) return 0;
 
     const uint64_t seq  = (uint64_t)(media_ms / seg_ms);
@@ -1088,7 +1101,10 @@ int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
         if (m_manifest.started_at_ms <= 0)
             return fail("nothing is loaded yet, so there is no timeline to "
                         "move within");
-        const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
+        // Measured, not nominal: this places a position, and the nominal is a
+        // request to the encoder rather than a description of what it made.
+        // See segment_ms() and BUGS #2b.
+        const int64_t seg_ms_v = segment_ms();
 
         // Prefer an exact match from the manifest window.
         bool found = false;
@@ -1104,9 +1120,8 @@ int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
             const int64_t offset = wall_ms - m_manifest.started_at_ms;
             if (offset < 0)
                 return fail("that is before this event started");
-            target = (uint64_t)((double)offset / 1000.0 / seg);
-            seg_start = m_manifest.started_at_ms +
-                        (int64_t)((double)target * seg * 1000.0);
+            target = (uint64_t)(offset / seg_ms_v);
+            seg_start = m_manifest.started_at_ms + (int64_t)target * seg_ms_v;
         }
         // The two ends are different problems and must not read the same. The
         // floor has genuinely gone — retention removed it. The ceiling has

@@ -1546,6 +1546,55 @@ int main() {
               "670 ms early");
     }
 
+    std::printf("== 29c. A seek lands where it was asked, off-nominal segments ==\n");
+    {
+        // seek_to_media_ms picked the segment with the NOMINAL length while
+        // everything else had moved to the measured one, so a click landed
+        // seq * (true - nominal) late — proportional to how far into the event
+        // it was. On a real recording with 6033 ms segments against a nominal
+        // 6000: a click at 269.9 s (seq 44) landed 1539 ms late, and one at
+        // 1205.9 s (seq 200) landed 6710 ms late.
+        //
+        // It also stuck the interface. The arrival check allows 2.5 s between
+        // where playback reached and where it was sent, so a seek that
+        // overshot by more than that left "SEEKING..." on screen for ever,
+        // however long the picture had been playing.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTSEEKOFFNOMINAL");
+        enc.seg_dur = 6.0;          // what the manifest advertises
+        enc.real_seg_ms = 6033;     // what the segments actually are
+        enc.publish_start();
+        // Deep enough that the two formulas disagree: they only diverge once
+        // seq * (true - nominal) exceeds a segment, which is the whole shape of
+        // this fault — invisible near the start of an event, minutes out by the
+        // end of a service.
+        for (int i = 0; i < 220; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d29c").string();
+        cfg.prebuffer_segments = 1;
+        cfg.start_buffer_seconds = 0;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        CHECK(dec.segment_ms() == 6033, "the real segment length is measured");
+
+        // Ask for a moment deep into the event, chosen to fall mid-segment.
+        const int64_t want = 200 * 6033 + 2500;      // segment 200, 2.5 s in
+        CHECK(dec.seek_to_media_ms(want) == want, "the seek is accepted");
+        dec.pump_downloads(400);
+        CHECK(dec.start(), "playback starts");
+
+        auto seg = dec.next_segment();
+        CHECK(!!seg, "a segment is served");
+        if (seg) {
+            CHECK(seg->seq == 200,
+                  "and it is the segment that actually CONTAINS that moment — "
+                  "the nominal would have picked 201 and landed 6.6 s late");
+            CHECK(seg->skip_to_ms == 2500,
+                  "with the offset into it that reaches the exact moment");
+        }
+    }
+
     std::printf("== 29. A cue jump lands on the cue's moment ==\n");
     {
         FakeStore store;
