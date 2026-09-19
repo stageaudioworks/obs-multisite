@@ -335,6 +335,11 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
     s.data         = std::move(fragment);
     s.duration_s   = duration_s;
     s.pts_offset_s = pts_offset_s;
+    // The programme now runs to the end of this segment. Kept here rather than
+    // derived later from seq * nominal duration: that derivation is a second
+    // formula for a quantity the encoder already has exactly, and the two drift
+    // apart whenever a segment is not exactly the nominal length (BUGS #2b).
+    m_live_media_ms = (int64_t)((pts_offset_s + duration_s) * 1000.0);
     s.key          = segment_key(seq);
     m_spool->enqueue(std::move(s));   // durable BEFORE any upload attempt
     return seq;
@@ -442,6 +447,12 @@ void Session::add_marker(const std::string& label, const std::string& type) {
         std::lock_guard<std::mutex> lk(m_mtx);
         Marker mk;
         mk.seq   = m_next_seq;          // marker applies at the current live edge
+        // Both anchors. at_media_ms is the real one — where in the programme
+        // this cue sits, which every satellite resolves to the same frame
+        // without a clock. at_ms stays so that a build older than this field
+        // can still place the cue, and because the cue list shows a time of day
+        // for a live event.
+        mk.at_media_ms = m_live_media_ms.load();
         mk.at_ms = now_ms();
         mk.type  = type;
         mk.label = label;

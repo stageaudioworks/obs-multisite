@@ -11,6 +11,25 @@
 using namespace multisite;
 
 static int g_fail = 0;
+
+// Built field by field on purpose. These were positional aggregate braces, and
+// adding at_media_ms to Marker silently shifted every value one place along —
+// the compiler caught it here only because the next field is a string. A test
+// that pins a wire format must not be able to change meaning because a struct
+// gained a member.
+static Marker cue(uint64_t seq, int64_t at_ms, const char* label,
+                  const char* id, const char* author,
+                  int64_t at_media_ms = -1) {
+    Marker m;
+    m.seq         = seq;
+    m.at_ms       = at_ms;
+    m.at_media_ms = at_media_ms;
+    m.type        = "cue";
+    m.label       = label;
+    m.id          = id;
+    m.author      = author;
+    return m;
+}
 #define CHECK(c, m) do { if(!(c)){ std::printf("  [FAIL] %s\n", m); ++g_fail; } \
                          else { std::printf("  [ok]   %s\n", m); } } while(0)
 
@@ -38,7 +57,7 @@ int main() {
 
     // ── Author survives the round trip ──────────────────────────────────────
     MarkerList a;
-    a.markers.push_back(Marker{100, 1000, "cue", "Sermon", "id-a1", "Main site"});
+    a.markers.push_back(cue(100, 1000, "Sermon", "id-a1", "Main site"));
     auto a2 = MarkerList::from_json(a.to_json());
     CHECK(a2.markers.size() == 1 && a2.markers[0].author == "Main site",
           "a cue's author survives serialization");
@@ -52,10 +71,10 @@ int main() {
 
     // ── Merge: one list, oldest first, no duplicates ────────────────────────
     MarkerList enc;   // the encoder: two cues
-    enc.markers.push_back(Marker{100, 1000, "cue", "Sermon", "id-e1", ""});
-    enc.markers.push_back(Marker{200, 2000, "cue", "Offering", "id-e2", ""});
+    enc.markers.push_back(cue(100, 1000, "Sermon", "id-e1", ""));
+    enc.markers.push_back(cue(200, 2000, "Offering", "id-e2", ""));
     MarkerList sat;   // a satellite: one cue in between, plus a duplicate
-    sat.markers.push_back(Marker{150, 1500, "cue", "Notice", "id-s1", "Campus B"});
+    sat.markers.push_back(cue(150, 1500, "Notice", "id-s1", "Campus B"));
     sat.markers.push_back(enc.markers[0]);   // the same cue seen twice
 
     auto merged = merge_markers({ sat, enc });
@@ -70,10 +89,10 @@ int main() {
 
     // Same millisecond: order by seq, then id, so it is stable between reads.
     MarkerList t1;
-    t1.markers.push_back(Marker{2, 500, "cue", "b", "id-b", ""});
-    t1.markers.push_back(Marker{1, 500, "cue", "a", "id-a", ""});
+    t1.markers.push_back(cue(2, 500, "b", "id-b", ""));
+    t1.markers.push_back(cue(1, 500, "a", "id-a", ""));
     MarkerList t2;
-    t2.markers.push_back(Marker{1, 500, "cue", "a", "id-a", ""});
+    t2.markers.push_back(cue(1, 500, "a", "id-a", ""));
     auto tm = merge_markers({ t1, t2 });
     CHECK(tm.markers.size() == 2 &&
           tm.markers[0].id == "id-a" && tm.markers[1].id == "id-b",
@@ -82,10 +101,9 @@ int main() {
     // A box whose clock is badly out must not drag its cue to the wrong place:
     // ordering follows the EVENT's position (seq), not anybody's wall clock.
     MarkerList on_time;   // dropped later in the event, correct clock
-    on_time.markers.push_back(Marker{ 200, 200000, "cue", "second", "id-2", "" });
+    on_time.markers.push_back(cue(200, 200000, "second", "id-2", ""));
     MarkerList skewed;    // dropped earlier in the event, clock a day fast
-    skewed.markers.push_back(Marker{ 150, 86400000 + 150000, "cue", "first",
-                                     "id-1", "Campus B" });
+    skewed.markers.push_back(cue(150, 86400000 + 150000, "first", "id-1", "Campus B"));
     auto fixed = merge_markers({ on_time, skewed });
     CHECK(fixed.markers.size() == 2 && fixed.markers[0].id == "id-1",
           "a skewed clock cannot reorder a cue: seq decides, not at_ms");

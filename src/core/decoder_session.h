@@ -311,6 +311,23 @@ public:
     // recorded for a segment when it is still in the manifest window, and
     // estimates from the event start otherwise. 0 if unknown.
     int64_t wall_clock_ms(uint64_t seq) const;
+
+    // Milliseconds of programme per segment, MEASURED rather than assumed.
+    //
+    // The configured value is a nominal: a request to the encoder, not a
+    // description of what it produced. A keyframe interval lands on a whole
+    // number of frames, so a "6 s" segment is 182 frames at 30 fps — 6.067 s —
+    // and every position derived as `seq * nominal` slips 67 ms per segment.
+    // Measured at 1.11% over a 61-minute recording: about forty seconds of
+    // error by the end, on the timeline, the playhead, behind-live and every
+    // cue (BUGS #2b).
+    //
+    // The manifest gives the true figure for nothing: the encoder writes each
+    // segment's at_ms as `event_start + pts_offset`, so consecutive at_ms
+    // differ by the segment's ACTUAL duration. Taking the span across the whole
+    // window rather than one pair also averages out the per-entry rounding.
+    // Falls back to the nominal only when no manifest has been read yet.
+    int64_t segment_ms() const;
     int64_t playhead_wall_ms() const;
     int64_t live_wall_ms() const;
     int64_t earliest_wall_ms() const;
@@ -387,6 +404,9 @@ private:
 
     std::string m_event_id;
     std::string m_pinned_event_id;     // guarded by m_mtx
+    // See segment_ms(). Computed under the lock when a manifest lands, read
+    // lock-free by everything that needs to place a position.
+    std::atomic<int64_t> m_measured_segment_ms{0};
     // Set once when the event being watched is seen to finish without having
     // been pinned, so that the next event starting does not steal the playback.
     // Cleared when the loaded event changes and set by unpin(), so it fires

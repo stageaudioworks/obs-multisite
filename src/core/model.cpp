@@ -325,6 +325,7 @@ std::string MarkerList::to_json() const {
     json arr = json::array();
     for (const auto& mk : markers)
         arr.push_back({ {"seq", mk.seq}, {"at_ms", mk.at_ms},
+                        {"at_media_ms", mk.at_media_ms},
                         {"type", mk.type}, {"label", mk.label}, {"id", mk.id},
                         {"author", mk.author} });
     return json({ {"protocol_version", protocol_version},
@@ -339,6 +340,10 @@ MarkerList MarkerList::from_json(const std::string& s) {
             Marker m;
             m.seq   = mk.value("seq", (uint64_t)0);
             m.at_ms = mk.value("at_ms", (int64_t)0);
+            // Absent in anything written before this field existed, and -1
+            // there rather than 0 so "no media time recorded" cannot be
+            // mistaken for "the very start of the event".
+            m.at_media_ms = mk.value("at_media_ms", (int64_t)-1);
             m.type  = mk.value("type", "cue");
             m.label = mk.value("label", "");
             m.id    = mk.value("id", "");

@@ -136,6 +136,7 @@ struct FakeEncoder {
         manifest.started_at_ms = started_at_ms;
     }
     int64_t started_at_ms = 1700000000000LL;   // a fixed, realistic epoch
+    int64_t real_seg_ms = 0;    // 0 = segments really are seg_dur long
 
     static std::vector<uint8_t> body_for(uint64_t seq, size_t sz = 4096) {
         std::vector<uint8_t> v(sz);
@@ -157,7 +158,12 @@ struct FakeEncoder {
         store.put("events/" + event + "/segments/" + name + ".m4s", body, "", {});
         ManifestSegment ms;
         ms.seq = s; ms.duration_s = seg_dur; ms.checksum = sha256_hex(body);
-        ms.at_ms = started_at_ms + (int64_t)(s * seg_dur * 1000.0);
+        // real_seg_ms lets a test make the ACTUAL segment length differ from
+        // the nominal one the manifest advertises — a "6 s" keyframe interval
+        // is 182 frames at 30 fps, so 6.067 s, and every position derived from
+        // the nominal slips 67 ms per segment.
+        ms.at_ms = started_at_ms + (int64_t)s *
+            (real_seg_ms > 0 ? real_seg_ms : (int64_t)(seg_dur * 1000.0));
         manifest.push(ms, window);
         clock_ms += (int64_t)(seg_dur * 1000);
         publish_manifest();
@@ -1189,8 +1195,16 @@ int main() {
 
         // A second site authors independently; the next poll merges all three.
         MarkerList other;
-        other.markers.push_back(Marker{ 1, enc.clock_ms - 500, "cue", "Welcome",
-                                        "campus-c-id", "Campus C" });
+        // Field by field, not positional braces: adding a member to Marker
+        // must not be able to shift these values one place along.
+        Marker mk_c;
+        mk_c.seq    = 1;
+        mk_c.at_ms  = enc.clock_ms - 500;
+        mk_c.type   = "cue";
+        mk_c.label  = "Welcome";
+        mk_c.id     = "campus-c-id";
+        mk_c.author = "Campus C";
+        other.markers.push_back(mk_c);
         const std::string oj = other.to_json();
         store.put("events/" + enc.event + "/cues/campus-c.json",
                   std::vector<uint8_t>(oj.begin(), oj.end()), "", {});
@@ -1496,6 +1510,40 @@ int main() {
         CHECK(dec.start(), "and it starts");
         CHECK(dec.playback_head() == 0,
               "from its first segment, not two segments in");
+    }
+
+    std::printf("== 29b. Segment length is MEASURED, not taken from the nominal ==\n");
+    {
+        // A "6 s" keyframe interval lands on a whole number of frames: 182 at
+        // 30 fps is 6.067 s. Everything that placed a position as
+        // `seq * nominal` therefore slipped 67 ms per segment — 1.11%, about
+        // forty seconds by the end of an hour, on the timeline, the playhead,
+        // behind-live and every cue. The manifest gives the true figure away:
+        // the encoder writes at_ms as event_start + pts_offset, so consecutive
+        // at_ms differ by the ACTUAL duration. See BUGS #2b.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTSEGMSMEASURED");
+        enc.seg_dur = 6.0;          // what the manifest advertises
+        enc.real_seg_ms = 6067;     // what the segments actually are
+        enc.publish_start();
+        for (int i = 0; i < 12; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d29b").string();
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        CHECK(dec.segment_ms() == 6067,
+              "the real segment length is measured from the manifest");
+        CHECK((int64_t)(dec.segment_duration_s() * 1000.0) == 6000,
+              "while the advertised nominal is still 6000 — they differ, "
+              "which is the whole point");
+
+        // Ten segments in, the nominal would be 60.000 s and the truth 60.670 s.
+        const int64_t want = enc.started_at_ms + 10 * 6067;
+        CHECK(dec.wall_clock_ms(10) == want,
+              "so a position ten segments in is placed from the truth, not "
+              "670 ms early");
     }
 
     std::printf("== 29. A cue jump lands on the cue's moment ==\n");

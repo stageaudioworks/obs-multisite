@@ -210,7 +210,36 @@ struct Manifest {
 
 struct Marker {
     uint64_t    seq = 0;
+    // Time of day the cue was dropped. LEGACY, and kept only so that cues
+    // written before at_media_ms exists still resolve. Read at_media_ms first.
     int64_t     at_ms = 0;
+    // WHERE IN THE PROGRAMME the cue was dropped: milliseconds from the start
+    // of the event, in the same media time the frames themselves carry.
+    //
+    // This is the anchor that is actually meaningful. A cue means "this moment
+    // in the service", and media time says that directly — every satellite, the
+    // appliance and the relay resolve it to the same frame, with no clock, no
+    // mapping and nothing to disagree with. A time of day only means that if
+    // something can convert it back, and doing that conversion is what has gone
+    // wrong repeatedly:
+    //
+    //   eea902c  the media-clock pin paired one fragment's wall time with
+    //            another fragment's pts;
+    //   2026-09-19  the decoder estimated a segment's wall time as
+    //            seq * nominal-duration where the encoder had defined it as
+    //            event-start + pts-offset. Two formulas for one quantity, 67 ms
+    //            apart per 6 s segment — 1.11%, about forty seconds of cue
+    //            error by the end of an hour, on 558 of one event's 608
+    //            segments (see BUGS #2b).
+    //
+    // Resi's decoder never shows an operator a time of day at all, which is the
+    // existence proof that none of that machinery buys anything an operator
+    // needs. Elapsed time for a recording, time behind live for a live stream.
+    //
+    // -1, not 0, for "not recorded": a cue dropped in the opening second is
+    // legitimately at 0 ms, and this project has already spent four bugs on a
+    // 0 that meant both "none" and "the first one".
+    int64_t     at_media_ms = -1;
     std::string type = "cue";
     std::string label;
     std::string id;
@@ -220,6 +249,29 @@ struct Marker {
     // drops without a name of its own.
     std::string author;
 };
+
+// WHERE IN THE PROGRAMME a cue sits, in milliseconds from the start of the
+// event. THE answer — every display and every jump asks this and nothing else.
+//
+// Written once because it has been written four times: the encoder stamped a
+// time of day, the OBS docks subtracted the event start from it, and the
+// appliance threw the cue's own anchor away and recomputed one from the segment
+// NUMBER (`wall_clock_ms(seq)`), which is segment-granular and so could not
+// place a cue nearer than the six seconds BUGS #3 had just finished removing
+// from the timeline. Four routes to one quantity, disagreeing by up to a
+// segment and by 1.11% on top (BUGS #2b).
+//
+// A cue that carries its media time answers directly. One that does not — every
+// cue written before this field existed — is converted from its time of day,
+// which is exact as long as the event start is known, because that is precisely
+// the pairing the encoder used to stamp it. Returns -1 when it cannot be
+// placed at all, rather than 0, which is a real position.
+inline int64_t marker_media_ms(const Marker& m, int64_t event_started_ms) {
+    if (m.at_media_ms >= 0) return m.at_media_ms;
+    if (m.at_ms > 0 && event_started_ms > 0 && m.at_ms >= event_started_ms)
+        return m.at_ms - event_started_ms;
+    return -1;
+}
 
 struct MarkerList {
     int         protocol_version = kProtocolVersion;   // see kProtocolVersion

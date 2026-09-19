@@ -308,6 +308,21 @@ RoomState DecoderSession::poll(int64_t now_override) {
     else if (seg_hint > 0.1)
         m_segment_duration_s = seg_hint;
 
+    // The TRUE segment length, from the times the encoder recorded. See
+    // segment_ms() for why the nominal cannot be used to place a position.
+    {
+        const ManifestSegment* first = nullptr;
+        const ManifestSegment* last  = nullptr;
+        for (const auto& sg : m_manifest.segments) {
+            if (sg.at_ms <= 0) continue;
+            if (!first) first = &sg;
+            last = &sg;
+        }
+        if (first && last && last->seq > first->seq && last->at_ms > first->at_ms)
+            m_measured_segment_ms =
+                (last->at_ms - first->at_ms) / (int64_t)(last->seq - first->seq);
+    }
+
     // Stale detection: an encoder that died leaves live.json pointing at an
     // event whose manifest stops advancing. Stop treating it as live — but
     // it is still a recording of everything that happened up to the moment the
@@ -708,8 +723,7 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
             // number is what the media clock is pinned to, so an estimate that
             // cannot be distinguished from a measurement puts every displayed
             // time and every cue on arithmetic rather than on the event.
-            out.starts_at_ms = m_started_at_ms.load() +
-                (int64_t)((double)want * m_segment_duration_s.load() * 1000.0);
+            out.starts_at_ms = m_started_at_ms.load() + (int64_t)want * segment_ms();
             out.starts_at_estimated = true;
         }
         need_init = !m_init_sent;
@@ -949,6 +963,12 @@ uint64_t DecoderSession::discontinuity_id() const {
 // The estimate needs no lock at all, and is exact whenever segments are evenly
 // spaced. Only try the manifest for a precise value, and use try_lock so a UI
 // query is never blocked by the download thread.
+int64_t DecoderSession::segment_ms() const {
+    const int64_t measured = m_measured_segment_ms.load();
+    if (measured > 0) return measured;
+    return (int64_t)(m_segment_duration_s.load() * 1000.0);
+}
+
 int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
     const int64_t started = m_started_at_ms.load();
     if (std::unique_lock<std::mutex> lk(m_mtx, std::try_to_lock); lk.owns_lock()) {
@@ -956,14 +976,16 @@ int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
             if (s.seq == seq && s.at_ms > 0) return s.at_ms;
     }
     if (started <= 0) return 0;
-    return started + (int64_t)((double)seq * m_segment_duration_s.load() * 1000.0);
+    // Measured, not nominal: `seq * 6000` against a real 6067 is 1.11% and
+    // about forty seconds by the end of an hour (BUGS #2b).
+    return started + (int64_t)seq * segment_ms();
 }
 
 int64_t DecoderSession::end_wall_ms() const {
     const uint64_t last = m_latest_seq.load();
     const int64_t at = wall_clock_ms(last);
     if (at <= 0) return 0;
-    return at + (int64_t)(m_segment_duration_s.load() * 1000.0);
+    return at + segment_ms();
 }
 
 bool DecoderSession::at_end() const {
@@ -999,7 +1021,7 @@ double DecoderSession::behind_live_s() const {
     if (!m_head_set.load()) return 0.0;
     const uint64_t head = m_head.load(), live = m_latest_seq.load();
     if (live < head) return 0.0;
-    return (double)(live - head) * m_segment_duration_s.load();
+    return (double)(live - head) * (double)segment_ms() / 1000.0;
 }
 
 std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const {

@@ -312,6 +312,12 @@ private:
 
     std::string m_event_id;
     uint64_t    m_next_seq = 0;
+    // The live edge in MEDIA time: milliseconds of programme published so far.
+    // What a cue is stamped with, because a cue means "this moment in the
+    // service" and that is the only anchor every satellite resolves identically.
+    // Atomic because publish_segment runs on the encode path while add_marker
+    // runs on whoever pressed the button.
+    std::atomic<int64_t> m_live_media_ms{0};
     int64_t     m_last_heartbeat_ms = 0;
     std::string m_author_name;      // guarded by m_mtx; stamped on cues
 
