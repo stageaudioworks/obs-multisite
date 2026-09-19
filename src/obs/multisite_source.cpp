@@ -78,6 +78,20 @@ static constexpr char S_TILEOUT[]  = "tile_output";
 struct PendingFrame {
     bool     is_video = true;
     uint64_t timestamp = 0;
+    // The timeline this frame's TIMESTAMP was computed against, stamped when
+    // the frame is built and never afterwards.
+    //
+    // It has to travel WITH the frame. The delivery loop used to read the
+    // current epoch at pop time and compare it against the current epoch — the
+    // same atomic, loaded twice, microseconds apart — so the comparison could
+    // not fail and the staleness check it was written to perform did not
+    // happen. A frame built before a hold, carrying a timestamp from the
+    // pre-hold playout base, was therefore handed straight through: it arrives
+    // tens of seconds past due, trips the stall resync, and the resync reassigns
+    // the playout base eleven milliseconds after the resume anchored it with a
+    // 500 ms cushion. That is BUGS #2 — the cushion never failed to cover the
+    // interleave gap, it was overwritten before the gap mattered.
+    uint64_t epoch = 0;
     DecodedVideoFrame video;
     DecodedAudioFrame audio;
     // Where this audio goes. Null means this source. A companion audio-only
@@ -620,6 +634,16 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
         if (item.is_video) ctx->dropped_video++; else ctx->dropped_audio++;
         return;
     }
+    // Stamped HERE, not where the frame was built: this thread may have waited
+    // above for up to 250 ms, and a resume can bump the epoch while it waits.
+    // A frame that waited across a resume carries a timestamp from the timeline
+    // it was built on, and stamping after the wait is what lets the delivery
+    // loop recognise it as stale instead of re-basing the clock on it.
+    //
+    // The stamp is taken under dq_mtx, which resume() also holds while it bumps
+    // the epoch and clears the queue, so a frame is never stamped half-way
+    // through a timeline change.
+    item.epoch = ctx->timeline_epoch.load();
     ctx->dq.push_back(std::move(item));
     lk.unlock();
     ctx->dq_cv.notify_all();
@@ -661,7 +685,7 @@ static void deliver_loop(SourceCtx* ctx) {
                 });
             item = std::move(*it);
             ctx->dq.erase(it);
-            item_epoch = ctx->timeline_epoch.load();
+            item_epoch = item.epoch;      // the frame's own, not today's
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
 

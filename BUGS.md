@@ -389,7 +389,61 @@ resume video held 367 ms and audio 1003 ms, BOTH AT THEIR CAPS. D4 predicted
 "about 0.4 s and 1 s" from the 12/48 counts; measured 367 ms and 1003 ms. D4 is
 no longer a suspicion, it is a measurement, and it is coupled to this bug.
 
-**Still inferred, not measured:** that the resync's reassignment is what
+**ROOT CAUSE FOUND 2026-09-19, and it is not any of the four candidates: the
+staleness check was a no-op.** The delivery loop read the epoch like this:
+
+```c
+item_epoch = ctx->timeline_epoch.load();   // at POP time
+...
+tl.adopt(ctx->timeline_epoch.load());
+if (item_epoch != tl.epoch()) continue;    // the same atomic, compared to itself
+```
+
+The epoch was never stamped on the frame. It was loaded from `ctx` when the
+frame was popped and then compared against that same `ctx` value microseconds
+later, so the comparison could not fail. Three separate comments describe this
+check as the thing that stops a frame from a timeline already left re-anchoring
+the clock. It never stopped anything.
+
+`PlayoutTimeline::epoch()` even documents the intended design — "Stamp for
+frames leaving the queue now. Compare with what comes back." — and the stamp
+simply was not applied to the frame.
+
+**How that produces the symptom, end to end.** During a hold the decoder thread
+sits in `enqueue_frame` with the queue at its caps. `resume()` clears the queue,
+bumps the epoch and notifies. The waiting producer wakes, finds space, and
+pushes a frame whose `timestamp` was computed BEFORE the wait, against the
+pre-hold playout base. The dead epoch check waves it through; it is ~54 s past
+due; it trips the 2 s stall resync, which ASSIGNS
+`now - (pts - first) + kMaxDeliveryLeadNs` — replacing the 500 ms cushion
+`anchor_pts` set 11 ms earlier with a 400 ms lead, and rewriting every queued
+frame against it. Hence video delivering 1300 ms of programme in 1000 ms of wall
+clock with its lead collapsing to 66 ms, while audio, already sitting further
+from the threshold, kept 377 ms.
+
+Every measurement fits: the 50.4 s ≈ the 54 s hold; any hold over the 2 s
+threshold reaches it, which is why the fault scaled with hold length; and the
+cushion was never the problem.
+
+**The fix.** `PendingFrame` now carries `epoch`, stamped in `enqueue_frame`
+AFTER its up-to-250 ms wait and under `dq_mtx` — the same lock every epoch bump
+is already taken under, so a frame cannot be stamped half-way through a timeline
+change. The delivery loop compares the frame's own epoch. Stamping where the
+frame is BUILT would have reintroduced the bug in a subtler form, since the wait
+is exactly where a resume overtakes a frame.
+
+Note what this did NOT touch: the anchor, the cushion, `playout_due_ns`, and the
+resync arithmetic are all unchanged. The lever was the one the reading pointed
+at.
+
+**NOT YET VERIFIED against a real hold.** The reasoning accounts for every
+number in the log above, and 50/50 tests pass, but the suite does not cover
+`multisite_source.cpp` — this is plugin glue, not core — so the only proof is a
+hold and a resume on the real thing. What success looks like: NO "playout clock
+fell Ns behind (stall?)" line after a resume, and both min leads in the "first 1s
+after resume" line staying near 400 ms instead of video collapsing to 66 ms.
+
+**Superseded, kept for the record:** that the resync's reassignment is what
 compressed video's lead. The readings are all consistent with it, but nothing
 yet records WHICH frame tripped the resync or what base it was computed against
 — a frame whose epoch survived the bump, or one whose timestamp was built from
