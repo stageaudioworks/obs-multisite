@@ -1961,13 +1961,28 @@ void SourceCtx::resume() {
     // decoder itself is not restarted.
     pause_started_ns = 0;
 
+    // WHERE THE PICTURE STOPPED. This is the whole of the DVR contract, and
+    // until now it was not honoured: a hold froze delivery and stopped fetching
+    // new segments, but the DECODER carried on decoding the fragments it
+    // already held. Those frames arrived at a queue nothing was draining,
+    // waited 250 ms in enqueue_frame, and were dropped. Resume then continued
+    // from wherever the decoder had reached, so the programme thrown away while
+    // holding was simply lost — measured at 0.2 s after a 1.4 s hold, 1.09 s
+    // after 11 s, and 3.90 s after 67 s, each matching the frames dropped
+    // across that hold to within a frame or two.
+    //
+    // A recorder freezes the READ head and keeps the write head going. So
+    // resume seeks back to the frame that was on screen, which makes the
+    // resume position an asserted quantity rather than a consequence of how
+    // long the decoder was left running. It costs a decoder restart, which a
+    // seek already pays, and it is the same call a jog makes — so it also
+    // re-pins the media clock against the fragment it actually landed on,
+    // instead of pairing this position's pts with the FIRST fragment's wall
+    // time and walking every displayed clock backwards.
+    const int64_t resume_pts_ns = last_out_pts_ns.load();
+
+    // Measured before anything clears the queue (BUGS #2 / D4).
     size_t dropped = 0;
-    // MEASUREMENT (BUGS #2 / D4). What the queue held, per stream, in
-    // MILLISECONDS of programme rather than in frames. The caps are counts —
-    // 12 video and 48 audio — so "48 frames" and "12 frames" say nothing about
-    // whether the two streams were holding equivalent amounts, and that
-    // equivalence is the whole question D4 asks. Taken before the clear,
-    // because after it there is nothing to measure.
     double v_span_ms = 0.0, a_span_ms = 0.0;
     size_t v_n = 0, a_n = 0;
     {
@@ -1982,17 +1997,45 @@ void SourceCtx::resume() {
         if (v_n > 1) v_span_ms = (double)(v_hi - v_lo) / 1e6;
         if (a_n > 1) a_span_ms = (double)(a_hi - a_lo) / 1e6;
         dropped = dq.size();
-        dq.clear();
-        // Same reason as a seek: a frame already popped into the delivery
-        // loop's hand is from before the hold, and re-anchoring the clock on it
-        // would put the picture back where the hold started.
-        timeline_epoch++;
     }
-    first_pts_ns = -1;             // next frame re-anchors the playout clock
-    dq_cv.notify_all();            // release the decoder if it was blocked
 
-    paused = false;                // delivery and feeding resume at once
+    // The session has to be running again before it will accept a seek.
+    paused = false;
     sess->resume();
+
+    bool sought = false;
+    if (resume_pts_ns > 0) {
+        const long long want_ms = (long long)(resume_pts_ns / 1000000);
+        if (sess->seek_to_media_ms(want_ms) != 0) {
+            // Flush, release the decoder for restart, re-anchor — exactly what
+            // a jog does, because this IS a jog: to the moment we stopped at.
+            after_jump((long long)sess->playhead_wall_ms());
+            sought = true;
+            mlog_info("source: RESUMED at %.3fs — continuing from where the "
+                      "picture stopped", (double)resume_pts_ns / 1e9);
+        } else {
+            const std::string why = sess->last_error();
+            mlog_warn("source: cannot resume at %.3fs (%s) — falling back to "
+                      "continuing from wherever the decoder reached, which "
+                      "will skip forward",
+                      (double)resume_pts_ns / 1e9,
+                      why.empty() ? "that moment is no longer stored"
+                                  : why.c_str());
+        }
+    }
+
+    if (!sought) {
+        // Nothing has been on screen yet, or the moment is no longer stored.
+        // The old behaviour: drop what is queued and let the next frame
+        // re-anchor. It skips, and now says so rather than doing it quietly.
+        {
+            std::lock_guard<std::mutex> qlk(dq_mtx);
+            dq.clear();
+            timeline_epoch++;
+        }
+        first_pts_ns = -1;
+        dq_cv.notify_all();
+    }
 
     resumed_at_ns = os_gettime_ns();
     frames_at_resume = frames_out.load();
@@ -2011,9 +2054,11 @@ void SourceCtx::resume() {
               "audio %zu frame(s)/%.0f ms (caps are counts: 12 video, 48 audio)",
               v_n, v_span_ms, a_n, a_span_ms);
 
-    mlog_info("source: RESUMED at %.0fs behind live (state=%d, dropped %zu "
-              "queued frames, clock re-anchoring)",
-              sess->behind_live_s(), (int)sess->play_state(), dropped);
+    mlog_info("source: RESUMED at %.0fs behind live (state=%d, %zu queued "
+              "frame(s) discarded, %s)",
+              sess->behind_live_s(), (int)sess->play_state(), dropped,
+              sought ? "sought back to the held position"
+                     : "clock re-anchoring");
 }
 
 void SourceCtx::toggle_pause() {

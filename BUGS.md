@@ -205,6 +205,82 @@ the receiving console's own lock figure over the same run.
 
 ### 2. Hold/resume skips, and the first two attempts to fix it stalled
 
+**THE REQUIREMENT, stated 2026-09-19, and this entry had it wrong.** The entry
+treats the resume skip as benign and chases the A/V glitch. The operator
+requirement is the opposite way round:
+
+- **Playing a LIVE room — behave like a DVR.** Holding freezes the picture and
+  keeps recording. Resuming continues from where it froze, now time-shifted
+  behind live, with catch-up offered.
+- **Playing a RECORDING — behave like Netflix.** Pause and resume exact, jog
+  exact, and timers that report position of total without jumping.
+
+`plays_as_recording` (D1) is the discriminator, and it is now plumbed to the
+dock, the appliance and the page.
+
+**Measured 2026-09-19: resume does not continue where it paused, and the loss
+grows with the hold.**
+
+| hold | on screen at PAUSE | anchored at RESUME | lost |
+|------|--------------------|--------------------|------|
+| 1.4 s | 23.555 s | 23.755 s | 0.20 s |
+| 10.9 s | 31.955 s | 33.045 s | 1.09 s |
+| 66.7 s | 41.621 s | 45.525 s | 3.90 s |
+
+**Cause.** `pause()` stops delivery and stops fetching new segments, but the
+DECODER keeps decoding the fragments it already holds. Those frames reach a
+queue nothing is draining, wait 250 ms in `enqueue_frame`, and are dropped. The
+programme lost on resume is exactly those dropped frames: video drops rose by 35
+across the 11 s hold and 93 across the 67 s hold, which at ~30 fps is 1.17 s and
+3.1 s against measured losses of 1.09 s and 3.90 s. A recorder freezes the READ
+head; this froze the reader and let the decoder run on, discarding.
+
+This also retires the entry's own "the seat does NOT move" measurement, which
+generalised from a single short hold. At 1.4 s the move is 200 ms and reads as
+noise; at 67 s it is 3.9 s.
+
+**Cause of the jumping timers (separate defect, same root shape).** Every
+displayed clock derives from `pin_wall_ms - pin_base_pts`. `adopt()` clears the
+media->wall pin on every epoch bump, so a resume re-pins — but no new fragment
+is fed on a resume, so `restart_wall_ms` still holds the FIRST fragment's wall
+time while `pin_base_pts` is the current position. The pair is mismatched and
+the origin walks backwards by however far has been played:
+
+```
+09:00:38  first pts  0.000s -> origin 1789463961282
+09:01:02  first pts 23.721s -> origin 1789463937561
+09:01:21  first pts 33.024s -> origin 1789463928258
+09:02:36  first pts 45.188s -> origin 1789463916094      (24 s of walk)
+```
+
+The pin log line already carries the test — "the pts here must match the one the
+playout anchored on; when those two differ, the clock has been pinned to a
+position already left". Anchored 45.525 s against pinned 45.188 s, 337 ms apart.
+Logged, never checked, so nobody saw it.
+
+**Fix applied 2026-09-19: resume seeks back to the frame that was on screen.**
+`resume()` now captures `last_out_pts_ns` and calls `seek_to_media_ms()` +
+`after_jump()` — the same path a jog takes. That makes the resume position an
+asserted quantity rather than a consequence of how long the decoder was left
+running, and because a seek DOES feed a new fragment, it re-pins the media clock
+against the fragment it actually landed on. One fix, both defects, which is the
+reason for doing it this way round rather than separating the pin first.
+
+Falls back to the old clear-and-re-anchor when nothing has been on screen yet or
+the moment is no longer stored, and says so in the log rather than skipping
+quietly.
+
+**Not yet verified.** 50/50 core tests pass and the plugin builds, but the suite
+does not reach `multisite_source.cpp`. What to look for: `RESUMED at X —
+continuing from where the picture stopped`, where X matches the preceding
+`PAUSED ... on screen X`; and the media clock origin staying put across resumes
+instead of walking.
+
+**Still open after this:** the decoder still decodes and discards while held.
+The seek makes that harmless rather than fixing it, and it is wasted work on a
+Pi. Worth revisiting as option (b) — stopping the decoder during a hold — once
+this is proven.
+
 **Status: OPEN, understood, deliberately not fixed yet. The skip is benign; a
 revert is in place so playback does not stall. Do not re-apply the reverted
 commits — see "what was tried".**
