@@ -119,6 +119,9 @@ private:
     QPushButton* m_testUplink = nullptr;
     QLabel*      m_testUplinkResult = nullptr;
     void showTestConnection(const ProbeResult& r);
+    // Fills the caption-source combo from the sources that exist now, keeping
+    // `selected` chosen if it is still among them.
+    void refreshCaptionSources(const std::string& selected);
 
     QPushButton* m_checkSecond = nullptr;
     QLabel*      m_checkSecondResult = nullptr;
@@ -148,6 +151,10 @@ private:
     QLineEdit* m_channelLabels = nullptr;
     // How this feed is composited, if it carries more than one picture.
     QComboBox* m_tileLayout = nullptr;
+    // The text source captions are taken from (see caption_bridge.h). A
+    // combo of the scene's text sources, because a typed name is a silent
+    // failure waiting for an event.
+    QComboBox* m_captionSource = nullptr;
     // These only apply in particular audio setups, so they are shown
     // conditionally rather than confusing everyone else.
     QWidget* m_trackLabelRow = nullptr;

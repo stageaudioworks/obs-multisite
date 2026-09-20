@@ -813,6 +813,7 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
+        src/obs/caption_bridge.cpp
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp
         src/obs/plugin_log.cpp

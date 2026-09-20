@@ -1523,6 +1523,48 @@ the same manifest a cloud decoder would eventually see, just sooner.
 
 ---
 
+## 8.8 Captions
+
+Captions ride **inside the video bitstream** as CEA-708 SEI, not as a caption
+track. That is the whole design decision and it is worth the paragraph.
+
+libobs already does the hard part. `add_caption()` in `obs-output.c` splices an
+SEI message into the encoded video packet, and it runs inside
+`send_interleaved()` — the same path that hands packets to our output's
+`encoded_packet` callback. A caption submitted to our output object is therefore
+already inside the H.264/HEVC/AV1 packet before we see it.
+
+Everything downstream is byte-transparent and needs no changes whatsoever:
+
+| Stage | What it does with the bytes |
+|---|---|
+| `CmafMuxer` | `av_write_frame` on the packet verbatim; no bitstream filter |
+| `multisite_output` | `cp.data.assign(pkt->data, …)`, a straight copy |
+| Storage / manifest | Describes video and audio; the payload is opaque |
+| Satellite decoder | Hands the same bytes to FFmpeg |
+| Relay | `-c copy`, and SEI travels inside the video NALs |
+
+A separate text track would have needed new work in all five. This needed none
+of them — only a way to get captions **into** our output.
+
+**Where captions come from.** A text source, chosen in the encoder's settings.
+Not an output, because LocalVocal's own "Stream Captions" is hardwired to
+`obs_frontend_get_streaming_output()` with no picker: it can never address our
+output, and when OBS is not also streaming that call returns null and the
+captions are dropped silently. Every captioning plugin surveyed — LocalVocal,
+and the Google, Deepgram, ElevenLabs and Speechmatics captioners — can write
+into a text source, so watching one works with all of them and depends on none
+of their internals. `obs_source_add_caption_callback` is also honoured, for a
+capture card that brings real CEA-708 in.
+
+**Not built, and known.** Nothing renders captions at the campus end. OBS has no
+caption renderer, and a survey found no third-party plugin that decodes or
+displays CEA-608/708 from a source — every OBS caption plugin is a generator.
+So captions reach a satellite and pass through it to anything it restreams, but
+the Pi player cannot yet burn them into HDMI. That is its own piece of work:
+SEI extraction, a CEA-708 decoder and compositing onto the frame. Burned-in
+captions at the encoder remain the way to put words on a campus screen today.
+
 ## 9. Capability overview
 
 What this project does, and where each piece stands. Status is against the
