@@ -28,6 +28,7 @@
 #include "config.h"
 #include "audio_levels.h"   // what the card was given, for the meters
 #include "audio_output.h"
+#include "reporter.h"       // PairView + the heartbeat worker Player owns
 #include "video_output.h"
 #include "splash.h"
 
@@ -155,6 +156,11 @@ struct Status {
     // operator being asked to go and find the journal.
     std::string audio_state;
     std::string audio_error;
+
+    // The monitoring heartbeat's last answer, in the reporter's own stable
+    // words ("accepted (200)", "disabled", …) — empty before the first
+    // evaluation. What the page shows beside the reporter settings.
+    std::string reporter_state;
 };
 
 // What the sound card is being given, with a word for why it reads as it does.
@@ -297,6 +303,22 @@ public:
     void event_listing(EventListing& out) const;
 
     void status(Status& out) const;
+
+    // The heartbeat's last answer for the page. Empty before the first
+    // evaluation or when the reporter was never started.
+    std::string reporter_state() const;
+
+    // Persist a full config edit: save to disk when a path exists, then
+    // apply. The settings page and pairing claims both go through here, so a
+    // save failure reads the same whichever of them asked.
+    bool store_config(const Config& cfg, std::string& error);
+
+    // Device-code pairing (preferred over typing): the worker asks and polls,
+    // the page shows the code. False from begin when no collector URL is
+    // configured — pairing needs somewhere to ask.
+    bool reporter_pair_begin();
+    void reporter_pair_cancel();
+    PairView reporter_pair_view() const;
 
     // The most recent decoded picture, for the preview. Deliberately separate
     // from the output path: the preview may be one frame a second, may lag,
@@ -548,6 +570,12 @@ private:
     EventListing       m_events;
     std::atomic<bool>  m_events_refreshing{false};
     std::atomic<bool>  m_events_wanted{false};
+
+    // The monitoring heartbeat (reporter-brief). Reads the config snapshot
+    // every tick, so Save takes effect without a restart; deliberately NOT
+    // part of reconfigure()'s receive_changed — reporting settings must never
+    // take the picture away.
+    std::unique_ptr<Reporter> m_reporter;
 
     mutable std::mutex m_err_mtx;
     std::string        m_last_error;

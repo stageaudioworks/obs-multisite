@@ -84,6 +84,12 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "lan_port",             lan_port);
     take(j, "lan_auth_token",       lan_auth_token);
 
+    take(j, "reporter_enabled",     reporter_enabled);
+    take(j, "reporter_url",         reporter_url);
+    take(j, "reporter_appliance_id", reporter_appliance_id);
+    take(j, "reporter_token",       reporter_token);
+    take(j, "reporter_device_id",   reporter_device_id);
+
     take(j, "room_id",              room_id);
     take(j, "site_name",            site_name);
     take(j, "pinned_event_id",      pinned_event_id);
@@ -149,6 +155,12 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["lan_host"]             = lan_host;
     j["lan_port"]             = lan_port;
     j["lan_auth_token"]       = lan_auth_token;
+
+    j["reporter_enabled"]      = reporter_enabled;
+    j["reporter_url"]          = reporter_url;
+    j["reporter_appliance_id"] = reporter_appliance_id;
+    j["reporter_token"]        = reporter_token;
+    j["reporter_device_id"]    = reporter_device_id;
 
     j["room_id"]              = room_id;
     j["site_name"]            = site_name;

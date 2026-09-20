@@ -105,6 +105,19 @@ struct BroadcastSettings {
     // segment the instant it's asked to store one.
     bool        cloud_enabled = true;
 
+    // Monitoring heartbeat (reporter-brief) — off by default. When disabled
+    // or unconfigured the reporter sends nothing: zero sockets, zero bytes.
+    // The collector URL is a plain string with no default pointing at our
+    // infrastructure. The id must match the id the token was minted for.
+    bool        reporter_enabled = false;
+    std::string reporter_url;
+    std::string reporter_appliance_id;
+    std::string reporter_token;
+    // Local device id for pairing (PROJECT-SCOPE §8.5: minted locally, no
+    // network). Minted once on first Connect and persisted — an identifier,
+    // not a secret, so uniqueness is what matters.
+    std::string reporter_device_id;
+
     // Persisted alongside OBS's own plugin config.
     void load();
     void save() const;

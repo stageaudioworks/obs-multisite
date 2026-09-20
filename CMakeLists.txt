@@ -77,6 +77,10 @@ add_library(multisite_core STATIC
     src/core/event_catalog.cpp
     src/core/storage_manager.cpp
     src/core/storage_providers.cpp
+    # The monitoring heartbeat's shape and schedule (reporter-brief): the one
+    # authority for which status fields go on the wire, so the filter cannot
+    # drift per host. Pure logic, no network — hosts own the thread and POST.
+    src/core/heartbeat_reporter.cpp
     src/core/http_date.cpp
     # Comparing this build against the published one. No network here: only the
     # part that can be wrong (is one tag newer than another) so it is tested
@@ -272,6 +276,13 @@ add_test(NAME mirror_verify COMMAND test_mirror_verify)
 add_executable(test_link_health tests/test_link_health.cpp)
 target_link_libraries(test_link_health PRIVATE multisite_core)
 add_test(NAME link_health COMMAND test_link_health)
+
+# The monitoring heartbeat (reporter-brief): field allowlists, the 30 s / 5 min
+# schedule, 429/interval_s backoff, and the appliance-only host block — all
+# without a network, so the privacy guarantee is pinned by a test.
+add_executable(test_heartbeat_reporter tests/test_heartbeat_reporter.cpp)
+target_link_libraries(test_heartbeat_reporter PRIVATE multisite_core)
+add_test(NAME heartbeat_reporter COMMAND test_heartbeat_reporter)
 
 # The low-disk readout the encoder dock and the appliance's web UI both show.
 # Pure threshold arithmetic, kept out of the statvfs/std::filesystem::space()
@@ -634,6 +645,9 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         # One request to the GitHub releases API per run, so a box left on a
         # shelf tells somebody a newer build exists. Notification only.
         src/appliance/update_check.cpp
+        # The monitoring heartbeat (reporter-brief): this box's filtered
+        # status plus its host block, POSTed on a schedule. Off by default.
+        src/appliance/reporter.cpp
         src/appliance/preview.cpp
         src/appliance/splash.cpp
         src/appliance/outputs.cpp)
@@ -839,6 +853,10 @@ if(BUILD_OBS_PLUGIN)
         # One request to the GitHub releases API per run, so an operator learns
         # a newer build exists. Notification only; see the file's own note.
         src/obs/update_check.cpp
+        # The monitoring heartbeat (reporter-brief): one worker thread for
+        # both roles, POSTing each role's filtered status document. Off by
+        # default — disabled sends nothing. No Qt, so dockless builds report.
+        src/obs/reporter.cpp
         # The remote-control pages, served on the church network. No Qt (and so
         # no docks needed): a build without them still gets remote control,
         # because the machine that most needs it is the one nobody is at.

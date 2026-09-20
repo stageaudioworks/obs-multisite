@@ -16,6 +16,8 @@ void stop_web_ui();
 void shut_down_web_ui();
 void register_vendor_api();
 void unregister_vendor_api();
+void reporter_start();
+void reporter_stop();
 #ifdef MULTISITE_HAVE_QT
 void register_docks();
 #endif
@@ -57,6 +59,11 @@ bool obs_module_load(void) {
 #ifdef MULTISITE_HAVE_QT
     multisite_obs::register_docks();    // encoder + decoder operator panels
 #endif
+    // The monitoring heartbeat. Started whether or not this build has docks:
+    // a headless encoder is exactly the machine whose state wants reporting.
+    // Off by default — until an operator configures it, this is one sleeping
+    // thread and zero sockets.
+    multisite_obs::reporter_start();
     // The phone-and-tablet interface, served from this process. No Qt either:
     // a build without docks still gets remote control, because the machine that
     // most needs it is the one nobody is sitting at.
@@ -66,6 +73,7 @@ bool obs_module_load(void) {
 void obs_module_unload(void) {
     // Stopped first: while it is running, a request can arrive at any moment,
     // and it must not arrive after the things it controls have gone.
+    multisite_obs::reporter_stop();
     multisite_obs::unregister_vendor_api();
     multisite_obs::shut_down_web_ui();
     multisite_obs::unregister_ui();

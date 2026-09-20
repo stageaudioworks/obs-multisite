@@ -57,6 +57,17 @@ struct Config {
     int         lan_port = 9080;
     std::string lan_auth_token;
 
+    // Monitoring heartbeat (reporter-brief) — off by default. When disabled
+    // or unconfigured the reporter sends nothing: zero sockets, zero bytes.
+    // The collector URL is a plain string with no default pointing at our
+    // infrastructure. The id must match the id the token was minted for.
+    bool        reporter_enabled = false;
+    std::string reporter_url;
+    std::string reporter_appliance_id;
+    std::string reporter_token;
+    // Local device id for pairing — minted once, persisted, never shown.
+    std::string reporter_device_id;
+
     // ── What to receive ──────────────────────────────────────────────────────
     std::string room_id = "main-auditorium";
     // What this box is called on the cues it drops — "Campus B". Empty means it

@@ -59,6 +59,9 @@ private slots:
     // Turning cloud back ON (unchecking this) needs no confirmation: that's
     // the safe direction.
     void onDisableCloudToggled(bool checked);
+    void onPairBegin();
+    void onPairCancel();
+    void refreshPairing();
     void refresh();
 
 private:
@@ -140,6 +143,22 @@ private:
     // shown while m_lanEnabled is checked — disabling cloud with LAN off
     // would leave nothing delivered anywhere at all.
     QCheckBox* m_disableCloud = nullptr;
+
+    // Monitoring heartbeat (reporter-brief) — off by default. The outcome
+    // line says the last POST's answer, refreshed with everything else.
+    QCheckBox* m_reporterEnabled = nullptr;
+    QLineEdit* m_reporterUrl = nullptr;
+    QLineEdit* m_reporterId = nullptr;
+    QLineEdit* m_reporterToken = nullptr;
+    QLabel*    m_reporterState = nullptr;
+    // Device-code pairing (TELEMETRY.md §4, preferred over typing): the code
+    // on screen while the collector waits for approval, then the saved
+    // credentials. m_pairWasDone keeps the "connected" line up after the
+    // worker's Done is acknowledged and cleared.
+    QPushButton* m_pairBtn = nullptr;
+    QPushButton* m_pairCancel = nullptr;
+    QLabel*      m_pairStatus = nullptr;
+    bool         m_pairWasDone = false;
 
     // media
     QComboBox* m_encoder = nullptr;

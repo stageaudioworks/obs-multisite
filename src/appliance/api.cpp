@@ -57,6 +57,8 @@ json status_json(const Player& player) {
     j["loading"]    = s.loading;
     j["locked"]     = s.locked;
     j["configured"] = s.configured;
+    // The heartbeat's last answer, for the line beside the reporter settings.
+    j["reporter_state"] = s.reporter_state;
 
     j["playhead_ms"]    = s.playhead_ms;
     j["live_ms"]        = s.live_ms;
@@ -153,6 +155,16 @@ json config_json(const Config& c) {
                               ? std::string()
                               : std::string(kSecretPlaceholder);
     j["lan_auth_token_set"] = !c.lan_auth_token.empty();
+
+    j["reporter_enabled"]      = c.reporter_enabled;
+    j["reporter_url"]          = c.reporter_url;
+    j["reporter_appliance_id"] = c.reporter_appliance_id;
+    // Same placeholder convention as the secrets above: dots mean
+    // "unchanged", so the token never travels to a browser to come back.
+    j["reporter_token"] = c.reporter_token.empty()
+                              ? std::string()
+                              : std::string(kSecretPlaceholder);
+    j["reporter_token_set"] = !c.reporter_token.empty();
 
     j["room_id"]            = c.room_id;
     j["site_name"]          = c.site_name;
@@ -293,6 +305,18 @@ Config apply_edit(Config c, const json& j) {
             if (it != j.end() && !it->is_null()) c.lan_auth_token = token;
         }
     }
+    take(j, "reporter_enabled", c.reporter_enabled);
+    take(j, "reporter_url", c.reporter_url);
+    take(j, "reporter_appliance_id", c.reporter_appliance_id);
+    {
+        std::string token;
+        take(j, "reporter_token", token);
+        // Same placeholder rule as every other secret on this page.
+        if (token != kSecretPlaceholder) {
+            auto it = j.find("reporter_token");
+            if (it != j.end() && !it->is_null()) c.reporter_token = token;
+        }
+    }
     take(j, "room_id", c.room_id);
     take(j, "site_name", c.site_name);
 
@@ -421,6 +445,13 @@ double number_param(const HttpRequest& req, const json& body, const char* name,
 }
 
 } // namespace
+
+// The status document as text, for the monitoring heartbeat — the same
+// object the page polls, so the reporter cannot disagree with what the
+// operator sees (standards §2: one authority per quantity).
+std::string player_status_json(const Player& player) {
+    return status_json(player).dump();
+}
 
 void register_api(HttpServer& server, Player& player, std::string config_path) {
 
@@ -573,17 +604,57 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             return;
         }
         Config updated = apply_edit(player.config(), body);
-
         std::string err;
-        if (!updated.save(config_path, err)) {
-            // Saving is what makes a setting survive the next power cut, so a
-            // failure here must be reported rather than silently applied.
+        if (!player.store_config(updated, err)) {
+            // Saving is what makes a setting survive the next power cut, so
+            // a failure here must be reported rather than silently applied.
             res.status = 500;
             res.json(json{{"error", "could not save settings: " + err}}.dump());
             return;
         }
-        player.reconfigure(updated);
         res.json(config_json(player.config()).dump());
+    });
+
+    // ── Monitoring heartbeat pairing (device-code flow, TELEMETRY.md §4) ──
+    // The worker asks and polls; these routes only show the code and stop it.
+    // The token never appears here — on claim it goes straight into the
+    // config file, and the page reloads settings to see the dots.
+    auto pair_view_json = [](const PairView& v) {
+        const char* phase = "idle";
+        switch (v.phase) {
+            case 1: phase = "waiting"; break;
+            case 2: phase = "done"; break;
+            case 3: phase = "expired"; break;
+            case 4: phase = "failed"; break;
+            default: break;
+        }
+        return json{
+            {"phase", phase},
+            {"user_code", v.user_code},
+            {"verification_url", v.verification_url},
+            {"error", !v.note.empty() ? v.note : v.error},
+        };
+    };
+    server.route("POST", "/api/reporter/pair/start",
+                 [&player, pair_view_json](const HttpRequest&,
+                                           HttpResponse& res) {
+        if (!player.reporter_pair_begin()) {
+            res.status = 400;
+            res.json(json{{"error", "enter the collector URL first"}}.dump());
+            return;
+        }
+        res.json(pair_view_json(player.reporter_pair_view()).dump());
+    });
+    server.route("GET", "/api/reporter/pair",
+                 [&player, pair_view_json](const HttpRequest&,
+                                           HttpResponse& res) {
+        res.json(pair_view_json(player.reporter_pair_view()).dump());
+    });
+    server.route("POST", "/api/reporter/pair/cancel",
+                 [&player, pair_view_json](const HttpRequest&,
+                                           HttpResponse& res) {
+        player.reporter_pair_cancel();
+        res.json(pair_view_json(player.reporter_pair_view()).dump());
     });
 
     // What this box can actually be set to. Listed from the hardware rather

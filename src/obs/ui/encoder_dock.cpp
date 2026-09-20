@@ -8,6 +8,7 @@
 #include "../storage_secondary.h"
 #include "../core/mirror_verify.h"
 #include "../core/s3_transport.h"
+#include "../reporter.h"
 #include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
@@ -481,6 +482,52 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     lform->addRow(tr_("Dock.LanToken"), m_lanToken);
     storePageLayout->addWidget(lanBox);
 
+    // ── Monitoring heartbeat (reporter-brief) ──────────────────────────
+    // Off by default: until an operator fills this in and switches it on,
+    // nothing leaves the machine. Its own box, not folded into storage or
+    // LAN, because it reports on either path rather than belonging to one.
+    auto* repBox = new QGroupBox(tr_("Dock.Reporter"), storePage);
+    auto* rform = new QFormLayout(repBox);
+    m_reporterEnabled = new QCheckBox(tr_("Dock.ReporterEnabled"), repBox);
+    m_reporterEnabled->setToolTip(tr_("Dock.ReporterEnabledHint"));
+    m_reporterUrl = new QLineEdit(repBox);
+    m_reporterUrl->setToolTip(tr_("Dock.ReporterUrlHint"));
+    m_reporterUrl->setPlaceholderText("https://");
+    m_reporterId = new QLineEdit(repBox);
+    m_reporterId->setToolTip(tr_("Dock.ReporterIdHint"));
+    m_reporterToken = new QLineEdit(repBox);
+    m_reporterToken->setToolTip(tr_("Dock.ReporterTokenHint"));
+    m_reporterToken->setEchoMode(QLineEdit::Password);
+    m_reporterState = new QLabel(repBox);
+    m_reporterState->setWordWrap(true);
+    rform->addRow(QString(), m_reporterEnabled);
+    rform->addRow(tr_("Dock.ReporterUrl"), m_reporterUrl);
+    rform->addRow(tr_("Dock.ReporterId"), m_reporterId);
+    rform->addRow(tr_("Dock.ReporterToken"), m_reporterToken);
+    rform->addRow(QString(), m_reporterState);
+    // Device-code pairing (TELEMETRY.md §4): preferred over typing an ID and
+    // token by hand. The worker does the asking and the polling; this page
+    // only shows the code and stops it.
+    {
+        auto* pairRow = new QWidget(repBox);
+        auto* pairLayout = new QHBoxLayout(pairRow);
+        pairLayout->setContentsMargins(0, 0, 0, 0);
+        m_pairBtn = new QPushButton(tr_("Dock.ReporterConnect"), pairRow);
+        m_pairBtn->setToolTip(tr_("Dock.ReporterConnectHint"));
+        m_pairCancel = new QPushButton(tr_("Dock.ReporterCancel"), pairRow);
+        m_pairCancel->setEnabled(false);
+        pairLayout->addWidget(m_pairBtn);
+        pairLayout->addWidget(m_pairCancel);
+        pairLayout->addStretch(1);
+        rform->addRow(QString(), pairRow);
+        connect(m_pairBtn, &QPushButton::clicked, this, &EncoderDock::onPairBegin);
+        connect(m_pairCancel, &QPushButton::clicked, this, &EncoderDock::onPairCancel);
+    }
+    m_pairStatus = new QLabel(repBox);
+    m_pairStatus->setWordWrap(true);
+    rform->addRow(QString(), m_pairStatus);
+    storePageLayout->addWidget(repBox);
+
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
 
@@ -615,9 +662,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
                           m_region, m_room, m_siteName, m_cacheDir,
                           m_trackLabels, m_channelLabels, m_lanToken,
+                          m_reporterUrl, m_reporterId, m_reporterToken,
                           m_eventName })
         connect(e, &QLineEdit::textEdited, this, [this] { m_dirty = true; });
-    for (QCheckBox* cb : { m_tags, m_lanEnabled, m_disableCloud })
+    for (QCheckBox* cb : { m_tags, m_lanEnabled, m_disableCloud, m_reporterEnabled })
         connect(cb, &QCheckBox::toggled, this,
                 [this](bool) { if (!m_loading) m_dirty = true; });
     for (QComboBox* combo : { m_provider, m_encoder, m_tileLayout, m_captionSource })
@@ -692,8 +740,7 @@ void EncoderDock::updateLanFields() {
         m_disableCloud->setChecked(false);
 }
 
-void EncoderDock::onDisableCloudToggled(bool checked) {
-    if (!checked) { onSaveSettings(); return; }   // turning cloud back on is the safe direction
+void EncoderDock::onDisableCloudToggled(bool checked) {    if (!checked) { onSaveSettings(); return; }   // turning cloud back on is the safe direction
     if (QMessageBox::question(this, tr_("Dock.DisableCloud"),
                               tr_("Dock.CloudDisableConfirm"),
                               QMessageBox::Yes | QMessageBox::No,
@@ -703,6 +750,72 @@ void EncoderDock::onDisableCloudToggled(bool checked) {
         return;
     }
     onSaveSettings();
+}
+
+void EncoderDock::onPairBegin() {
+    // Commit the fields first: the worker pairs against the SAVED collector
+    // URL, so a typed-but-unapplied one would pair against the old address.
+    // Same rule as Start, which saves before it connects.
+    onSaveSettings();
+    m_pairWasDone = false;
+    if (!reporter_pair_begin("obs-encoder"))
+        m_pairStatus->setText(tr_("Dock.ReporterNeedUrl"));
+}
+
+void EncoderDock::onPairCancel() {
+    reporter_pair_cancel("obs-encoder");
+}
+
+void EncoderDock::refreshPairing() {
+    if (!m_pairStatus) return;
+    const PairView v = reporter_pair_view("obs-encoder");
+    const QString reason = !v.note.empty() ? QString::fromStdString(v.note)
+                                           : QString::fromStdString(v.error);
+    switch (v.phase) {
+        case 1: {  // waiting: the code is the whole point, shown first
+            const QString t = tr_("Dock.ReporterCode").arg(
+                QString::fromStdString(v.user_code),
+                QString::fromStdString(v.verification_url));
+            if (m_pairStatus->text() != t) m_pairStatus->setText(t);
+            m_pairBtn->setEnabled(false);
+            m_pairCancel->setEnabled(true);
+            break;
+        }
+        case 2: {  // done: credentials are saved — show them, then stand down
+            if (!m_pairWasDone) {
+                m_pairWasDone = true;
+                // The saved ID and token, not last session's typing.
+                loadIntoFields();
+                reporter_pair_cancel("obs-encoder");
+            }
+            if (m_pairStatus->text() != tr_("Dock.ReporterDone"))
+                m_pairStatus->setText(tr_("Dock.ReporterDone"));
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        }
+        case 3:
+            if (m_pairStatus->text() != tr_("Dock.ReporterExpired"))
+                m_pairStatus->setText(tr_("Dock.ReporterExpired"));
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        case 4: {
+            const QString t = tr_("Dock.ReporterFailed").arg(reason);
+            if (m_pairStatus->text() != t) m_pairStatus->setText(t);
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        }
+        default:
+            // Idle says nothing, unless it just finished connecting — the
+            // filled-in ID and token are the proof, and the line says so.
+            if (!m_pairWasDone && !m_pairStatus->text().isEmpty())
+                m_pairStatus->setText(QString());
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+    }
 }
 
 void EncoderDock::onOpenSettings() {
@@ -860,6 +973,10 @@ void EncoderDock::loadIntoFields() {
     m_lanPort->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
     m_disableCloud->setChecked(!cfg.cloud_enabled);
+    m_reporterEnabled->setChecked(cfg.reporter_enabled);
+    m_reporterUrl->setText(QString::fromStdString(cfg.reporter_url));
+    m_reporterId->setText(QString::fromStdString(cfg.reporter_appliance_id));
+    m_reporterToken->setText(QString::fromStdString(cfg.reporter_token));
     // Machine-wide, so read from its own store rather than from cfg — and read
     // here, on every open, so a change made in the other dock's dialog shows up.
     m_checkUpdates->setChecked(update_check_enabled());
@@ -1048,6 +1165,10 @@ void EncoderDock::onSaveSettings() {
     cfg.lan_port       = m_lanPort->value();
     cfg.lan_auth_token = m_lanToken->text().trimmed().toStdString();
     cfg.cloud_enabled  = !m_disableCloud->isChecked();
+    cfg.reporter_enabled      = m_reporterEnabled->isChecked();
+    cfg.reporter_url          = m_reporterUrl->text().trimmed().toStdString();
+    cfg.reporter_appliance_id = m_reporterId->text().trimmed().toStdString();
+    cfg.reporter_token        = m_reporterToken->text().trimmed().toStdString();
     // The event name is per-event, not a saved setting. Send it only when the
     // operator has typed their own; an untouched date/time default is sent
     // empty so the satellite falls back to the time and a resumed event keeps
@@ -1384,14 +1505,18 @@ void EncoderDock::refresh() {
     showLan();
     showSecond();
 
-    // A real error wins the red line, but a clock far from the store's earns
-    // the same attention: it is what puts this site's times out of step with
-    // the others. The figure comes from the store's own Date header, so it
-    // describes THIS machine's error, not a guess.
+    // A real error wins the red line. A clock far enough from the store's earns
+    // it too — not because times read oddly, which stopped being true when
+    // positions became elapsed, but because requests are SIGNED with this
+    // clock and the store refuses them once it is far enough out. See
+    // clock_skew_level() for the bands and the reasoning.
     QString warn = QString::fromStdString(st.last_error);
-    const long long skew = st.clock_skew_ms;
-    if (warn.isEmpty() && (skew >= 5000 || skew <= -5000))
-        warn = tr_("Dock.ClockOut") + " (" + QString::number(skew / 1000) + " s)";
+    const auto level = multisite_ui::clock_skew_level(st.clock_skew_ms);
+    if (warn.isEmpty() && level != multisite_ui::ClockSkew::Fine) {
+        const QString by = multisite_ui::clock_skew_text(st.clock_skew_ms);
+        warn = (level == multisite_ui::ClockSkew::Urgent
+                    ? tr_("Dock.ClockOutUrgent") : tr_("Dock.ClockOut")).arg(by);
+    }
     if (!warn.isEmpty()) {
         m_error->setText(warn);
         m_error->show();
@@ -1416,6 +1541,16 @@ void EncoderDock::refresh() {
         m_resumedNote->hide();
         m_endAndFresh->hide();
     }
+
+    // The heartbeat's last answer, in the settings dialog — so an operator
+    // who just switched it on sees the first 200 arrive without reopening
+    // anything. Compared before setting: setText re-parses every call.
+    if (m_reporterState) {
+        const QString t =
+            QString::fromStdString(reporter_last_result("obs-encoder"));
+        if (m_reporterState->text() != t) m_reporterState->setText(t);
+    }
+    refreshPairing();
 }
 
 } // namespace multisite_obs

@@ -108,6 +108,9 @@ private slots:
     void onSaveSettings();
     void onApplySettings();
     void onOpenSettings();
+    void onPairBegin();
+    void onPairCancel();
+    void refreshPairing();
     // Shows only the storage fields the selected provider actually needs
     // (PROJECT-SCOPE.md §8.6) — the same dropdown as the encoder dock.
     void updateProviderFields();
@@ -282,6 +285,20 @@ private:
     QLineEdit* m_lanHost = nullptr;
     QSpinBox*  m_lanPortField = nullptr;
     QLineEdit* m_lanToken = nullptr;
+    // Monitoring heartbeat (reporter-brief) — off by default. The outcome
+    // line says the last POST's answer, refreshed with everything else.
+    QCheckBox* m_reporterEnabled = nullptr;
+    QLineEdit* m_reporterUrl = nullptr;
+    QLineEdit* m_reporterId = nullptr;
+    QLineEdit* m_reporterToken = nullptr;
+    QLabel*    m_reporterState = nullptr;
+    // Device-code pairing (preferred): the code while the collector waits,
+    // then the saved credentials. m_pairWasDone keeps the "connected" line
+    // up after Done is acknowledged and cleared.
+    QPushButton* m_pairBtn = nullptr;
+    QPushButton* m_pairCancel = nullptr;
+    QLabel*      m_pairStatus = nullptr;
+    bool         m_pairWasDone = false;
     // In a dialog rather than the dock, for the same reason as the encoder:
     // settings are set once, the dock is watched mid-event.
     SettingsDialog* m_settings = nullptr;

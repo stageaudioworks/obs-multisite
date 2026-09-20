@@ -222,6 +222,7 @@ libcurl together, the three relay suites need `-DMULTISITE_BUILD_RELAY=ON`, and
 | `timebase` | `Manifest::stream_duration_hint()` maps sequence numbers onto clock times for every segment outside the rolling window, so it decides the timeline axis, "behind live" and a recording's total length — and a finished recording's last segment is the partial fragment the broadcast ended on, which must not be taken as typical |
 | `storage_health` | the colo and the throughput figure an operator is shown when a campus stutters, kept out of the transport so they can be tested with no network, no bucket and no libcurl |
 | `link_health` | the three-state link readout every operator surface shows, with the arithmetic in the core so it needs no network |
+| `heartbeat_reporter` | the monitoring heartbeat's shape and schedule: verbatim field allowlists, 30 s / 5 min intervals, 429/`interval_s` backoff, appliance-only host block, pairing parsers — no network |
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during an event |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
 | `http_server` | the shared HTTP server spoken to over a real loopback socket: routing, verbs, the static web root, keep-alive, a handler that throws, and the refusal of a path that climbs out of the web root |

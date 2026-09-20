@@ -223,6 +223,11 @@ function drawStatus() {
   drawCues(s);
   drawReadout(s);
 
+  // The heartbeat's last answer, beside the reporter settings — so an
+  // operator who just switched it on sees the first 200 arrive.
+  const repNote = $('#reporter-note');
+  if (repNote) repNote.textContent = s.reporter_state ? 'Heartbeat: ' + s.reporter_state : '';
+
   // An internet outage takes priority over the raw error text while it lasts:
   // "no internet, but you have N minutes of buffer" is the sentence an operator
   // can act on, and "HTTP 0" is not.
@@ -600,6 +605,10 @@ async function loadSettings() {
   set('#c-aes67-on', String(!!settings.aes67_manage));
   set('#c-aes67-address', settings.aes67_address || '');
   set('#c-aes67-channels', settings.aes67_channels);
+  set('#c-reporter-on', String(!!settings.reporter_enabled));
+  set('#c-reporter-url', settings.reporter_url || '');
+  set('#c-reporter-id', settings.reporter_appliance_id || '');
+  set('#c-reporter-token', settings.reporter_token || '');
 
   // The network audio output takes the sound onto the AES67 card, and that card
   // is what the stream publishes — so while it is on, the output device is not
@@ -734,6 +743,10 @@ $('#settings-form').addEventListener('submit', async (e) => {
     audio_channels: Number($('#c-channels').value),
     audio_track: Number($('#c-audio-track').value),
     auto_play: $('#c-autoplay').value === 'true',
+    reporter_enabled: $('#c-reporter-on').value === 'true',
+    reporter_url: $('#c-reporter-url').value.trim(),
+    reporter_appliance_id: $('#c-reporter-id').value.trim(),
+    reporter_token: $('#c-reporter-token').value,
   };
 
   try {
@@ -773,6 +786,81 @@ $('#settings-form').addEventListener('submit', async (e) => {
                message === 'Saved.' ? 3000 : 12000);
   } catch (err) {
     note.textContent = err.message;
+  }
+  setTimeout(() => { note.textContent = ''; }, 8000);
+});
+
+/* ── Monitoring heartbeat pairing ──────────────────────────────────────── */
+
+let reporterPairTimer = null;
+
+function drawPairView(v) {
+  const code = $('#reporter-code');
+  const note = $('#reporter-pair');
+  if (!v || v.phase === 'idle') {
+    code.textContent = '';
+    note.textContent = '';
+    return;
+  }
+  if (v.phase === 'waiting') {
+    code.textContent = v.user_code || '';
+    note.textContent = v.verification_url
+      ? 'Enter this code at ' + v.verification_url
+      : 'Enter this code on the collector\u2019s page.';
+    return;
+  }
+  code.textContent = '';
+  if (v.phase === 'done') {
+    note.textContent = 'Collector connected — the ID and token are saved.';
+    stopPairPoll();
+    loadSettings();
+  } else if (v.phase === 'expired') {
+    note.textContent = 'The code expired before anyone approved it — press Connect to try again.';
+  } else {
+    note.textContent = 'Pairing failed: ' + (v.error || 'unknown error');
+  }
+}
+
+async function pollPairView() {
+  try {
+    drawPairView(await api('GET', '/api/reporter/pair'));
+  } catch (err) {
+    $('#reporter-pair').textContent = err.message;
+    stopPairPoll();
+  }
+}
+
+function stopPairPoll() {
+  if (reporterPairTimer !== null) {
+    clearInterval(reporterPairTimer);
+    reporterPairTimer = null;
+  }
+}
+
+$('#btn-reporter-connect').addEventListener('click', async () => {
+  // Commit the typed URL first: pairing asks the SAVED collector URL, so a
+  // typed-but-unsaved one would pair against the old address. The merge keeps
+  // everything the form did not send, so this saves exactly one field.
+  const note = $('#reporter-pair');
+  note.textContent = 'Asking…';
+  try {
+    settings = await api('PUT', '/api/config',
+                         { reporter_url: $('#c-reporter-url').value.trim() });
+    $('#c-reporter-url').value = settings.reporter_url || '';
+    drawPairView(await api('POST', '/api/reporter/pair/start'));
+    stopPairPoll();
+    reporterPairTimer = setInterval(pollPairView, 2000);
+  } catch (err) {
+    note.textContent = err.message;
+  }
+});
+
+$('#btn-reporter-cancel').addEventListener('click', async () => {
+  stopPairPoll();
+  try {
+    drawPairView(await api('POST', '/api/reporter/pair/cancel'));
+  } catch (err) {
+    $('#reporter-pair').textContent = err.message;
   }
 });
 
@@ -898,8 +986,7 @@ async function loadAes67() {
   }
 }
 
-$('#btn-aes67').addEventListener('click', async () => {
-  const note = $('#aes67-note');
+$('#btn-aes67').addEventListener('click', async () => {  const note = $('#aes67-note');
   note.textContent = 'Applying…';
   try {
     const s = await api('POST', '/api/aes67/source', {

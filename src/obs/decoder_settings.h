@@ -65,6 +65,18 @@ struct DecoderSettings {
     int         lan_port = 9080;
     std::string lan_auth_token;
 
+    // Monitoring heartbeat (reporter-brief) — off by default, same promise
+    // as the encoder's: disabled or unconfigured sends nothing. Per-role
+    // rather than machine-wide because each role reports its own status and
+    // either dock may be the only one on screen.
+    bool        reporter_enabled = false;
+    std::string reporter_url;
+    std::string reporter_appliance_id;
+    std::string reporter_token;
+    // Local device id for pairing — minted once, persisted. See
+    // BroadcastSettings for why it lives in settings at all.
+    std::string reporter_device_id;
+
     void load();
     void save() const;
 

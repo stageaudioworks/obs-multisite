@@ -2156,6 +2156,27 @@ a multi-byte character.
   latch. Not yet exercised by a real jump-and-check in the field — if a
   jump-to-marker ever shows a position that looks wrong again, this is
   the first place to look.
+- **Monitoring heartbeat (reporter-brief): the GPL-side reporter is built,
+  in the OBS plugin and the Pi player.** One worker per host (both roles in
+  the plugin), POSTing each role's status through the verbatim allowlists in
+  `src/core/heartbeat_reporter.h` — the single authority for what goes on
+  the wire, pinned by `tests/test_heartbeat_reporter.cpp` — plus the
+  appliance-only host block from `sysinfo.h` (unknown sensors omitted, never
+  zeroed). 30 s while a role is active, 5 min while idle, fire-and-forget;
+  a 429 or `Retry-After` lengthens, an `interval_s` body is adopted.
+  Device-code pairing (TELEMETRY.md §4) is preferred, manual URL/id/token
+  the fallback; the token never reaches a browser except as dots, and the
+  claim is persisted before Done is ever shown.
+
+  Measured live against a real `multisite-player` and a stub collector:
+  disabled sends nothing; unreachable drops silently with one log line; a
+  200 accepted a real allowlisted payload (no secrets, paths or IPs in it);
+  a 429 backed off onto the adopted 45 s cadence; pairing went start → 2 s
+  polls → claim, persisting id, token and minted device id and adopting the
+  reply's URL. The OBS side builds with the symbols in the binary, but no
+  live OBS has clicked through pairing yet — the shared core machine is
+  tested and the worker mirrors the proven Pi one, which is evidence, not
+  proof.
 
 ---
 

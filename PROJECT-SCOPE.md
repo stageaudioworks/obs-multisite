@@ -1625,6 +1625,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Knowing a newer build exists, and applying it without a manual reinstall | notification built — the plugin and the player each ask once per run and say so; whether an update applies itself is still undecided (§10 Phase 11) |
 | Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
+| Monitoring heartbeat to a collector (off by default; OBS + Pi, manual or paired) | built — each role's filtered status plus the appliance host block, every 30 s active / 5 min idle, fire-and-forget; device-code pairing preferred, typed URL/id/token as fallback |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
 | Lossless high-quality mode: FLAC audio + ~10 Mbps HEVC, players only, no relay/web path | planned (§10 Phase 15) |
 

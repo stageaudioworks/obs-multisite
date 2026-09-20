@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "player.h"
 #include "log.h"
+#include "reporter.h"
 #include "screen.h"
 #include "sysinfo.h"
 #include "audio_plan.h"   // how wide the card is opened — one rule, one place
@@ -143,6 +144,36 @@ Player::~Player() { stop(); }
 Config Player::config() const {
     std::lock_guard<std::mutex> lk(m_cfg_mtx);
     return m_cfg;
+}
+
+std::string Player::reporter_state() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_reporter ? m_reporter->last_result() : std::string();
+}
+
+bool Player::store_config(const Config& cfg, std::string& error) {
+    // Saving is what makes a setting survive the next power cut, so a
+    // failure here is reported rather than silently applied. A player built
+    // without a path (a test) keeps it in memory only.
+    if (!m_config_path.empty() && !cfg.save(m_config_path, error))
+        return false;
+    reconfigure(cfg);
+    return true;
+}
+
+bool Player::reporter_pair_begin() {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_reporter ? m_reporter->pair_begin() : false;
+}
+
+void Player::reporter_pair_cancel() {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    if (m_reporter) m_reporter->pair_cancel();
+}
+
+PairView Player::reporter_pair_view() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_reporter ? m_reporter->pair_view() : PairView{};
 }
 
 long long Player::clock_skew_ms() const {
@@ -351,6 +382,16 @@ void Player::start() {
     m_deliver_thread = std::thread([this] { deliver_loop(); });
     m_aes67_thread   = std::thread([this] { aes67_loop(); });
 
+    // The monitoring heartbeat. Its own thread, started whether or not
+    // anything is playing — an idle box still reports every five minutes —
+    // and off by default, in which case it is one sleeping thread that sends
+    // nothing. Reads the config every tick, so Save needs no restart here.
+    {
+        std::lock_guard<std::mutex> lk(m_obj_mtx);
+        if (!m_reporter) m_reporter = std::make_unique<Reporter>();
+        m_reporter->start(*this);
+    }
+
     m_events_wanted = true;
 
     // One request to GitHub, in the background, so the page can say a newer
@@ -374,6 +415,13 @@ void Player::start() {
 void Player::stop() {
     m_flushing = true;                 // release a decoder blocked on the queue
     if (!m_running.exchange(false)) { m_flushing = false; return; }
+    // The reporter only ever reads (status, config, observed health), but it
+    // is stopped before the teardown below all the same: nothing should be
+    // sampling state while the session it samples is being freed.
+    {
+        std::lock_guard<std::mutex> lk(m_obj_mtx);
+        if (m_reporter) m_reporter->stop();
+    }
     m_dq_cv.notify_all();
     if (m_poll_thread.joinable())    m_poll_thread.join();
     if (m_feed_thread.joinable())    m_feed_thread.join();
@@ -1893,6 +1941,7 @@ void Player::status(Status& out) const {
     out.room_id           = cfg.room_id;
     out.configured        = cfg.configured();
     out.locked            = m_locked.load();
+    out.reporter_state    = reporter_state();
     out.playing           = m_playing.load();
     out.paused            = m_paused.load();
     out.loading           = m_loading_event.load();

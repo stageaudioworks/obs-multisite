@@ -4,6 +4,7 @@
 #include "../multisite_ui.h"
 #include "../decoder_settings.h"
 #include "../plugin_log.h"
+#include "../reporter.h"
 #include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
@@ -793,6 +794,51 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     lform->addRow(tr_("Dock.LanToken"), m_lanToken);
     storePageLayout->addWidget(lanBox);
 
+    // ── Monitoring heartbeat (reporter-brief) ──────────────────────────
+    // Off by default, worded exactly as the encoder dock words it: an
+    // operator who has seen one settings dialog should not have to learn
+    // the other.
+    auto* repBox = new QGroupBox(tr_("Dock.Reporter"), storePage);
+    auto* rform = new QFormLayout(repBox);
+    m_reporterEnabled = new QCheckBox(tr_("Dock.ReporterEnabled"), repBox);
+    m_reporterEnabled->setToolTip(tr_("Dock.ReporterEnabledHint"));
+    m_reporterUrl = new QLineEdit(repBox);
+    m_reporterUrl->setToolTip(tr_("Dock.ReporterUrlHint"));
+    m_reporterUrl->setPlaceholderText("https://");
+    m_reporterId = new QLineEdit(repBox);
+    m_reporterId->setToolTip(tr_("Dock.ReporterIdHint"));
+    m_reporterToken = new QLineEdit(repBox);
+    m_reporterToken->setToolTip(tr_("Dock.ReporterTokenHint"));
+    m_reporterToken->setEchoMode(QLineEdit::Password);
+    m_reporterState = new QLabel(repBox);
+    m_reporterState->setWordWrap(true);
+    rform->addRow(QString(), m_reporterEnabled);
+    rform->addRow(tr_("Dock.ReporterUrl"), m_reporterUrl);
+    rform->addRow(tr_("Dock.ReporterId"), m_reporterId);
+    rform->addRow(tr_("Dock.ReporterToken"), m_reporterToken);
+    rform->addRow(QString(), m_reporterState);
+    // Device-code pairing: the code while the collector waits for approval,
+    // then the saved credentials. Worded as the encoder dialog words it.
+    {
+        auto* pairRow = new QWidget(repBox);
+        auto* pairLayout = new QHBoxLayout(pairRow);
+        pairLayout->setContentsMargins(0, 0, 0, 0);
+        m_pairBtn = new QPushButton(tr_("Dock.ReporterConnect"), pairRow);
+        m_pairBtn->setToolTip(tr_("Dock.ReporterConnectHint"));
+        m_pairCancel = new QPushButton(tr_("Dock.ReporterCancel"), pairRow);
+        m_pairCancel->setEnabled(false);
+        pairLayout->addWidget(m_pairBtn);
+        pairLayout->addWidget(m_pairCancel);
+        pairLayout->addStretch(1);
+        rform->addRow(QString(), pairRow);
+        connect(m_pairBtn, &QPushButton::clicked, this, &DecoderDock::onPairBegin);
+        connect(m_pairCancel, &QPushButton::clicked, this, &DecoderDock::onPairCancel);
+    }
+    m_pairStatus = new QLabel(repBox);
+    m_pairStatus->setWordWrap(true);
+    rform->addRow(QString(), m_pairStatus);
+    storePageLayout->addWidget(repBox);
+
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
 
@@ -840,7 +886,8 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // no such distinction, so they are guarded by m_loading instead.
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId, m_secret,
                           m_region, m_roomId, m_siteName, m_cacheDir,
-                          m_lanHost, m_lanToken })
+                          m_lanHost, m_lanToken,
+                          m_reporterUrl, m_reporterId, m_reporterToken })
         connect(e, &QLineEdit::textEdited, this, [this] { m_dirty = true; });
     for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins,
                           m_pollMs, m_keepBehind, m_lanPortField })
@@ -848,6 +895,8 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
                 [this](int) { if (!m_loading) m_dirty = true; });
     connect(m_provider, &QComboBox::currentIndexChanged, this,
             [this](int) { if (!m_loading) m_dirty = true; });
+    connect(m_reporterEnabled, &QCheckBox::toggled, this,
+            [this](bool) { if (!m_loading) m_dirty = true; });
 
     loadIntoFields();
 
@@ -924,6 +973,10 @@ void DecoderDock::loadIntoFields() {
     m_lanHost->setText(QString::fromStdString(cfg.lan_host));
     m_lanPortField->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
+    m_reporterEnabled->setChecked(cfg.reporter_enabled);
+    m_reporterUrl->setText(QString::fromStdString(cfg.reporter_url));
+    m_reporterId->setText(QString::fromStdString(cfg.reporter_appliance_id));
+    m_reporterToken->setText(QString::fromStdString(cfg.reporter_token));
     // Machine-wide, so read from its own store rather than from cfg — and read
     // here, on every open, so a change made in the other dock's dialog shows up.
     m_checkUpdates->setChecked(update_check_enabled());
@@ -936,6 +989,68 @@ void DecoderDock::loadIntoFields() {
 void DecoderDock::onApplySettings() {
     onSaveSettings();
     decoder_reconfigure_all();   // apply now, without closing the dialog
+}
+
+void DecoderDock::onPairBegin() {
+    // Commit first, so the worker pairs against the saved collector URL —
+    // the same rule Start follows before it connects.
+    onSaveSettings();
+    m_pairWasDone = false;
+    if (!reporter_pair_begin("obs-decoder"))
+        m_pairStatus->setText(tr_("Dock.ReporterNeedUrl"));
+}
+
+void DecoderDock::onPairCancel() {
+    reporter_pair_cancel("obs-decoder");
+}
+
+void DecoderDock::refreshPairing() {
+    if (!m_pairStatus) return;
+    const PairView v = reporter_pair_view("obs-decoder");
+    const QString reason = !v.note.empty() ? QString::fromStdString(v.note)
+                                           : QString::fromStdString(v.error);
+    switch (v.phase) {
+        case 1: {
+            const QString t = tr_("Dock.ReporterCode").arg(
+                QString::fromStdString(v.user_code),
+                QString::fromStdString(v.verification_url));
+            if (m_pairStatus->text() != t) m_pairStatus->setText(t);
+            m_pairBtn->setEnabled(false);
+            m_pairCancel->setEnabled(true);
+            break;
+        }
+        case 2: {
+            if (!m_pairWasDone) {
+                m_pairWasDone = true;
+                loadIntoFields();
+                reporter_pair_cancel("obs-decoder");
+            }
+            if (m_pairStatus->text() != tr_("Dock.ReporterDone"))
+                m_pairStatus->setText(tr_("Dock.ReporterDone"));
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        }
+        case 3:
+            if (m_pairStatus->text() != tr_("Dock.ReporterExpired"))
+                m_pairStatus->setText(tr_("Dock.ReporterExpired"));
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        case 4: {
+            const QString t = tr_("Dock.ReporterFailed").arg(reason);
+            if (m_pairStatus->text() != t) m_pairStatus->setText(t);
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+        }
+        default:
+            if (!m_pairWasDone && !m_pairStatus->text().isEmpty())
+                m_pairStatus->setText(QString());
+            m_pairBtn->setEnabled(true);
+            m_pairCancel->setEnabled(false);
+            break;
+    }
 }
 
 void DecoderDock::onOpenSettings() {
@@ -1027,6 +1142,10 @@ void DecoderDock::onSaveSettings() {
     cfg.lan_host           = m_lanHost->text().trimmed().toStdString();
     cfg.lan_port           = m_lanPortField->value();
     cfg.lan_auth_token     = m_lanToken->text().trimmed().toStdString();
+    cfg.reporter_enabled      = m_reporterEnabled->isChecked();
+    cfg.reporter_url          = m_reporterUrl->text().trimmed().toStdString();
+    cfg.reporter_appliance_id = m_reporterId->text().trimmed().toStdString();
+    cfg.reporter_token        = m_reporterToken->text().trimmed().toStdString();
     set_decoder_settings(cfg);
     // Its own store, and committed with Apply like everything else on this
     // dialog — so opening the settings to look at something still changes
@@ -1294,6 +1413,15 @@ void DecoderDock::refresh() {
             m_update->setVisible(!text.isEmpty());
         }
     }
+
+    // The heartbeat's last answer, in the settings dialog — answered before
+    // the snapshot so it shows with no source too. Compared before setting.
+    if (m_reporterState) {
+        const QString t =
+            QString::fromStdString(reporter_last_result("obs-decoder"));
+        if (m_reporterState->text() != t) m_reporterState->setText(t);
+    }
+    refreshPairing();
 
     DecoderSnapshot s;
     if (!decoder_snapshot(s)) {
@@ -1787,12 +1915,16 @@ void DecoderDock::refresh() {
         m_audio->setToolTip(QString());
     }
 
-    // A real error wins the red line, but a clock far from the store's earns
-    // the same attention: it is what puts this site's cue times out of step.
+    // Same bands and same wording as the encoder dock — see clock_skew_level().
+    // A satellite with a badly wrong clock cannot READ from the store either:
+    // the request is signed the same way.
     QString warn = friendly_error(s.last_error);
-    const long long skew = s.clock_skew_ms;
-    if (warn.isEmpty() && (skew >= 5000 || skew <= -5000))
-        warn = tr_("Dock.ClockOut") + " (" + QString::number(skew / 1000) + " s)";
+    const auto level = multisite_ui::clock_skew_level(s.clock_skew_ms);
+    if (warn.isEmpty() && level != multisite_ui::ClockSkew::Fine) {
+        const QString by = multisite_ui::clock_skew_text(s.clock_skew_ms);
+        warn = (level == multisite_ui::ClockSkew::Urgent
+                    ? tr_("Dock.ClockOutUrgent") : tr_("Dock.ClockOut")).arg(by);
+    }
     if (!warn.isEmpty()) {
         m_error->setText(warn);
         m_error->show();

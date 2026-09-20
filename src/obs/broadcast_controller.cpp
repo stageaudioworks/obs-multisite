@@ -205,6 +205,18 @@ void BroadcastSettings::load() {
         lan_auth_token = obs_data_get_string(d, "lan_auth_token");
     if (obs_data_has_user_value(d, "cloud_enabled"))
         cloud_enabled = obs_data_get_bool(d, "cloud_enabled");
+    // Only when present, so a config saved before the reporter existed keeps
+    // the struct default (disabled) rather than reading back anything else.
+    if (obs_data_has_user_value(d, "reporter_enabled"))
+        reporter_enabled = obs_data_get_bool(d, "reporter_enabled");
+    if (obs_data_has_user_value(d, "reporter_url"))
+        reporter_url = obs_data_get_string(d, "reporter_url");
+    if (obs_data_has_user_value(d, "reporter_appliance_id"))
+        reporter_appliance_id = obs_data_get_string(d, "reporter_appliance_id");
+    if (obs_data_has_user_value(d, "reporter_token"))
+        reporter_token = obs_data_get_string(d, "reporter_token");
+    if (obs_data_has_user_value(d, "reporter_device_id"))
+        reporter_device_id = obs_data_get_string(d, "reporter_device_id");
     obs_data_release(d);
 }
 
@@ -237,6 +249,11 @@ void BroadcastSettings::save() const {
     obs_data_set_int(d, "lan_port", lan_port);
     obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());
     obs_data_set_bool(d, "cloud_enabled", cloud_enabled);
+    obs_data_set_bool(d, "reporter_enabled", reporter_enabled);
+    obs_data_set_string(d, "reporter_url", reporter_url.c_str());
+    obs_data_set_string(d, "reporter_appliance_id", reporter_appliance_id.c_str());
+    obs_data_set_string(d, "reporter_token", reporter_token.c_str());
+    obs_data_set_string(d, "reporter_device_id", reporter_device_id.c_str());
 
     char* path = obs_module_config_path("encoder.json");
     if (path) {

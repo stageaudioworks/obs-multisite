@@ -29,4 +29,8 @@ namespace multisite_player {
 void register_api(multisite::HttpServer& server, Player& player,
                   std::string config_path);
 
+// The status document as text — the same object the page polls, for the
+// monitoring heartbeat to filter and send.
+std::string player_status_json(const Player& player);
+
 } // namespace multisite_player
