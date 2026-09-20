@@ -31,6 +31,59 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.23-alpha
+
+A short release, cut for two faults that v0.1.22-alpha shipped. If you are on
+v0.1.22-alpha, both affect you.
+
+**The campus player's timeline and scrubbing were dead.** Not degraded —
+nothing at all: the bar drew empty and every click and drag was ignored.
+v0.1.22-alpha moved positions from times of day to elapsed time, and elapsed
+time starts at zero. Four guards in the player's page tested that position with
+`if (!x)`, which reads zero as "missing" — and zero is the ordinary state for a
+recording whose first segment is still in storage. A fifth fault in the same
+family placed cue marks on the bar using a time of day against a scale starting
+at zero, so every cue sat off the right-hand end.
+
+The page's arithmetic now lives apart from the page, in `media.js`, with tests
+that run in CI. It had none before, because it needed a browser and the
+arithmetic does not — which is exactly why this shipped.
+
+**The decoder dock read "29831921 min 43 sec behind".** That number is the
+current Unix time in minutes, which is the signature of this kind of fault: the
+live edge was still held as a time of day while the playhead had become an
+elapsed time, so the readout subtracted a position from an epoch. Both sides are
+now the same kind of quantity. The figure the appliance reports was never
+affected, and neither was the timeline — this was one readout.
+
+**The second bucket's settings open properly.** The panel appeared half open —
+three credential fields showing through a box that was supposed to be shut — and
+only collapsed correctly after you ticked and unticked it. Two pieces of code
+owned which rows were visible and disagreed; one does now.
+
+**And the upload speed test measures your link, not just the second bucket.** It
+was inside the second bucket's panel and only ever tested that bucket, so an
+operator without a second bucket could not measure their uplink at all, and the
+button was invisible whenever the panel was collapsed. It now sits beside the
+connection test, measures the main bucket with the values as typed, and measures
+the second as well when one is configured — sequentially, because two bursts at
+once measure each other rather than the link.
+
+**The campus player says how hard the box is working**, on the page that answers
+for it, and a decoder now reports when it has opened its own threads. The AES67
+daemon is no longer left holding the player's own port. And the Pi build sizes
+itself by available memory rather than by core count, so a small Pi survives it.
+
+**Captions are not in this release.** The work exists and is on `main`: closed
+captions carried inside the video bitstream, so they reach every campus and pass
+through the relay to YouTube unchanged, taken either from a feed that already
+carries them or from a captioning plugin's text source. It is held back because
+it has never run end to end — every link is verified by reading the code and
+nothing has been observed arriving anywhere — and because it would have been on
+by default, which means an untested change to the encoded video for anyone whose
+feed carries captions. That is not a thing to hand out unasked. It ships when a
+real event has proved it.
+
 ## What's new in v0.1.22-alpha
 
 **A second bucket, written independently.** The promise this tier makes is
