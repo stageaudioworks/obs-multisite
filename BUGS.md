@@ -973,6 +973,66 @@ reading it can tell them apart — which is the third time this week that a
 quantity in the wrong frame has type-checked perfectly and shipped. Worth
 considering whether these should be distinct types rather than a comment.
 
+### 6. OBS froze mid-broadcast whenever uploads stalled — a network PUT under the status lock
+
+**Status: FIXED.** Reported as occasional UI stalls, narrowed by the operator to
+"live, when uploads are stalling", which is what made it findable: a fault that
+only appears when the network is slow is almost always something blocking while
+holding a lock.
+
+`publish_manifest_locked()` did exactly what its name said:
+
+```cpp
+std::string Session::publish_manifest_locked() {
+    std::string json = m_manifest.to_json();
+    put_json(event_prefix() + "manifest.json", json);   // synchronous HTTPS PUT
+    return json;
+}
+```
+
+All three callers hold `m_mtx`, and one of them is `on_confirmed` — **once per
+segment, for the whole broadcast**. `Session::status()` takes the same mutex,
+and the encoder dock calls it from a **1 Hz QTimer on the OBS UI thread**.
+
+Healthy link: the PUT is 50–100 ms and nobody notices. Stalled link: the UI
+thread waits out the request. Measured with a stub transport that sleeps 1.2 s
+on a manifest write, `status()` took **1202 ms**; with the fix, **0 ms**.
+
+**The near-miss is the interesting part.** The comment directly above was
+scrupulous about not firing *callbacks* under the lock — *"callbacks are never
+fired locked in this file, on principle: SpoolQueue's own drop callback earned
+that rule the hard way"* — and the function returns its JSON specifically so the
+LAN hook can run after release. The lock was thought about carefully. The
+network call inside it was not seen.
+
+And the fix already existed in the same file, applied to the wrong copy.
+`put_bytes()` defers the SECOND bucket's writes for precisely this reason:
+
+> *"this runs on the encode thread, and a second put that waits on a request
+> timeout would stall the live feed on the insurance policy. Latest wins per
+> key — a manifest is rewritten every segment and the mirror only needs the
+> current one."*
+
+Every word of that applies to the primary. The pattern was invented to protect
+the encode thread from the mirror, and the primary went on blocking.
+
+A manifest is latest-wins, so one publisher thread now owns the writing, takes
+the newest JSON and publishes it with nothing held; a manifest superseded while
+a PUT is in flight is dropped rather than queued. One writer also makes
+out-of-order publishes impossible, which a plain "unlock, then PUT" would have
+allowed. `begin` and `end` flush and wait, bounded, because those two writes are
+what "this event exists" and "this event is over" mean to a satellite.
+
+**Pinned by `test_session` case 21**, verified against the old behaviour first:
+it reports 1202 ms and fails there.
+
+**Found by reading, not by logging — which is itself the finding.** The core had
+no logging facility at all: 600 lines of `session.cpp` doing every upload in the
+project without one log call, because it may not depend on OBS or the appliance
+and nobody had given it a seam. Failure detail was computed and discarded
+(`r.http_status`, `r.error`) at every site. `src/core/log.h` now provides a sink
+the host installs, and the upload paths say what happened.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —

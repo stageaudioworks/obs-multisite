@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
@@ -929,6 +931,64 @@ int main() {
               "a one-bucket machine reports no second bucket");
         CHECK(!st3.mirror_complete,
               "and never claims a copy it does not have");
+        ses.end();
+    }
+
+
+    std::printf("== 21. a stalled manifest upload does not block status() ==\n");
+    {
+        // BUGS #6, reported as "live, when uploads are stalling" — OBS freezing
+        // mid-broadcast. publish_manifest_locked() did a BLOCKING PUT with
+        // m_mtx held, once per segment for the whole event, and
+        // Session::status() takes that same mutex and is called by the encoder
+        // dock's 1 Hz timer ON THE OBS UI THREAD. Healthy link, nobody notices;
+        // stalled link, the UI waits out the request.
+        //
+        // This test fails against that version and passes against the
+        // publisher thread. The sleep is OUTSIDE MemStore's own mutex so it
+        // models a slow network rather than a contended mock.
+        class SlowManifestStore : public MemStore {
+        public:
+            std::atomic<int> manifest_puts{0};
+            PutResult put(const std::string& key, const std::vector<uint8_t>& body,
+                          const std::string& ct,
+                          const std::map<std::string,std::string>& tags) override {
+                if (key.find("manifest.json") != std::string::npos) {
+                    ++manifest_puts;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+                }
+                return MemStore::put(key, body, ct, tags);
+            }
+        };
+
+        SlowManifestStore store;
+        SessionConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.spool_dir = (base / "s21").string();
+        cfg.segment_duration_s = 6.0;
+        Session ses(cfg, store);
+        CHECK(ses.start_new(blob(0, 1500), video, tracks), "start_new succeeded");
+
+        const int puts_after_start = store.manifest_puts.load();
+        // A segment queues the next manifest; the publisher picks it up and is
+        // then stuck in the slow PUT for 1.2 s.
+        ses.publish_segment(blob(1, 4000), 6.0, 0.0);
+
+        for (int i = 0; i < 400 && store.manifest_puts.load() == puts_after_start; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(store.manifest_puts.load() > puts_after_start,
+              "a manifest PUT is in flight");
+
+        const auto t0 = std::chrono::steady_clock::now();
+        auto st = ses.status();
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - t0).count();
+        (void)st;
+        std::printf("         status() took %lld ms while a 1200 ms PUT was in flight\n",
+                    (long long)took);
+        CHECK(took < 300,
+              "status() returns promptly while a manifest upload is stalled");
+
         ses.end();
     }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "session.h"
+#include "log.h"
 
 #include <chrono>
 #include <random>
@@ -97,7 +98,19 @@ Session::Session(SessionConfig cfg, Transport& transport)
     }
 }
 
+// Stops the manifest publisher. Safe to call twice; end() and the destructor
+// both do.
+void Session::stop_manifest_publisher() {
+    if (!m_manifest_run.exchange(false)) {
+        if (m_manifest_thread.joinable()) m_manifest_thread.join();
+        return;
+    }
+    m_manifest_cv.notify_all();
+    if (m_manifest_thread.joinable()) m_manifest_thread.join();
+}
+
 Session::~Session() {
+    stop_manifest_publisher();
     if (m_mirror) m_mirror->stop();
     m_obj_run = false;
     if (m_obj_thread.joinable()) m_obj_thread.join();
@@ -111,6 +124,19 @@ std::string Session::segment_key(uint64_t seq) const {
     return event_prefix() + "segments/" + seq_name(seq) + ".m4s";
 }
 
+std::string Session::last_error() const {
+    std::lock_guard<std::mutex> lk(m_err_mtx);
+    return m_last_error;
+}
+void Session::set_error(const std::string& what) {
+    std::lock_guard<std::mutex> lk(m_err_mtx);
+    m_last_error = what;
+}
+void Session::clear_error() {
+    std::lock_guard<std::mutex> lk(m_err_mtx);
+    m_last_error.clear();
+}
+
 bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
                         const std::string& content_type) {
     std::map<std::string, std::string> tags;
@@ -118,8 +144,14 @@ bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
         tags[m_cfg.expiry_tag_key] = m_cfg.expiry_tag_val;
     PutResult r = m_tx.put(key, b, content_type, tags);
     if (!r.success) {
-        m_last_error = "PUT " + key + " -> HTTP " +
-                       std::to_string(r.http_status) + " " + r.error;
+        set_error("PUT " + key + " -> HTTP " +
+                  std::to_string(r.http_status) + " " + r.error);
+        // SAID, not just recorded. m_last_error is surfaced in one place in the
+        // dock and overwritten by the next failure, so a write that fails and
+        // then succeeds leaves no trace at all of having failed. During an
+        // event that is exactly the history an operator needs afterwards.
+        log_warn("upload: PUT %s failed — HTTP %ld%s%s", key.c_str(),
+                 r.http_status, r.error.empty() ? "" : " — ", r.error.c_str());
     }
     // Queue it for the second bucket, rather than putting it there now: this
     // runs on the encode thread, and a second put that waits on a request
@@ -155,6 +187,20 @@ void Session::mirror_objects_loop() {
                 PutResult r = m_cfg.mirror_transport->put(kv.first, kv.second.first,
                                                           kv.second.second, tags);
                 if (!r.success) {
+                    // Rate-limited to once every 30 s. This loop runs five times
+                    // a second, so an outage that says nothing and an outage
+                    // that says it four hundred times a minute are equally
+                    // useless; what matters is that it is in the log at all,
+                    // and how long it went on.
+                    const int64_t t = now_ms();
+                    if (t - m_mirror_last_log_ms > 30000) {
+                        m_mirror_last_log_ms = t;
+                        log_warn("second bucket: PUT %s failed — HTTP %ld%s%s "
+                                 "(still retrying; %zu object(s) queued)",
+                                 kv.first.c_str(), r.http_status,
+                                 r.error.empty() ? "" : " — ", r.error.c_str(),
+                                 batch.size());
+                    }
                     // Put it back for a later pass — unless the key has been
                     // rewritten meanwhile, in which case the newer copy is the
                     // one that belongs there.
@@ -196,7 +242,11 @@ ResumeInfo peek_resumable(const std::string& spool_dir,
 bool Session::begin_common(const std::vector<uint8_t>& init,
                            const VideoInfo& video,
                            const std::vector<AudioTrack>& tracks) {
-    m_last_error.clear();
+    clear_error();
+    // Started before anything is queued, so the first manifest has somewhere
+    // to go rather than sitting until the next segment.
+    if (!m_manifest_run.exchange(true))
+        m_manifest_thread = std::thread([this] { manifest_publish_loop(); });
     // A Session cancels its transport when it stops using one (~Session and
     // end(), both through RetryUploader::stop()), and that cancel is sticky.
     // So a transport handed to a second Session — resuming a crashed event is
@@ -229,7 +279,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     idx.name          = m_cfg.event_name;
     idx.started_at_ms = ev.started_at_ms;
     if (!put_json(room_event_key(m_cfg.room_id, m_event_id), idx.to_json())) {
-        m_last_error.clear();   // reported above; not a go-live failure
+        clear_error();   // reported above; not a go-live failure
     }
 
     // init.mp4 — must exist before any segment is referenced
@@ -237,7 +287,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
 
     // A LAN satellite bootstraps from exactly these two things — the same
     // event.json just published and the same init bytes — fired unlocked, on
-    // principle (see publish_manifest_locked()).
+    // principle (see queue_manifest_locked()).
     if (m_on_event_started) m_on_event_started(m_event_id, ev.to_json(), init);
 
     // seed manifest state
@@ -254,8 +304,13 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         m_manifest.first_available_seq = m_next_seq;
         m_manifest.started_at_ms       = ev.started_at_ms;
         m_manifest.updated_at_ms       = now_ms();
-        manifest_json = publish_manifest_locked();
+        manifest_json = queue_manifest_locked();
     }
+    // Waited for, unlike the per-segment ones: until this object exists a
+    // satellite cannot find the event at all, so Go Live has not really
+    // happened. Bounded — a slow link should delay the confirmation, never
+    // hang the caller.
+    flush_manifest(10000);
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
 
     publish_live("live");
@@ -361,7 +416,7 @@ void Session::on_confirmed(const SpooledSegment& seg) {
                     (int64_t)(seg.pts_offset_s * 1000.0);
     m_manifest.push(ms, m_cfg.manifest_window);
     m_manifest.updated_at_ms = now_ms();
-    manifest_json = publish_manifest_locked();
+    manifest_json = queue_manifest_locked();
 
     // Periodic heartbeat so decoders can distinguish "quiet" from "dead".
     int64_t t = now_ms();
@@ -395,9 +450,9 @@ void Session::on_dropped(const SpoolDrop& d) {
     if (d.new_floor > m_manifest.first_available_seq)
         m_manifest.first_available_seq = d.new_floor;
     ++m_dropped_total;
-    m_last_error = "local spool cap reached: dropped queued segment " +
-                   std::to_string(d.seq) + " before it could be uploaded "
-                   "(upload link has been down or overwhelmed for too long)";
+    set_error("local spool cap reached: dropped queued segment " +
+              std::to_string(d.seq) + " before it could be uploaded "
+              "(upload link has been down or overwhelmed for too long)");
 }
 
 uint64_t Session::bytes_uploaded() const {
@@ -409,10 +464,65 @@ uint64_t Session::bytes_uploaded() const {
 // never fired locked in this file, on principle: SpoolQueue's own drop
 // callback earned that rule the hard way (see spool_queue.cpp), and nothing
 // here needs the exception.
-std::string Session::publish_manifest_locked() {
+// Called with m_mtx HELD. Serialises and hands over; never touches the network,
+// which is the entire point — see the note on m_manifest_thread in session.h.
+std::string Session::queue_manifest_locked() {
     std::string json = m_manifest.to_json();
-    put_json(event_prefix() + "manifest.json", json);
+    const std::string key = event_prefix() + "manifest.json";
+    {
+        std::lock_guard<std::mutex> lk(m_manifest_mtx);
+        // The KEY travels with the body rather than being rebuilt in the
+        // publisher: event_prefix() reads m_event_id, which belongs to m_mtx,
+        // and reaching for it from the other thread would trade one race for
+        // another.
+        m_manifest_key     = key;
+        m_manifest_pending = json;
+        m_manifest_dirty   = true;
+        ++m_manifest_queued;
+    }
+    m_manifest_cv.notify_all();
     return json;
+}
+
+void Session::manifest_publish_loop() {
+    while (m_manifest_run.load()) {
+        std::string key, json;
+        uint64_t gen = 0;
+        {
+            std::unique_lock<std::mutex> lk(m_manifest_mtx);
+            m_manifest_cv.wait_for(lk, std::chrono::milliseconds(200), [this] {
+                return !m_manifest_run.load() || m_manifest_dirty;
+            });
+            if (!m_manifest_run.load()) break;
+            if (!m_manifest_dirty) continue;
+            // COALESCED. Anything queued while the last PUT was in flight has
+            // already overwritten its predecessor, so a stalled link costs one
+            // stale manifest, not a backlog of them.
+            key  = m_manifest_key;
+            json = std::move(m_manifest_pending);
+            m_manifest_pending.clear();
+            m_manifest_dirty = false;
+            gen = m_manifest_queued;
+        }
+        put_json(key, json);          // NOTHING held. This is the whole fix.
+        {
+            std::lock_guard<std::mutex> lk(m_manifest_mtx);
+            if (gen > m_manifest_done) m_manifest_done = gen;
+        }
+        m_manifest_cv.notify_all();
+    }
+}
+
+bool Session::flush_manifest(int timeout_ms) {
+    std::unique_lock<std::mutex> lk(m_manifest_mtx);
+    const uint64_t want = m_manifest_queued;
+    const bool ok = m_manifest_cv.wait_for(
+        lk, std::chrono::milliseconds(timeout_ms),
+        [this, want] { return m_manifest_done >= want || !m_manifest_run.load(); });
+    if (!ok)
+        log_warn("manifest: still not published after %d ms — the link is very "
+                 "slow or down; carrying on rather than blocking", timeout_ms);
+    return ok;
 }
 
 void Session::publish_live(const std::string& status) {
@@ -425,7 +535,7 @@ void Session::publish_live(const std::string& status) {
     std::string json = lp.to_json();
     put_json(live_pointer_key(m_cfg.room_id), json);
     // Not called under m_mtx (publish_live never is — see its three callers),
-    // so no unlock dance is needed here unlike publish_manifest_locked().
+    // so no unlock dance is needed here unlike queue_manifest_locked().
     if (m_on_live_published) m_on_live_published(json);
 }
 
@@ -515,7 +625,8 @@ bool Session::add_cue_from(const std::string& author, const std::string& label,
     }
     mine.markers.push_back(mk);
     if (!put_json(key, mine.to_json())) {
-        error = m_last_error.empty() ? "the cue could not be stored" : m_last_error;
+        { const std::string le = last_error();
+          error = le.empty() ? "the cue could not be stored" : le; }
         return false;
     }
 
@@ -559,19 +670,26 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     // end() discarded it, and the operator's log signed off with a tidy
     // "stopped: N confirmed". Clearing the error first makes the answer
     // specific to this ending rather than to anything earlier in the event.
-    m_last_error.clear();
+    clear_error();
 
     std::string manifest_json;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         m_manifest.status = "ended";
         m_manifest.updated_at_ms = now_ms();
-        manifest_json = publish_manifest_locked();
+        manifest_json = queue_manifest_locked();
     }
+    // The comment above is the reason this is waited for: these two writes ARE
+    // "this event is over" as far as any satellite is concerned, and end()
+    // reports success from whether they landed. Then the publisher is stopped,
+    // in that order — stopping first would discard the very thing being waited
+    // for.
+    flush_manifest(15000);
+    stop_manifest_publisher();
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
     m_spool->mark_ended();
-    return m_last_error.empty();
+    return last_error().empty();
 }
 
 Session::Status Session::status() const {

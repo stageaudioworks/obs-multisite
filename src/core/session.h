@@ -27,6 +27,7 @@
 #include <map>
 #include <thread>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -285,7 +286,10 @@ public:
     const std::string& event_id() const { return m_event_id; }
 
     // Why the last operation failed (HTTP status + body). Empty if none.
-    const std::string& last_error() const { return m_last_error; }
+    // BY VALUE. It is written by the manifest publisher thread and read by the
+    // dock, so handing out a reference into a string another thread may be
+    // reassigning is a data race with a pointer attached.
+    std::string last_error() const;
 
 private:
     SessionConfig m_cfg;
@@ -304,6 +308,42 @@ private:
     // same yield rule as the media.
     bool mirror_may_go() const;
     void mirror_objects_loop();
+    // Rate-limits the mirror's failure line: see mirror_objects_loop(). Only
+    // touched by that one thread.
+    int64_t            m_mirror_last_log_ms = 0;
+    // ── The manifest publisher ──────────────────────────────────────────────
+    // A manifest PUT used to happen with m_mtx held, once per segment, for the
+    // whole broadcast. Session::status() takes the same lock and is called by
+    // the encoder dock's 1 Hz timer on the OBS UI THREAD — so whenever the link
+    // stalled, OBS froze for as long as the request took. See BUGS #6.
+    //
+    // A manifest is latest-wins: only the newest matters, and a superseded one
+    // is not worth sending. So one thread owns the writing, takes the most
+    // recent JSON, and publishes it with nothing held. One writer also makes
+    // out-of-order publishes impossible, which a simple "unlock, then PUT"
+    // would have allowed.
+    //
+    // The same pattern, for the same reason, as mirror_objects_loop() — which
+    // already deferred the SECOND bucket's writes off the encode thread while
+    // the primary's stayed on it.
+    void        manifest_publish_loop();
+    std::string queue_manifest_locked();      // call with m_mtx held
+    // Waits until everything queued so far has been published. Used where the
+    // write is the point — begin and end — and bounded, because an unbounded
+    // wait here is how End Broadcast froze OBS before (BUGS.md entry 0).
+    bool        flush_manifest(int timeout_ms);
+    void        stop_manifest_publisher();
+
+    std::thread             m_manifest_thread;
+    std::atomic<bool>       m_manifest_run{false};
+    mutable std::mutex      m_manifest_mtx;
+    std::condition_variable m_manifest_cv;
+    std::string             m_manifest_key;       // published alongside the body
+    std::string             m_manifest_pending;   // latest wins; older is dropped
+    bool                    m_manifest_dirty = false;
+    uint64_t                m_manifest_queued = 0;
+    uint64_t                m_manifest_done   = 0;
+
     std::thread        m_obj_thread;
     std::atomic<bool>  m_obj_run{false};
     std::mutex         m_obj_mtx;
@@ -335,6 +375,13 @@ private:
     int64_t     m_resumed_event_started_ms = 0;
     uint64_t    m_resumed_already_confirmed = 0;
     std::string m_last_error;
+    // Guards m_last_error alone. Its own lock rather than m_mtx, because the
+    // publisher records an error AFTER its PUT and must not be made to wait on
+    // the lock the encode thread is using to build the next manifest — which is
+    // the whole point of moving the PUT off that lock.
+    mutable std::mutex m_err_mtx;
+    void set_error(const std::string& what);
+    void clear_error();
     ProgressCallback m_on_progress;
     EventStartedCallback      m_on_event_started;
     SegmentConfirmedCallback  m_on_segment_confirmed;

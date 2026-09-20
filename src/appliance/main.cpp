@@ -11,6 +11,7 @@
 #include "config.h"
 #include "core/http_server.h"
 #include "log.h"
+#include "../core/log.h"
 #include "player.h"
 #include "sysinfo.h"
 
@@ -81,6 +82,17 @@ bool make_directories(const std::string& path) {
 
 int main(int argc, char** argv) {
     using namespace multisite_player;
+
+    // Same seam as the plugin installs: the core does the uploading and the
+    // downloading, and until now had no way to report a failure. Forwarded into
+    // the player's own log so it lands in the file an operator already reads.
+    multisite::set_log_sink([](multisite::LogLevel lvl, const std::string& msg) {
+        switch (lvl) {
+            case multisite::LogLevel::Error: plog_error("%s", msg.c_str()); break;
+            case multisite::LogLevel::Warn:  plog_warn("%s", msg.c_str());  break;
+            default:                         plog_info("%s", msg.c_str());  break;
+        }
+    });
 
     std::string config_path = default_config_path();
     std::string web_root    = MULTISITE_PLAYER_WEB_ROOT;

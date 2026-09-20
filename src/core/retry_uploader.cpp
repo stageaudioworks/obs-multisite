@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "retry_uploader.h"
+#include "log.h"
 #include <random>
 #include <cmath>
 #include <algorithm>
@@ -61,11 +62,24 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             // and the manifest de-duplicates by seq.
             m_stats.confirmed++;
             m_stats.bytes += seg.data.size();
+            // Sampled BEFORE the assignment below, because the recovery line
+            // asks "was the link unwell until now?" and reading it afterwards
+            // always answers no. Same mistake as the clock diagnostic in
+            // BUGS #2 — a value checked after it has been set.
+            const LinkHealth was = m_health;
             m_health = LinkHealth::Healthy;
             // Publish the manifest entry BEFORE clearing the spool file (a
             // crash in between must not orphan the object), then clear it so
             // status counters reflect reality for the confirm callback.
             if (m_on_confirm) m_on_confirm(seg);
+            // Recovery is worth exactly one line, and only when there was
+            // something to recover from. Without it a log shows an outage
+            // starting and never ending, which reads far worse than it was —
+            // and the case that matters most is the link coming back and the
+            // NEXT segment succeeding first try, which `attempt` alone misses.
+            if (attempt > 1 || was != LinkHealth::Healthy)
+                log_info("upload: %s confirmed after %d attempt(s) — link healthy",
+                         seg.key.c_str(), attempt);
             m_spool.confirm(seg.seq, m_cfg.target);
             if (m_on_confirmed_after) m_on_confirmed_after(seg);
             return true;
@@ -75,15 +89,41 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             // surface it and stop draining so the operator can fix credentials.
             m_stats.permanent_failures++;
             m_health = LinkHealth::Offline;
+            // ERROR, not warn, and never rate-limited: this one stops the drain
+            // and will not fix itself. An operator who sees the queue frozen
+            // needs the provider's own words, because the answer is almost
+            // always a key scoped to the wrong bucket.
+            log_error("upload: %s refused permanently — HTTP %ld%s%s. "
+                      "Uploading has stopped; check the storage credentials.",
+                      seg.key.c_str(), r.http_status,
+                      r.error.empty() ? "" : " — ", r.error.c_str());
             return false;
         }
         m_stats.retries++;
+        const LinkHealth health_before = m_health;
         m_health = (attempt >= 2) ? LinkHealth::Offline : LinkHealth::Degraded;
 
-        if (m_cfg.max_attempts > 0 && attempt >= m_cfg.max_attempts)
+        if (m_cfg.max_attempts > 0 && attempt >= m_cfg.max_attempts) {
+            log_warn("upload: gave up on %s after %d attempt(s) — HTTP %ld%s%s",
+                     seg.key.c_str(), attempt, r.http_status,
+                     r.error.empty() ? "" : " — ", r.error.c_str());
             return false;
+        }
 
         int wait = backoff_ms(attempt);
+        // The FIRST failure of a segment, and any change of health, get a line.
+        // Every subsequent retry of the same segment does not: a long outage
+        // would otherwise write a line every few seconds and bury the one that
+        // says when it started. The attempt number and the backoff are in here
+        // because "it retried" is not the question — "how far behind is this
+        // getting" is.
+        if (attempt == 1 || m_health != health_before) {
+            log_warn("upload: %s failed (attempt %d) — HTTP %ld%s%s. "
+                     "Retrying in %d ms; link is now %s.",
+                     seg.key.c_str(), attempt, r.http_status,
+                     r.error.empty() ? "" : " — ", r.error.c_str(), wait,
+                     m_health == LinkHealth::Offline ? "offline" : "degraded");
+        }
         // sleep in small slices so stop() and a drain deadline are responsive
         for (int slept = 0; slept < wait && m_running; slept += 25) {
             if (deadline && std::chrono::steady_clock::now() >= *deadline) return false;

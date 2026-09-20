@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <obs-module.h>
 #include "plugin_log.h"
+#include "../core/log.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-multisite", "en-US")
@@ -27,6 +28,19 @@ MODULE_EXPORT const char* obs_module_description(void) {
 MODULE_EXPORT const char* obs_module_name(void) { return "Multisite"; }
 
 bool obs_module_load(void) {
+    // The core can talk now. It does all of this project's uploading and had no
+    // way to say anything at all — a failed PUT recorded an HTTP status and
+    // threw it away. Installed first, before anything that might want to
+    // complain, and it simply forwards into OBS's own log so an operator finds
+    // it where they already look.
+    multisite::set_log_sink([](multisite::LogLevel lvl, const std::string& msg) {
+        switch (lvl) {
+            case multisite::LogLevel::Error: mlog_error("%s", msg.c_str()); break;
+            case multisite::LogLevel::Warn:  mlog_warn("%s", msg.c_str());  break;
+            default:                         mlog_info("%s", msg.c_str());  break;
+        }
+    });
+
 #ifdef MULTISITE_HAVE_QT
     mlog_info("loading obs-multisite %s (with operator docks)", PLUGIN_VERSION);
 #else

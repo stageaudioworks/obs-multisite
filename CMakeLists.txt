@@ -65,6 +65,7 @@ add_library(multisite_core STATIC
     src/core/spool_queue.cpp
     src/core/retry_uploader.cpp
     src/core/model.cpp
+    src/core/log.cpp
     src/core/session.cpp
     src/core/segment_cache.cpp
     src/core/decoder_session.cpp
