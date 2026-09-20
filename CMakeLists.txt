@@ -573,6 +573,15 @@ add_executable(test_aes67 tests/test_aes67.cpp)
 target_include_directories(test_aes67 PRIVATE src/appliance)
 add_test(NAME aes67 COMMAND test_aes67)
 
+    add_executable(test_cpu_usage tests/test_cpu_usage.cpp
+                   src/appliance/sysinfo.cpp
+                   src/appliance/log.cpp)
+    target_include_directories(test_cpu_usage PRIVATE src/appliance)
+    target_compile_definitions(test_cpu_usage PRIVATE
+        MULTISITE_PLAYER_VERSION="test")
+    target_link_libraries(test_cpu_usage PRIVATE multisite_core)
+    add_test(NAME cpu_usage COMMAND test_cpu_usage)
+
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
 # audio output and a browser-based operator interface instead of OBS.

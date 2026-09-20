@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 
 #include <arpa/inet.h>
@@ -80,6 +81,40 @@ bool have_command(const char* name) {
 } // namespace
 
 const char* player_version() { return MULTISITE_PLAYER_VERSION; }
+
+// ── Processor time ───────────────────────────────────────────────────────────
+
+bool parse_proc_stat_line(const std::string& line, CpuTimes& out) {
+    std::istringstream is(line);
+    std::string label;
+    is >> label;
+    if (label.rfind("cpu", 0) != 0) return false;
+
+    unsigned long long v = 0, total = 0, idle = 0;
+    for (int field = 0; is >> v; ++field) {
+        total += v;
+        // Fields 3 and 4 are idle and iowait. Both are the processor having
+        // nothing to do, and counting iowait as work would show a box waiting
+        // on a slow SD card as one that is working hard.
+        if (field == 3 || field == 4) idle += v;
+    }
+    if (total == 0) return false;
+    out.idle = idle;
+    out.total = total;
+    return true;
+}
+
+double cpu_busy_percent(const CpuTimes& prev, const CpuTimes& now) {
+    if (now.total < prev.total || now.idle < prev.idle) return -1;
+    const unsigned long long dt = now.total - prev.total;
+    if (dt == 0) return -1;
+    const unsigned long long di = now.idle - prev.idle;
+    if (di > dt) return -1;                       // nonsense pair
+    double pct = 100.0 * (double)(dt - di) / (double)dt;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
 
 // ── Network ──────────────────────────────────────────────────────────────────
 
@@ -285,6 +320,51 @@ DiskInfo disk_info(const std::string& path) {
 
 // ── The machine ──────────────────────────────────────────────────────────────
 
+// ── How busy the processor is ────────────────────────────────────────────────
+//
+// /proc/stat counts jiffies since boot, so a single reading says how busy the
+// box has been since it was switched on — which is never the question. The
+// figure an operator wants is "right now", and that only exists as the
+// difference between two readings.
+//
+// The previous reading is kept here rather than taken fresh each time, so the
+// answer covers the gap since the last time anybody asked. The web UI polls
+// steadily, which makes that gap the few seconds it should be.
+namespace {
+
+std::mutex             g_cpu_mtx;
+std::vector<CpuTimes>  g_cpu_prev;      // [0] is the whole box, then per core
+bool                   g_cpu_have_prev = false;
+
+// Fills cpu_percent and cpu_per_core, leaving them at -1 when there is nothing
+// to compare against yet.
+void read_cpu_usage(SystemInfo& s) {
+    std::ifstream in("/proc/stat");
+    if (!in) return;
+
+    std::vector<CpuTimes> now;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("cpu", 0) != 0) break;   // the cpu lines come first
+        CpuTimes sample;
+        if (parse_proc_stat_line(line, sample)) now.push_back(sample);
+    }
+    if (now.empty()) return;
+
+    std::lock_guard<std::mutex> lk(g_cpu_mtx);
+    if (g_cpu_have_prev && g_cpu_prev.size() == now.size()) {
+        for (size_t i = 0; i < now.size(); ++i) {
+            const double pct = cpu_busy_percent(g_cpu_prev[i], now[i]);
+            if (i == 0) s.cpu_percent = pct;
+            else        s.cpu_per_core.push_back(pct);
+        }
+    }
+    g_cpu_prev = now;
+    g_cpu_have_prev = true;
+}
+
+} // namespace
+
 SystemInfo system_info() {
     SystemInfo s;
 #ifdef __linux__
@@ -307,6 +387,26 @@ SystemInfo system_info() {
     if (::sysinfo(&si) == 0) {
         s.uptime_s  = (double)si.uptime;
         s.load_1min = (double)si.loads[0] / 65536.0;
+    }
+
+    read_cpu_usage(s);
+
+    // Memory, from the same file the build sizing reads. MemAvailable is the
+    // kernel's own estimate of what a new process could actually get, which is
+    // the honest number — "free" on Linux looks alarmingly small on a healthy
+    // box because the page cache is doing its job.
+    {
+        std::ifstream mi("/proc/meminfo");
+        std::string key;
+        long long value = 0;
+        std::string unit;
+        while (mi >> key >> value >> unit) {
+            const long long bytes = value * 1024;
+            if      (key == "MemTotal:")     s.mem_total_bytes = bytes;
+            else if (key == "MemAvailable:") s.mem_available_bytes = bytes;
+            else if (key == "SwapTotal:")    s.swap_total_bytes = bytes;
+            else if (key == "SwapFree:")     s.swap_free_bytes = bytes;
+        }
     }
 
     const std::string temp = read_file("/sys/class/thermal/thermal_zone0/temp");

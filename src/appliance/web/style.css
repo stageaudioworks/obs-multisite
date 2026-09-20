@@ -432,3 +432,72 @@ input[type="number"] { width: 6.5rem; }
   /* Deliberately not lightened. The interface is used in a darkened room and
      a white screen in an auditorium is a nuisance to everyone behind it. */
 }
+
+
+/* ── How hard the box is working ─────────────────────────────────────────────
+ * A row of meters rather than a list of numbers: the question an operator has
+ * is "is this box coping", and a bar answers that at a glance from across a
+ * room in a way "63.4%" does not. Colour only when it matters — a panel that
+ * is always amber stops meaning anything.
+ */
+.perf {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.perf .gauge {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.perf .k {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.perf .v {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0 8px;
+}
+.perf .v small { font-size: 0.8rem; color: var(--muted); font-weight: normal; }
+.perf .bar {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.perf .bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.perf .gauge.warn  { border-color: var(--hold); }
+.perf .gauge.warn  .bar > i { background: var(--hold); }
+.perf .gauge.bad   { border-color: var(--danger); }
+.perf .gauge.bad   .bar > i { background: var(--danger); }
+
+/* Per core, because the picture only stutters when ONE of them is pinned, and
+ * an average hides exactly that. */
+.perf .cores { display: flex; gap: 4px; margin-top: 8px; }
+.perf .cores > i {
+  flex: 1;
+  height: 22px;
+  background: var(--panel-2);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+.perf .cores > i > b {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  display: block;
+  background: var(--accent);
+  transition: height 0.4s ease;
+}
+.perf .cores > i.hot > b { background: var(--hold); }

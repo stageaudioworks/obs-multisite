@@ -67,6 +67,27 @@ struct DiskInfo {
 };
 DiskInfo disk_info(const std::string& path);
 
+// One reading of a processor's jiffy counters, and the busy fraction between
+// two of them.
+//
+// This is separated out and made pure because it is the only part of the
+// measurement that can be wrong in a way nobody would notice: a misplaced field
+// index counts iowait as work, and a box waiting on a slow SD card then reads
+// as a box that is working hard — which is the opposite of the truth, and
+// exactly the misreading that would send somebody looking for a faster Pi.
+struct CpuTimes {
+    unsigned long long idle = 0;     // idle + iowait
+    unsigned long long total = 0;
+};
+
+// Parses one "cpu"/"cpuN" line of /proc/stat. False if it is not one.
+bool parse_proc_stat_line(const std::string& line, CpuTimes& out);
+
+// Busy percentage between two readings, or -1 when the pair says nothing:
+// no time elapsed, or a counter that went backwards because the box was
+// suspended or the counters wrapped.
+double cpu_busy_percent(const CpuTimes& prev, const CpuTimes& now);
+
 struct SystemInfo {
     std::string model;              // "Raspberry Pi 5 Model B Rev 1.0"
     std::string os_version;
@@ -78,6 +99,28 @@ struct SystemInfo {
     // event that stutters, and neither is visible any other way.
     bool        throttled = false;
     bool        under_voltage = false;
+
+    // ── How hard the box is working ──────────────────────────────────────────
+    // Load average is what /proc offers first and it is the wrong number to put
+    // in front of an operator: on four cores, "2.0" is half idle and looks
+    // alarming. A percentage of the whole machine is the figure somebody can
+    // act on, so it is measured properly — from the jiffies counters, across
+    // the gap between two readings.
+    double      cpu_percent = -1;   // the whole box, 0-100; -1 = not known yet
+    // Per core, because the picture only stutters when ONE of them is pinned.
+    // Decoding spreads across all of them; the thread that presents the picture
+    // and writes the sound does not, so a single core at 100% while the others
+    // idle is the shape of a box about to gap the audio, and an average hides
+    // exactly that.
+    std::vector<double> cpu_per_core;
+    // Both stay at -1 until two readings exist: the first call after boot has
+    // nothing to compare against, and reporting 0% then would read as an idle
+    // box rather than an unmeasured one.
+
+    long long   mem_total_bytes = 0;
+    long long   mem_available_bytes = 0;
+    long long   swap_total_bytes = 0;
+    long long   swap_free_bytes = 0;
 };
 SystemInfo system_info();
 

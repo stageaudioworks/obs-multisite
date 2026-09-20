@@ -31,6 +31,7 @@ let status = null;
 let settings = null;
 let systemInfo = null;
 let pollTimer = null;
+let systemTick = 0;
 // The offset between this device's clock and the box's, so a phone with the
 // wrong time still shows the same reading as the box does.
 let clockSkewMs = 0;
@@ -918,6 +919,114 @@ $('#btn-aes67').addEventListener('click', async () => {
 
 /* ── This box ────────────────────────────────────────────────────────────── */
 
+// ── How hard the box is working ──────────────────────────────────────────────
+//
+// The question behind "what is the CPU doing" is always the same one: is this
+// box coping, or is it about to gap the sound. So the panel answers that, and
+// the thresholds are set where the answer changes rather than at round numbers.
+//
+// Per-core matters more than the average here. Decoding spreads across every
+// core, but the thread that presents the picture and writes the sound does
+// not — so one core pinned while the others idle is the shape of a box about
+// to break up, and an average of 40% hides it completely.
+function drawPerformance(s) {
+  const gauges = [];
+
+  // -1 means the box has been asked once and has nothing to compare against
+  // yet. Showing 0% then would read as an idle box rather than an unmeasured
+  // one, so it says so instead.
+  const cpu = Number(s.cpu_percent);
+  if (cpu >= 0) {
+    const cls = cpu >= 90 ? 'bad' : cpu >= 75 ? 'warn' : '';
+    const cores = Array.isArray(s.cpu_per_core) ? s.cpu_per_core : [];
+    const coreBars = cores.length
+      ? '<div class="cores">' + cores.map((c) => {
+          const v = Math.max(0, Math.min(100, Number(c) || 0));
+          return `<i class="${v >= 90 ? 'hot' : ''}" title="${v.toFixed(0)}%">` +
+                 `<b style="height:${v}%"></b></i>`;
+        }).join('') + '</div>'
+      : '';
+    gauges.push(`<div class="gauge ${cls}">
+        <div class="k">Processor</div>
+        <div class="v">${cpu.toFixed(0)}<small>%</small></div>
+        <div class="bar"><i style="width:${cpu}%"></i></div>
+        ${coreBars}
+      </div>`);
+  } else {
+    gauges.push(`<div class="gauge">
+        <div class="k">Processor</div>
+        <div class="v"><small>measuring…</small></div>
+        <div class="bar"><i style="width:0%"></i></div>
+      </div>`);
+  }
+
+  // Used, not free. On Linux "free" looks alarmingly small on a perfectly
+  // healthy box because the page cache is doing its job, and MemAvailable is
+  // the kernel's own estimate of what could actually be had.
+  if (s.mem_total_bytes) {
+    const used = s.mem_total_bytes - s.mem_available_bytes;
+    const pct = Math.max(0, Math.min(100, (used / s.mem_total_bytes) * 100));
+    const cls = pct >= 92 ? 'bad' : pct >= 80 ? 'warn' : '';
+    gauges.push(`<div class="gauge ${cls}">
+        <div class="k">Memory</div>
+        <div class="v">${bytes(used)} <small>of ${bytes(s.mem_total_bytes)}</small></div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+      </div>`);
+  }
+
+  if (s.cpu_temp_c) {
+    // A Pi starts slowing itself down at 80 °C and is firmly throttled by 85.
+    const t = Number(s.cpu_temp_c);
+    const cls = t >= 80 ? 'bad' : t >= 70 ? 'warn' : '';
+    const pct = Math.max(0, Math.min(100, (t / 90) * 100));
+    gauges.push(`<div class="gauge ${cls}">
+        <div class="k">Temperature</div>
+        <div class="v">${t.toFixed(1)}<small> °C</small></div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+      </div>`);
+  }
+
+  // Only worth a gauge once something is actually in it: a box with swap
+  // configured and unused is not a box with a memory problem, and a permanent
+  // amber panel teaches people to ignore the panel.
+  if (s.swap_total_bytes) {
+    const usedSwap = s.swap_total_bytes - s.swap_free_bytes;
+    if (usedSwap > 32 * 1024 * 1024) {
+      const pct = Math.max(0, Math.min(100, (usedSwap / s.swap_total_bytes) * 100));
+      gauges.push(`<div class="gauge warn">
+          <div class="k">Swap in use</div>
+          <div class="v">${bytes(usedSwap)} <small>of ${bytes(s.swap_total_bytes)}</small></div>
+          <div class="bar"><i style="width:${pct}%"></i></div>
+        </div>`);
+    }
+  }
+
+  $('#perf').innerHTML = gauges.join('');
+
+  // One line saying what the numbers mean, because the numbers alone do not
+  // tell a volunteer whether to do anything.
+  const hint = $('#perf-hint');
+  if (s.throttled) {
+    hint.textContent = 'The box is slowing itself down to stay cool. It needs ' +
+                       'better airflow or a case with a fan — expect the picture ' +
+                       'to break up until it cools.';
+  } else if (s.under_voltage) {
+    hint.textContent = 'The power supply is not keeping up. Use the official ' +
+                       'supply — an undersized one looks exactly like a bad network.';
+  } else if (cpu >= 90) {
+    hint.textContent = 'Running out of headroom. If the picture breaks up, a ' +
+                       'lower resolution or a codec this board decodes in ' +
+                       'hardware will cost less to play.';
+  } else if (Array.isArray(s.cpu_per_core) &&
+             s.cpu_per_core.some((c) => c >= 95) && cpu < 70) {
+    hint.textContent = 'One core is pinned while the others are idle. That is ' +
+                       'the shape of a box about to gap the sound, even though ' +
+                       'the overall figure looks comfortable.';
+  } else {
+    hint.textContent = '';
+  }
+}
+
 async function loadSystem() {
   try {
     systemInfo = await api('GET', '/api/system');
@@ -952,11 +1061,13 @@ async function loadSystem() {
   if (Math.abs(skew) >= 2000)
     add('Clock is out', (skew > 0 ? '+' : '') + Math.round(skew / 1000) + ' s against the store');
   add('Running for', spoken(s.uptime_s));
-  if (s.cpu_temp_c) add('Temperature', s.cpu_temp_c.toFixed(1) + ' °C');
+  // Temperature is a gauge below rather than a row here: it is only ever asked
+  // about alongside how hard the box is working, and it read as two facts.
   if (s.disk && s.disk.total_bytes)
     add('Cache disk', `${bytes(s.disk.free_bytes)} free of ${bytes(s.disk.total_bytes)}` +
         (s.disk.is_sd_card ? ' — this is the SD card' : ''));
   $('#facts').innerHTML = rows.join('');
+  drawPerformance(s);
 
   // Both of these explain an event that stutters, and neither is visible any
   // other way.
@@ -1330,6 +1441,12 @@ function startPolling() {
       refreshMeters();
     if ($('#tab-log').classList.contains('is-on') && $('#log-follow').checked)
       refreshLog();
+    // The processor figure is the difference between two readings, so it only
+    // means "right now" if somebody keeps asking. Every fourth poll is twice a
+    // second of status and one reading of the box every two seconds, which is
+    // as often as any of this changes.
+    if ($('#tab-system').classList.contains('is-on') && ++systemTick % 4 === 0)
+      loadSystem();
   }, 500);
 }
 
