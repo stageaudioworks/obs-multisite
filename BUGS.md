@@ -1033,6 +1033,58 @@ and nobody had given it a seam. Failure detail was computed and discarded
 (`r.http_status`, `r.error`) at every site. `src/core/log.h` now provides a sink
 the host installs, and the upload paths say what happened.
 
+### 7. Encoder crash on Windows: QPointer used as a cross-thread receiver
+
+**Status: FIXED — strongly indicated, not proven.** An access violation
+(c0000005) in `obs-multisite.dll` on a Windows encoder running v0.1.23-alpha.
+The addresses could not be symbolised, because **no PDB ships with the release
+or the CI artifact**, so this is a shape match rather than a read stack. Say so
+plainly rather than claiming a diagnosis the evidence does not support.
+
+What the dump shows: the crashed thread is one of ours, and shares its bottom
+three frames with another thread that is inside `libcurl` — so two workers of
+the same type, one mid-request, one faulting. Meanwhile the UI thread is inside
+Qt widget code with our frames in it, i.e. one of our dialogs was live or being
+torn down.
+
+The fault that matches: eight sites passed a `QPointer` as the RECEIVER of
+`QMetaObject::invokeMethod` from a worker thread.
+
+```cpp
+QPointer<StorageDialog> guard(this);
+std::thread([guard, ...]() {
+    if (guard)
+        QMetaObject::invokeMethod(guard.data(), [...]{...}, Qt::QueuedConnection);
+```
+
+`QPointer` is not thread-safe. The worker reads it while the UI thread may be
+clearing it in `~QObject`, and even an atomic read would not save it: `if
+(guard)` then `guard.data()` is check-then-use, and the widget can die in the
+gap. `invokeMethod` then dereferences freed memory.
+
+The storage dialog's size-tally pool is the likeliest site — those workers
+outlive a dialog the operator closes while a slow bucket is still being
+measured, which is exactly a crash while siblings sit in `libcurl`.
+
+**The fix is one word per site.** The inner `if (!guard) return;` was already
+there and always correct — it runs on the UI thread, where `QPointer` is safe.
+Only the receiver was wrong, so it is now `qApp`, which outlives every widget.
+
+**And the real lesson is the one about symbols.** A crash report we cannot read
+is a bug we cannot fix. The Windows job now stages `obs-multisite.pdb` as a
+separate CI artifact — not in the release download, since it is a debugging
+tool and larger than the DLL — and `BUILD-INFO.txt` records the commit, because
+the dump did not say which build faulted and that had to be asked. A PDB only
+matches the exact binary it was built with, so this had to be in place *before*
+the next crash, not after.
+
+Fixed alongside, from the caption code review and for the same reason —
+unsynchronised state crossing threads: `CaptionBridge::m_output` was a plain
+pointer written by `stop()` on the UI thread and read by the graphics thread
+(now atomic, loaded once, and cleared before the callbacks are torn down), and
+`split_caption` could loop for ever on a byte limit small enough to land inside
+a multi-byte character.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —

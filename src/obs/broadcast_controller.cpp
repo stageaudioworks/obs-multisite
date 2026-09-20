@@ -192,6 +192,11 @@ void BroadcastSettings::load() {
         video_encoder_id = obs_data_get_string(d, "video_encoder_id");
     if (obs_data_has_user_value(d, "tile_layout"))
         tile_layout = obs_data_get_string(d, "tile_layout");
+    // Only when the key is PRESENT, so an existing configuration written before
+    // captions existed keeps the struct default (Automatic) rather than being
+    // read back as an empty string, which means "no captions".
+    if (obs_data_has_user_value(d, "caption_source"))
+        caption_source = obs_data_get_string(d, "caption_source");
     if (obs_data_has_user_value(d, "lan_enabled"))
         lan_enabled = obs_data_get_bool(d, "lan_enabled");
     if (obs_data_has_user_value(d, "lan_port"))
@@ -227,6 +232,7 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "channel_labels", channel_labels.c_str());
     obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
     obs_data_set_string(d, "tile_layout", tile_layout.c_str());
+    obs_data_set_string(d, "caption_source", caption_source.c_str());
     obs_data_set_bool(d, "lan_enabled", lan_enabled);
     obs_data_set_int(d, "lan_port", lan_port);
     obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());

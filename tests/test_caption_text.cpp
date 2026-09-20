@@ -115,6 +115,23 @@ int main() {
         CHECK(joined(v) == s, "every word survives intact");
     }
 
+    std::printf("== a limit smaller than one character still terminates ==\n");
+    {
+        // The review found an infinite loop here: with max_bytes landing inside
+        // a multi-byte character, the cut point backed off to the start and the
+        // loop never advanced. Only reachable through the test-only parameter,
+        // but a hang is a hang.
+        auto v = split_caption("\xE2\x80\x94\xE2\x80\x94", 2);   // two em dashes, limit 2
+        CHECK(!v.empty(), "it terminates and emits something");
+        std::string back; for (auto& c : v) back += c;
+        CHECK(back == "\xE2\x80\x94\xE2\x80\x94", "and loses nothing");
+        bool whole = true;
+        for (const auto& c : v)
+            if (c.size() % 3 != 0) whole = false;
+        CHECK(whole, "each piece is still whole characters");
+        CHECK(!split_caption("abc", 1).empty(), "a one-byte limit terminates too");
+    }
+
     std::printf("%s\n", g_fail ? "FAILED" : "all passed");
     return g_fail ? 1 : 0;
 }

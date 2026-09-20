@@ -23,6 +23,7 @@
 #include <QCheckBox>
 #include <thread>
 #include <QMetaObject>
+#include <QCoreApplication>
 #include <QPointer>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -366,8 +367,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         QPointer<EncoderDock> self(this);
         std::thread([self, cfg] {
             const ProbeResult r = probe_bucket(cfg, true, std::string());
-            if (!self) return;
-            QMetaObject::invokeMethod(self, [self, r] {
+            // qApp, not `self`: a QPointer used as the receiver is read on THIS
+            // thread while the UI thread may be destroying the dock. See the
+            // note in storage_dialog.cpp::runAsync().
+            QMetaObject::invokeMethod(qApp, [self, r] {
                 if (self) self->showTestConnection(r);
             }, Qt::QueuedConnection);
         }).detach();
@@ -419,8 +422,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
             // Sequentially, never together: two bursts at once would measure
             // them competing with each other rather than measuring the link.
             if (have_second) b = uplink_test(second);
-            if (!self) return;
-            QMetaObject::invokeMethod(self, [self, a, b, have_second] {
+            QMetaObject::invokeMethod(qApp, [self, a, b, have_second] {
                 if (!self) return;
                 self->m_testUplink->setEnabled(true);
                 QStringList lines;
@@ -976,8 +978,7 @@ void EncoderDock::onCheckSecond() {
     std::thread([self, primary_cfg, second_cfg, ev] {
         multisite::S3Transport a(primary_cfg), b(second_cfg);
         const multisite::MirrorDiff d = multisite::compare_targets(a, b, ev);
-        if (!self) return;
-        QMetaObject::invokeMethod(self, [self, d] {
+        QMetaObject::invokeMethod(qApp, [self, d] {
             if (self) self->showCheckSecond(d);
         }, Qt::QueuedConnection);
     }).detach();

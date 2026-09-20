@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QCoreApplication>
 #include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -125,8 +126,20 @@ void StorageDialog::runAsync(std::function<void()> work, std::function<void()> d
     QPointer<StorageDialog> guard(this);
     std::thread([guard, work = std::move(work), done = std::move(done)]() mutable {
         work();
-        if (guard)
-            QMetaObject::invokeMethod(guard.data(),
+        // Posted to qApp, NOT to the widget.
+        //
+        // QPointer is not thread-safe. Passing `guard.data()` (or the QPointer itself,
+        // which converts) as the RECEIVER reads it on this worker thread, while the UI
+        // thread may be inside ~QObject clearing it. Even an atomic read would not
+        // help: `if (guard)` followed by using it is check-then-use, and the dialog can
+        // die in the gap — after which invokeMethod dereferences freed memory. That is
+        // an access violation, and it is the shape of the 2026-09-20 encoder crash.
+        //
+        // qApp outlives every widget, so it is always a valid receiver. The guard is
+        // then tested INSIDE the lambda, which Qt runs on the UI thread, where QPointer
+        // is safe and where the answer cannot change under it. The inner check was
+        // already here and always correct; only the receiver was wrong.
+        QMetaObject::invokeMethod(qApp,
                 [guard, done = std::move(done)]() mutable {
                     if (!guard) return;
                     guard->setBusy(false);
@@ -297,8 +310,8 @@ void StorageDialog::onRefresh() {
         std::string err;
         const bool ok = mgr->list_events(*events, err, stats.get(), cancel.get());
         const qint64 ms = (qint64)stats->elapsed_ms;
-        if (guard)
-            QMetaObject::invokeMethod(guard.data(),
+        // qApp, not the dialog — see runAsync().
+        QMetaObject::invokeMethod(qApp,
                 [guard, ok, err, ms]() {
                     if (!guard) return;
                     guard->onEventsListed(ok, QString::fromStdString(err), ms);
@@ -373,15 +386,16 @@ void StorageDialog::startTallies() {
                               (*events)[i].event_id.c_str(), err.c_str());
                 }
 
-                if (guard)
-                    QMetaObject::invokeMethod(guard.data(), [guard, i]() {
+                // qApp, not the dialog — see runAsync(). This is the site the
+                // crash pointed at: these workers outlive a dialog the operator
+                // closes while a slow bucket is still being tallied.
+                QMetaObject::invokeMethod(qApp, [guard, i]() {
                         if (!guard) return;
                         guard->onOneTallyDone(i);
                     }, Qt::QueuedConnection);
             }
 
-            if (guard)
-                QMetaObject::invokeMethod(guard.data(),
+            QMetaObject::invokeMethod(qApp,
                     [guard, wstats, pool_left]() {
                         if (!guard) return;
                         // Safe to read now: this worker has stopped writing.

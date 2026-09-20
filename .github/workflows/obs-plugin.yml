@@ -402,7 +402,33 @@ jobs:
           $info = "obs-multisite build" + [Environment]::NewLine +
                   "OBS tag:  $env:OBS_TAG" + [Environment]::NewLine +
                   "UI mode:  $mode"
+          # The commit, because a crash dump does not name the build and we had
+          # to ASK which version faulted (2026-09-20).
+          $info = $info + [Environment]::NewLine + "Commit:   $env:GITHUB_SHA"
           Set-Content -Path dist/BUILD-INFO.txt -Value $info
+
+          # ── Debug symbols ───────────────────────────────────────────────────
+          # MSVC already writes a .pdb for a Release build; it was simply left
+          # in the build tree and thrown away with the runner. Without it a
+          # Windows crash report is a wall of hex — an access violation in this
+          # DLL on 2026-09-20 could not be read at all, and the addresses cannot
+          # be recovered later because a PDB only matches the exact binary it
+          # was built with.
+          #
+          # Kept in the CI ARTIFACT, not in the release download: it is a
+          # debugging tool rather than something an operator needs, and it is
+          # far larger than the DLL.
+          $pdb = Get-ChildItem -Recurse build -Filter obs-multisite.pdb |
+                 Select-Object -First 1
+          if ($pdb) {
+            New-Item -ItemType Directory -Force -Path dist-symbols | Out-Null
+            Copy-Item $pdb.FullName dist-symbols/
+            Copy-Item $dll.FullName dist-symbols/   # the DLL it matches, by GUID
+            Set-Content -Path dist-symbols/BUILD-INFO.txt -Value $info
+            Write-Host "symbols staged: $($pdb.FullName)"
+          } else {
+            Write-Host "WARNING: no obs-multisite.pdb found — crashes from this build will not be readable"
+          }
           Write-Host "BUILD MODE: $mode"
 
           # NOTE: Qt itself is NOT bundled. OBS ships its own Qt6 and a plugin
@@ -416,6 +442,15 @@ jobs:
         with:
           name: obs-multisite-windows
           path: dist/
+
+      # Separate artifact so the symbols are fetched only when a crash needs
+      # reading, and never end up in the public release download.
+      - uses: actions/upload-artifact@v5
+        if: success()
+        with:
+          name: obs-multisite-windows-symbols
+          path: dist-symbols/
+          if-no-files-found: warn
 
   # Produces the installable macOS plugin: an arm64 .plugin bundle that links
   # nothing OBS does not already ship.

@@ -74,7 +74,17 @@ inline std::vector<std::string> split_caption(const std::string& text,
     if (i == std::string::npos) return out;
 
     while (i < text.size()) {
-        const size_t cut = caption_cut_point(text, i, max_bytes);
+        size_t cut = caption_cut_point(text, i, max_bytes);
+        // MUST ADVANCE. With a max_bytes small enough to land inside a
+        // multi-byte character, backing off to a character boundary can return
+        // `from` itself — and then nothing is emitted, `i` does not move, and
+        // this loops for ever. Found by review, not by a test, because the
+        // tests only exercised the default and zero.
+        if (cut <= i) {
+            cut = i + 1;
+            while (cut < text.size() && is_utf8_continuation((unsigned char)text[cut]))
+                ++cut;   // never cut through a character, even when forced
+        }
         size_t end = cut;
         while (end > i && text[end - 1] == ' ') --end;   // no trailing space
         if (end > i) out.push_back(text.substr(i, end - i));

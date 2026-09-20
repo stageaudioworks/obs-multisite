@@ -86,8 +86,13 @@ private:
     // only ever mean "whatever existed at Go Live".
     static void on_source_created(void* param, calldata_t* cd);
 
-    obs_output_t*     m_output = nullptr;
-    bool              m_automatic = false;
+    // ATOMIC, and cleared before the callbacks are torn down. It is written by
+    // stop() on the UI thread and read by the OBS graphics thread inside
+    // on_cea708; a plain pointer there is a check-then-use race that hands a
+    // caption to a freed output. Same family as the QPointer receivers fixed in
+    // the docks, and the same afternoon.
+    std::atomic<obs_output_t*> m_output{nullptr};
+    std::atomic<bool>          m_automatic{false};
     std::string       m_text_source;         // empty unless one was named
     std::thread       m_thread;
     std::atomic<bool> m_running{false};

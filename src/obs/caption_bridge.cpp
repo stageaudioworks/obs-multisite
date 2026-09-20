@@ -37,7 +37,7 @@ void CaptionBridge::subscribe(obs_source_t* src) {
 
 void CaptionBridge::on_source_created(void* param, calldata_t* cd) {
     auto* self = static_cast<CaptionBridge*>(param);
-    if (!self || !self->m_running.load() || !self->m_automatic) return;
+    if (!self || !self->m_running.load() || !self->m_automatic.load()) return;
     auto* src = (obs_source_t*)calldata_ptr(cd, "source");
     self->subscribe(src);
 }
@@ -58,7 +58,7 @@ void CaptionBridge::start(obs_output_t* output, const std::string& setting) {
     m_said_split = false;
     m_running = true;
 
-    if (m_automatic) {
+    if (m_automatic.load()) {
         // Every source, so it does not matter which plugin carries the
         // captions. DeckLink emits them from SDI VANC today; this needs to know
         // nothing about that, or about whatever does it next.
@@ -110,14 +110,17 @@ void CaptionBridge::stop() {
     if (m_thread.joinable()) m_thread.join();
     if (!was) return;
 
-    if (m_automatic)
+    // Cleared FIRST. A callback already past its m_running check loads this
+    // and finds null rather than an output that unsubscribe_all() is about to
+    // outlive. Order matters more than the atomicity does.
+    m_output = nullptr;
+    if (m_automatic.load())
         signal_handler_disconnect(obs_get_signal_handler(), "source_create",
                                   &CaptionBridge::on_source_created, this);
     unsubscribe_all();
 
     mlog_info("captions: stopped after %llu caption(s)",
               (unsigned long long)m_sent.load());
-    m_output = nullptr;
     m_automatic = false;
     m_text_source.clear();
 }
@@ -145,7 +148,8 @@ void CaptionBridge::send_text(const std::string& text) {
         if (text == m_last) return;   // the source still holds the last phrase
         m_last = text;
     }
-    if (!m_output) return;
+    obs_output_t* out = m_output.load();
+    if (!out) return;
 
     // SPLIT, because libobs will not. It holds a caption in a 128-byte buffer
     // and fills it with one snprintf — truncating, beneath a comment claiming
@@ -154,7 +158,7 @@ void CaptionBridge::send_text(const std::string& text) {
     // bytes, not text, and go straight out untouched.
     const std::vector<std::string> parts = split_caption(text);
     for (const std::string& part : parts) {
-        obs_output_output_caption_text2(m_output, part.c_str(), kDisplayDurationS);
+        obs_output_output_caption_text2(out, part.c_str(), kDisplayDurationS);
         m_sent++;
     }
     if (parts.size() > 1 && !m_said_split.exchange(true))
@@ -166,12 +170,16 @@ void CaptionBridge::send_text(const std::string& text) {
 void CaptionBridge::on_cea708(void* param, obs_source_t* source,
                               const struct obs_source_cea_708* captions) {
     auto* self = static_cast<CaptionBridge*>(param);
-    if (!self || !self->m_running.load() || !captions || !self->m_output) return;
+    if (!self || !self->m_running.load() || !captions) return;
+    // Loaded ONCE into a local. Re-reading the member after the check would be
+    // the race this is guarding against.
+    obs_output_t* out = self->m_output.load();
+    if (!out) return;
 
     // Straight through, byte for byte. These are already CEA-708 cc_data, so
     // turning them into text and re-encoding would only lose whatever the
     // upstream encoder decided — timing, roll-up, positioning.
-    obs_output_caption(self->m_output, captions);
+    obs_output_caption(out, captions);
     self->m_sent++;
 
     // Worth one line the first time, because "the feed has captions and we are

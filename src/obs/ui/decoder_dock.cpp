@@ -20,6 +20,7 @@
 #include <QCheckBox>
 #include <thread>
 #include <QMetaObject>
+#include <QCoreApplication>
 #include <QPointer>
 #include <QFormLayout>
 #include <QStandardItemModel>
@@ -756,8 +757,8 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         QPointer<DecoderDock> self(this);
         std::thread([self, cfg, room] {
             const ProbeResult r = probe_bucket(cfg, false, room);
-            if (!self) return;
-            QMetaObject::invokeMethod(self, [self, r] {
+            // qApp, not `self` — see storage_dialog.cpp::runAsync().
+            QMetaObject::invokeMethod(qApp, [self, r] {
                 if (self) self->showTestConnection(r);
             }, Qt::QueuedConnection);
         }).detach();
