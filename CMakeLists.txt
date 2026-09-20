@@ -159,6 +159,9 @@ add_test(NAME playout_timeline COMMAND test_playout_timeline)
 add_executable(test_seek_skip tests/test_seek_skip.cpp)
 add_test(NAME seek_skip COMMAND test_seek_skip)
 
+add_executable(test_caption_text tests/test_caption_text.cpp)
+add_test(NAME caption_text COMMAND test_caption_text)
+
 # The Pi player page's media-time arithmetic. Node rather than C++ because the
 # code under test is the page's, and it is only testable at all because the
 # arithmetic was split out of app.js (which needs a browser) into media.js.

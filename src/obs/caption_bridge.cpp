@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "caption_bridge.h"
+#include "caption_text.h"
 
 #include "plugin_log.h"
 
@@ -105,8 +106,22 @@ void CaptionBridge::send(const std::string& text) {
         m_last = text;
     }
     if (!m_output) return;
-    obs_output_output_caption_text2(m_output, text.c_str(), kDisplayDurationS);
-    m_sent++;
+
+    // SPLIT, because libobs will not. It holds a caption in a 128-byte buffer
+    // and fills it with one snprintf — truncating, under a comment that claims
+    // it splits. A spoken sentence goes past that regularly, so without this
+    // the back half of most captions never leaves the building. See
+    // caption_text.h.
+    const std::vector<std::string> parts = split_caption(text);
+    for (const std::string& part : parts) {
+        obs_output_output_caption_text2(m_output, part.c_str(), kDisplayDurationS);
+        m_sent++;
+    }
+    if (parts.size() > 1 && !m_said_split.exchange(true))
+        mlog_info("captions: this source sends more than %zu bytes at a time, so "
+                  "captions are split across %zu screens — each is held %.1fs, "
+                  "so a long sentence takes that much longer to clear",
+                  kCaptionMaxBytes, parts.size(), kDisplayDurationS);
 }
 
 void CaptionBridge::on_cea708(void* param, obs_source_t*,

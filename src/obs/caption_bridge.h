@@ -77,6 +77,10 @@ private:
     // otherwise repeat the same caption several times a second.
     std::mutex   m_last_mtx;
     std::string  m_last;
+    // Said once per broadcast, not once per sentence: that captions are being
+    // split is worth knowing and is not worth a line every time somebody
+    // speaks.
+    std::atomic<bool> m_said_split{false};
 };
 
 } // namespace multisite_obs

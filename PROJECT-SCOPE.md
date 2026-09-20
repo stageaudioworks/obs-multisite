@@ -1557,6 +1557,21 @@ into a text source, so watching one works with all of them and depends on none
 of their internals. `obs_source_add_caption_callback` is also honoured, for a
 capture card that brings real CEA-708 in.
 
+**What the wire actually carries.** A CEA-708 wrapper around a **CEA-608
+payload**: `sei_from_caption_frame` builds an ITU-T T.35 SEI containing
+`cc_data`. That is what broadcast and YouTube mean by closed captions, and it
+is what they ingest — but it is not DTVCC 708 with its services, windows and
+fonts. OBS cannot produce that: even its real-708 intake drops everything whose
+`cc_type` is not 0, keeping 608 field 1 alone. So expect 608's constraints —
+roughly 32 characters a row, a limited character set, pop-on style.
+
+**Length.** libobs holds a caption in a 128-byte buffer and fills it with one
+`snprintf`, truncating, beneath a comment claiming it splits. A spoken sentence
+passes 128 bytes regularly, so `caption_text.h` splits on word and UTF-8
+boundaries before handing text over. A long sentence therefore occupies several
+caption slots and takes correspondingly longer to clear, which is the honest
+trade against losing its second half.
+
 **Not built, and known.** Nothing renders captions at the campus end. OBS has no
 caption renderer, and a survey found no third-party plugin that decodes or
 displays CEA-608/708 from a source — every OBS caption plugin is a generator.
