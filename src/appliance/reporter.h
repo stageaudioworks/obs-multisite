@@ -32,6 +32,10 @@ struct PairView {
     std::string verification_url;
     std::string error;
     std::string note;   // host-side notice, preferred over error when set
+    // True once the claim is persisted. The page reloads settings only then:
+    // showing Done first and filling the fields from a save still in flight
+    // is what wipes a fresh claim on the next save.
+    bool saved = false;
 };
 
 class Reporter {

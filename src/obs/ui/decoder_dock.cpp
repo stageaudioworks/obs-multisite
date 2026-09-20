@@ -1020,6 +1020,13 @@ void DecoderDock::refreshPairing() {
             break;
         }
         case 2: {
+            // Gate on the save, not just the approval — see the encoder
+            // dock's note on the Apply-wipe this prevents.
+            if (!v.saved) {
+                m_pairBtn->setEnabled(false);
+                m_pairCancel->setEnabled(true);
+                break;
+            }
             if (!m_pairWasDone) {
                 m_pairWasDone = true;
                 loadIntoFields();
@@ -1103,8 +1110,7 @@ void DecoderDock::updateProviderFields() {
 void DecoderDock::onSaveSettings() {
     // Trimmed: these are pasted from a dashboard, and a stray space produces
     // failures that look nothing like their cause.
-    DecoderSettings cfg = decoder_settings();
-    // The provider decides how the fields the operator actually typed become
+    DecoderSettings cfg = decoder_settings();    // The provider decides how the fields the operator actually typed become
     // the raw shape DecoderSettings shares with S3Config — see
     // storage_providers.h. Custom's fields already ARE that shape, unchanged.
     auto provider = multisite::provider_from_key(
@@ -1146,6 +1152,15 @@ void DecoderDock::onSaveSettings() {
     cfg.reporter_url          = m_reporterUrl->text().trimmed().toStdString();
     cfg.reporter_appliance_id = m_reporterId->text().trimmed().toStdString();
     cfg.reporter_token        = m_reporterToken->text().trimmed().toStdString();
+    // A claim that landed after the fields were last loaded lives in settings
+    // but not yet in these widgets; writing the widgets back would wipe it.
+    // Clearing stays possible: Cancel first (leaving Done), then clear.
+    if (reporter_pair_view("obs-decoder").phase == 2) {
+        const DecoderSettings live = decoder_settings_copy();
+        cfg.reporter_appliance_id = live.reporter_appliance_id;
+        cfg.reporter_token = live.reporter_token;
+        cfg.reporter_device_id = live.reporter_device_id;
+    }
     set_decoder_settings(cfg);
     // Its own store, and committed with Apply like everything else on this
     // dialog — so opening the settings to look at something still changes

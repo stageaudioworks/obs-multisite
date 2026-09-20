@@ -203,9 +203,14 @@ struct Reporter::Worker {
     // Pairing (device-code flow). The worker asks and polls; the page shows
     // the code from pair_view() and stops it with pair_cancel(). Guarded by
     // mtx like the rest — the worker never holds it across the network.
+    // Claimed credentials are captured beside the pairing, not in it: the
+    // page acknowledges Done on its own cadence, and persistence must not
+    // depend on the phase surviving until the next tick (the Apply-wipe that
+    // cost an evening on the OBS side).
     multisite::Pairing pairing;
     bool begin_pending = false;
     bool claim_saved = true;
+    std::string claimed_id, claimed_token, claimed_url;
     std::string note;
 };
 
@@ -326,9 +331,8 @@ void Reporter::serve_pairing() {
             m_worker->pairing.tick(now);
             if (m_worker->pairing.poll_due(now)) {
                 act = Action::Poll;
-            } else if (m_worker->pairing.phase() ==
-                           multisite::Pairing::Phase::Done &&
-                       !m_worker->claim_saved) {
+            } else if (!m_worker->claim_saved &&
+                       !m_worker->claimed_id.empty()) {
                 act = Action::SaveClaim;
             }
         }
@@ -393,22 +397,26 @@ void Reporter::serve_pairing() {
         }
         m_worker->note.clear();
         m_worker->pairing.on_poll_reply(r.body, (int)r.code, now);
+        if (m_worker->pairing.phase() == multisite::Pairing::Phase::Done) {
+            m_worker->claimed_id = m_worker->pairing.appliance_id();
+            m_worker->claimed_token = m_worker->pairing.appliance_token();
+            m_worker->claimed_url = m_worker->pairing.collector_url();
+        }
         return;
     }
 
-    // SaveClaim: the collector approved — persist id, token and the canonical
-    // URL before the page can see Done. Retried every tick until it saves, so
-    // a full disk delays the code clearing, never the credentials.
+    // SaveClaim: persist the captured claim. Retried every tick until it
+    // lands, independent of the pairing's phase.
     Config claimed = cfg;
     {
         std::lock_guard<std::mutex> lk(m_worker->mtx);
         if (claimed.reporter_device_id.empty())
             claimed.reporter_device_id = multisite::heartbeat_mint_device_id(
                 hostname(), "pi-player", now_ns(), proc_id());
-        claimed.reporter_appliance_id = m_worker->pairing.appliance_id();
-        claimed.reporter_token = m_worker->pairing.appliance_token();
-        if (!m_worker->pairing.collector_url().empty())
-            claimed.reporter_url = m_worker->pairing.collector_url();
+        claimed.reporter_appliance_id = m_worker->claimed_id;
+        claimed.reporter_token = m_worker->claimed_token;
+        if (!m_worker->claimed_url.empty())
+            claimed.reporter_url = m_worker->claimed_url;
     }
     std::string err;
     if (player.store_config(claimed, err)) {
@@ -451,6 +459,9 @@ bool Reporter::pair_begin() {
     m_worker->pairing.cancel();
     m_worker->begin_pending = true;
     m_worker->claim_saved = false;
+    m_worker->claimed_id.clear();
+    m_worker->claimed_token.clear();
+    m_worker->claimed_url.clear();
     m_worker->note.clear();
     return true;
 }
@@ -476,6 +487,7 @@ PairView Reporter::pair_view() const {
     v.verification_url = m_worker->pairing.verification_url();
     v.error = m_worker->pairing.error();
     v.note = m_worker->note;
+    v.saved = m_worker->claim_saved;
     return v;
 }
 

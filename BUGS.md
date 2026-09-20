@@ -2168,15 +2168,28 @@ a multi-byte character.
   the fallback; the token never reaches a browser except as dots, and the
   claim is persisted before Done is ever shown.
 
-  Measured live against a real `multisite-player` and a stub collector:
-  disabled sends nothing; unreachable drops silently with one log line; a
-  200 accepted a real allowlisted payload (no secrets, paths or IPs in it);
-  a 429 backed off onto the adopted 45 s cadence; pairing went start → 2 s
-  polls → claim, persisting id, token and minted device id and adopting the
-  reply's URL. The OBS side builds with the symbols in the binary, but no
-  live OBS has clicked through pairing yet — the shared core machine is
-  tested and the worker mirrors the proven Pi one, which is evidence, not
-  proof.
+  Measured live against a real `multisite-player` and stub collectors, then
+  against live OBS on a Mac with the installed plugin: disabled sends
+  nothing; unreachable drops silently with one log line; a 200 accepted a
+  real allowlisted payload (no secrets, paths or IPs in it); a 429 backed
+  off onto the adopted 45 s cadence; pairing went start → 2 s polls →
+  claim, persisting id, token and minted device id, with heartbeats then
+  accepted carrying the claimed id — no Apply needed.
+
+  Two faults found proving it, both in the handoff between approval and
+  persistence rather than in either end. First: the save ran only while the
+  phase was still Done, and the dock acknowledges Done (cancelling it) on a
+  500 ms refresh against the worker's ~1 s tick — the acknowledgment
+  routinely won, orphaning the claim with no error possible. The worker now
+  captures the credentials at approval and retries the save off those, so
+  the acknowledgment cannot orphan anything. Second: the dock filled the
+  fields from disk, which may not yet hold a save still in flight, and the
+  next Apply wrote that staleness back over the claim. Done is now
+  acknowledged (and the fields filled) only once the save has landed, on
+  both the docks and the appliance page. A worker-thread direct settings
+  write that updated memory while the file stayed empty was suspected along
+  the way and exonerated: the device id reached disk through that exact
+  path, and every empty read afterward was post-wipe.
 
 ---
 

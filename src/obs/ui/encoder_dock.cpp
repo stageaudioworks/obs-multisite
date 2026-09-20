@@ -782,6 +782,15 @@ void EncoderDock::refreshPairing() {
             break;
         }
         case 2: {  // done: credentials are saved — show them, then stand down
+            // ...once the save has actually landed. Acknowledging first and
+            // filling the fields from a save still in flight is what used to
+            // wipe a fresh claim on the next Apply: the fields showed stale
+            // emptiness and Apply wrote it back over the claim.
+            if (!v.saved) {
+                m_pairBtn->setEnabled(false);
+                m_pairCancel->setEnabled(true);
+                break;
+            }
             if (!m_pairWasDone) {
                 m_pairWasDone = true;
                 // The saved ID and token, not last session's typing.
@@ -1169,6 +1178,15 @@ void EncoderDock::onSaveSettings() {
     cfg.reporter_url          = m_reporterUrl->text().trimmed().toStdString();
     cfg.reporter_appliance_id = m_reporterId->text().trimmed().toStdString();
     cfg.reporter_token        = m_reporterToken->text().trimmed().toStdString();
+    // A claim that landed after the fields were last loaded lives in settings
+    // but not yet in these widgets; writing the widgets back would wipe it.
+    if (reporter_pair_view("obs-encoder").phase == 2) {
+        const BroadcastSettings live =
+            BroadcastController::instance().settings_copy();
+        cfg.reporter_appliance_id = live.reporter_appliance_id;
+        cfg.reporter_token = live.reporter_token;
+        cfg.reporter_device_id = live.reporter_device_id;
+    }
     // The event name is per-event, not a saved setting. Send it only when the
     // operator has typed their own; an untouched date/time default is sent
     // empty so the satellite falls back to the time and a resumed event keeps

@@ -811,6 +811,10 @@ function drawPairView(v) {
   }
   code.textContent = '';
   if (v.phase === 'done') {
+    // Gated on the save, not just the approval: reloading settings from a
+    // save still in flight fills the form with stale emptiness, and the next
+    // save after that writes it back over the claim.
+    if (!v.saved) return;
     note.textContent = 'Collector connected — the ID and token are saved.';
     stopPairPoll();
     loadSettings();

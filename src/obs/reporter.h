@@ -44,6 +44,11 @@ struct PairView {
     std::string verification_url;
     std::string error;
     std::string note;   // host-side notice, preferred over error when set
+    // True once the claimed credentials are persisted, not merely parsed.
+    // The docks acknowledge Done only when this is set: filling the fields
+    // from a save still in flight is what used to wipe a fresh claim on the
+    // next Apply.
+    bool saved = false;
 };
 PairView reporter_pair_view(const std::string& kind);
 void reporter_pair_cancel(const std::string& kind);

@@ -633,6 +633,9 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             {"user_code", v.user_code},
             {"verification_url", v.verification_url},
             {"error", !v.note.empty() ? v.note : v.error},
+            // The page reloads settings only when the claim is persisted,
+            // never on approval alone.
+            {"saved", v.saved},
         };
     };
     server.route("POST", "/api/reporter/pair/start",

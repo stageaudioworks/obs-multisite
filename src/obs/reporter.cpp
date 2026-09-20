@@ -202,16 +202,32 @@ struct Slot {
     std::string last_result;
     // Pairing (device-code flow). The worker owns the state machine; the
     // docks only show the code and cancel. Everything here is guarded by
-    // g_mtx — the worker never holds it across the network.
+    // g_mtx — the worker never holds it across the network. Transitions are
+    // logged as they happen: pairing is interactive and silent state changes
+    // are undebuggable from a log file after the fact (standards §8).
     multisite::Pairing pairing;
+    int pair_phase_logged = 0;
     bool pair_begin_pending = false;
+    // Claimed credentials, copied out of the pairing the moment it resolves.
+    // The dock acknowledges Done (cancelling the pairing) on its own refresh
+    // cadence, which routinely wins the race against the next worker tick —
+    // so persistence keys off THESE, not off the pairing still being Done.
+    // A save that only ran while the phase was Done could be orphaned by an
+    // acknowledgment landing first, which is exactly how a claim once
+    // vanished: approved, displayed, and never written.
     bool claim_saved = true;
+    std::string claimed_id, claimed_token, claimed_url;
     std::string pair_note;
+    std::string pair_note_logged;
 };
 
 std::mutex g_mtx;
 Slot g_encoder{"obs-encoder", "encoder"};
 Slot g_decoder{"obs-decoder", "decoder"};
+
+// Pairing phase transitions, logged once each (defined below, called from
+// serve_pairing with g_mtx held).
+void log_pair_phase(Slot& s);
 std::atomic<bool> g_running{false};
 std::thread g_thread;
 std::once_flag g_started;
@@ -246,14 +262,16 @@ RoleCfg read_role_cfg(const Slot& s) {
     return c;
 }
 
-// Persist pairing fields. Marshalled to OBS's UI thread: the controller was
-// written with the assumption that settings change there (the idle monitor is
-// rebuilt on every set), and the worker must not be the one to discover what
-// that assumption costs. False when the UI thread would not take it — the
-// caller retries on a later tick rather than losing anything.
+// Persist pairing fields. Marshalled to OBS's UI thread: the settings file
+// write goes through the same path every Apply uses, which is the one
+// combination observed to reach disk — a worker-thread direct write updated
+// memory while the file stayed empty, with no error anywhere (the save's
+// bool is ignored inside set_decoder_settings). Until that asymmetry is
+// understood, persistence stays on the thread whose saves measurably land.
 bool save_role_cfg(const Slot& s, const RoleCfg& c) {
     if (s.role == "encoder") {
-        BroadcastSettings cfg = BroadcastController::instance().settings_copy();
+        BroadcastSettings cfg =
+            BroadcastController::instance().settings_copy();
         cfg.reporter_enabled = c.enabled;
         cfg.reporter_url = c.url; cfg.reporter_appliance_id = c.id;
         cfg.reporter_token = c.token; cfg.reporter_device_id = c.device;
@@ -284,8 +302,7 @@ void serve_pairing(Slot& s) {
             s.pairing.tick(now);
             if (s.pairing.poll_due(now)) {
                 act = Action::Poll;
-            } else if (s.pairing.phase() == multisite::Pairing::Phase::Done &&
-                       !s.claim_saved) {
+            } else if (!s.claim_saved && !s.claimed_id.empty()) {
                 act = Action::SaveClaim;
             }
         }
@@ -316,6 +333,8 @@ void serve_pairing(Slot& s) {
             with_dev.device = dev;
             save_role_cfg(s, with_dev);
         }
+        mlog_info("heartbeat %s: pairing started against %s",
+                  s.kind.c_str(), cfg.url.c_str());
         const PostResult r =
             post_json(join_path(cfg.url, "/v1/pair/start"), std::string(),
                       multisite::heartbeat_pair_start_body(dev, s.kind,
@@ -325,10 +344,12 @@ void serve_pairing(Slot& s) {
         if (!r.reached) {
             s.pairing.cancel();
             s.pair_note = "collector not reached";
+            log_pair_phase(s);
             return;
         }
         s.pair_note.clear();
         s.pairing.on_start_reply(r.body, (int)r.code, now);
+        log_pair_phase(s);
         return;
     }
 
@@ -344,27 +365,85 @@ void serve_pairing(Slot& s) {
         std::lock_guard<std::mutex> lk(g_mtx);
         if (!r.reached) {
             s.pair_note = "collector not reached";
+            log_pair_phase(s);
             return;
         }
         s.pair_note.clear();
         s.pairing.on_poll_reply(r.body, (int)r.code, now);
+        if (s.pairing.phase() == multisite::Pairing::Phase::Done) {
+            mlog_info("heartbeat %s: pairing approved, saving the claim",
+                      s.kind.c_str());
+            // Kept beside the pairing, not in it: the dock acknowledges Done
+            // (cancelling) on its own cadence, and the save must not depend
+            // on the phase surviving until the next tick.
+            s.claimed_id = s.pairing.appliance_id();
+            s.claimed_token = s.pairing.appliance_token();
+            s.claimed_url = s.pairing.collector_url();
+        }
+        log_pair_phase(s);
         return;
     }
 
-    // SaveClaim: the collector approved — persist id, token and the canonical
-    // URL before anyone can see Done. Retried every tick until the UI thread
-    // takes it, so a busy front end delays the code clearing, never the save.
+    // SaveClaim: persist the captured claim. Retried every tick until it
+    // lands, independent of the pairing's phase — the acknowledgment may
+    // already have cancelled it, and that must not orphan the credentials.
     RoleCfg claimed = cfg;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
-        claimed.id = s.pairing.appliance_id();
-        claimed.token = s.pairing.appliance_token();
-        if (!s.pairing.collector_url().empty())
-            claimed.url = s.pairing.collector_url();
+        claimed.id = s.claimed_id;
+        claimed.token = s.claimed_token;
+        if (!s.claimed_url.empty())
+            claimed.url = s.claimed_url;
     }
     if (save_role_cfg(s, claimed)) {
+        // Verify, don't trust: read back what the settings actually hold now.
+        // Memory and disk have silently disagreed before, and the next Apply
+        // writes whatever the widgets show — so say which one won, in the log.
+        const RoleCfg check = read_role_cfg(s);
+        mlog_info("heartbeat %s: claim save attempted, settings now hold "
+                  "id='%s'",
+                  s.kind.c_str(), check.id.c_str());
         std::lock_guard<std::mutex> lk(g_mtx);
         s.claim_saved = true;
+        log_pair_phase(s);
+    } else {
+        mlog_warn("heartbeat %s: pairing approved but the claim would not "
+                  "save — retrying", s.kind.c_str());
+    }
+}
+
+// Pairing phase transitions, logged once each: without these the only record
+// of a pairing is the dock label, which is gone by the time anyone reads the
+// log. Called with g_mtx held, after every mutation above.
+void log_pair_phase(Slot& s) {
+    int phase = 0;
+    switch (s.pairing.phase()) {
+        case multisite::Pairing::Phase::Waiting: phase = 1; break;
+        case multisite::Pairing::Phase::Done:    phase = 2; break;
+        case multisite::Pairing::Phase::Expired: phase = 3; break;
+        case multisite::Pairing::Phase::Failed:  phase = 4; break;
+        default: break;
+    }
+    if (phase != s.pair_phase_logged) {
+        s.pair_phase_logged = phase;
+        if (phase == 1)
+            mlog_info("heartbeat %s: code %s — waiting for approval",
+                      s.kind.c_str(), s.pairing.user_code().c_str());
+        else if (phase == 2)
+            mlog_info("heartbeat %s: claimed %s", s.kind.c_str(),
+                      s.pairing.appliance_id().c_str());
+        else if (phase == 3)
+            mlog_info("heartbeat %s: pairing code expired", s.kind.c_str());
+        else if (phase == 4)
+            mlog_warn("heartbeat %s: pairing failed: %s", s.kind.c_str(),
+                      !s.pair_note.empty() ? s.pair_note.c_str()
+                                           : s.pairing.error().c_str());
+    }
+    if (s.pair_note != s.pair_note_logged) {
+        s.pair_note_logged = s.pair_note;
+        if (!s.pair_note.empty())
+            mlog_warn("heartbeat %s: pairing note: %s", s.kind.c_str(),
+                      s.pair_note.c_str());
     }
 }
 
@@ -505,6 +584,9 @@ bool reporter_pair_begin(const std::string& kind) {
     s.pairing.cancel();
     s.pair_begin_pending = true;
     s.claim_saved = false;
+    s.claimed_id.clear();
+    s.claimed_token.clear();
+    s.claimed_url.clear();
     s.pair_note.clear();
     return true;
 }
@@ -524,6 +606,7 @@ PairView reporter_pair_view(const std::string& kind) {
     v.verification_url = s.pairing.verification_url();
     v.error = s.pairing.error();
     v.note = s.pair_note;
+    v.saved = s.claim_saved;
     return v;
 }
 
