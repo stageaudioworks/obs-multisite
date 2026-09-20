@@ -931,6 +931,48 @@ playhead sits at 33.3% for 20:00 of 1:00:00, all three cue kinds land correctly
 (including a legacy `at_ms` one at 66.7%), and a click at the far left now
 issues `/api/seek?ms=0` where it previously issued nothing at all.
 
+### 5. "29831921 min 43 sec behind" — a position subtracted from an epoch
+
+**Status: FIXED.** Reported from the decoder dock on a live room. The number is
+not noise: 29,831,921 min 43 s is 1,789,915,303 seconds, which is the current
+Unix time. That is the tell for this whole family of fault — when a readout
+comes out as *roughly now in some unit*, a wall clock has been subtracted from
+something that is not one.
+
+`SourceCtx::live_edge_wall_ms` held the live edge as a time of day.
+`Status::playhead_ms` became a MEDIA time in the wall-clock removal (#2b/#2c).
+The smoothing override then did:
+
+```cpp
+const double behind = (double)(edge_now - out.playhead_ms) / 1000.0;
+```
+
+which with a playhead 18 s into the programme is `1789915303000 - 18000`.
+The comment above it said "express behind live as the gap between two real
+times" — true when it was written, and left describing the old world.
+
+The live edge is now held in media time (`live_edge_media_ms`, from
+`media_ms_for_seq`), so both sides of the subtraction are the same kind of
+quantity. `interpolate_position` needed no change: it advances a POSITION by
+elapsed real time, which is exactly what a live edge does in media time.
+
+Two smaller faults fixed in passing, both the 0-sentinel trap again: the edge
+was only stamped when `at > 0`, so it was never stamped during the first
+segment of an event (media time 0); and the override required
+`out.playhead_ms > 0`, which is the start of an event.
+
+**The fallback was right all along.** `DecoderSession::behind_live_s()` counts
+segments — `(live - head) * segment_ms` — and is commensurate by construction.
+Only the override that smooths it between polls was wrong, and the appliance,
+which uses the plain version with no override, was never affected.
+
+**Why nothing caught it.** There is no unit here to test: the expression lives
+inside a snapshot function that needs OBS, and the two operands are both
+`long long`. A media time and a time of day are the same type, so nothing but
+reading it can tell them apart — which is the third time this week that a
+quantity in the wrong frame has type-checked perfectly and shipped. Worth
+considering whether these should be distinct types rather than a comment.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —

@@ -451,8 +451,13 @@ struct SourceCtx : DecoderControls {
     // meaning identical — distance to the published live edge — while making
     // the number continuous.
     std::atomic<uint64_t>  live_edge_seq{0};
-    std::atomic<long long> live_edge_wall_ms{0};   // end of the newest segment
-    std::atomic<long long> live_edge_seen_ms{0};   // monotonic, when we saw it
+    // MEDIA time of the live edge, not a time of day. It was a wall clock, and
+    // the playhead it is compared against became a media time in the
+    // wall-clock removal while this stayed behind — so "behind live" subtracted
+    // a position from an epoch and reported 29,831,921 minutes, which is simply
+    // the current Unix time in minutes. See BUGS #5.
+    std::atomic<long long> live_edge_media_ms{-1};  // start of the newest segment
+    std::atomic<long long> live_edge_seen_ms{0};    // monotonic, when we saw it
 
     // An operator loads an event, lets it buffer, then presses Play on cue.
     // Auto-playing as soon as enough is buffered is wrong for an event.
@@ -1371,18 +1376,21 @@ static void poll_loop(SourceCtx* ctx) {
             {
                 const uint64_t le = sess->live_edge();
                 if (le != ctx->live_edge_seq.load()) {
-                    const int64_t at = sess->wall_clock_ms(le);
-                    if (at > 0) {
+                    const int64_t at = sess->media_ms_for_seq(le);
+                    if (at >= 0) {
                         ctx->live_edge_seq     = le;
                         // The START of the newest segment, which is what
-                        // live_wall_ms() reports and therefore what
                         // set_delay_from_live() measures back from. Using the
                         // end instead would be defensible — that content does
                         // exist — but it would put the readout a segment out
                         // from the delay the operator dialled in, and a
                         // control that disagrees with its own display is worse
                         // than a reference point chosen a beat early.
-                        ctx->live_edge_wall_ms = at;
+                        //
+                        // >= 0, not > 0: the first segment of an event is at
+                        // media time 0, and `at > 0` would have refused to
+                        // stamp the edge for the whole of the first segment.
+                        ctx->live_edge_media_ms = at;
                         ctx->live_edge_seen_ms =
                             (long long)(os_gettime_ns() / 1000000ULL);
                     }
@@ -2493,13 +2501,18 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.earliest_ms = sess->earliest_media_ms();
 
     // Now that the playhead is known and clamped, express "behind live" as the
-    // gap between two real times rather than a count of segments. Only done
+    // gap between two MEDIA times rather than a count of segments, so the
+    // number moves smoothly instead of stepping once per segment. Only done
     // while there IS a live edge to be behind: a finished recording has none,
     // and the dock does not show the number there anyway.
     if (!out.ended) {
-        const long long edge = live_edge_wall_ms.load();
+        const long long edge = live_edge_media_ms.load();
         const long long seen = live_edge_seen_ms.load();
-        if (edge > 0 && seen > 0 && out.playhead_ms > 0) {
+        // BOTH SIDES IN MEDIA TIME. The subtraction below is only meaningful if
+        // they are the same kind of quantity, and the whole of BUGS #5 was that
+        // they had stopped being. `edge >= 0` and no test on the playhead at
+        // all: a position of 0 is the start of an event, not a missing value.
+        if (edge >= 0 && seen > 0) {
             // Two segments of extrapolation. Past that the edge has stopped
             // moving for longer than a stall explains, and standing still is a
             // better answer than inventing delay that may not exist.
