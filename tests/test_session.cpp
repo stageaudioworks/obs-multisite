@@ -34,13 +34,29 @@ static int g_fail = 0;
 class MemStore : public Transport {
 public:
     std::map<std::string, std::vector<uint8_t>> objects;
-    std::mutex mtx;
-    int fail_budget = 0;
-    bool expect_tags = false;
-    bool fail_all = false;
-    bool silently_discard = false;   // returns 200 but stores nothing
-    bool ordering_violation = false;
+    mutable std::mutex mtx;
+
+    // ATOMIC, because this store is genuinely concurrent now.
+    //
+    // These knobs are set by the test's main thread between steps and read
+    // inside put() — which, since the manifest publisher thread exists, can be
+    // running at ANY moment rather than only inside a call the test just made.
+    // TSan caught exactly that: a write to fail_budget by main racing a read in
+    // put() from the publisher. Plain fields were safe only while nothing
+    // touched the transport in the background, and that stopped being true.
+    std::atomic<int>  fail_budget{0};
+    std::atomic<bool> expect_tags{false};
+    std::atomic<bool> fail_all{false};
+    std::atomic<bool> silently_discard{false};   // returns 200 but stores nothing
+    std::atomic<bool> ordering_violation{false};
+
+    // Written inside put() under mtx; read through violation() so a reader
+    // cannot tear a string the publisher is assigning.
     std::string violation_detail;
+    std::string violation() const {
+        std::lock_guard<std::mutex> lk(mtx);
+        return violation_detail;
+    }
 
     // Cancellation is modelled because S3Transport's is STICKY, and a mock
     // that ignored it hid a real bug for six days: Session::end() cancelled
@@ -272,8 +288,9 @@ int main() {
         CHECK(st.pending == 0, "all segments drained after the outage");
         CHECK(st.confirmed_total == 8, "all 8 segments confirmed");
         CHECK(st.retries > 0, "retries occurred (outage was real)");
+        const std::string why = store.violation();
         CHECK(!store.ordering_violation,
-              store.ordering_violation ? store.violation_detail.c_str()
+              store.ordering_violation ? why.c_str()
                                        : "manifest never listed an unstored segment");
 
         Manifest m = Manifest::from_json(store.text("events/" + ses.event_id() + "/manifest.json"));
