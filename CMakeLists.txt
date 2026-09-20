@@ -573,6 +573,15 @@ add_executable(test_aes67 tests/test_aes67.cpp)
 target_include_directories(test_aes67 PRIVATE src/appliance)
 add_test(NAME aes67 COMMAND test_aes67)
 
+# Unlike the appliance tests above, this one COMPILES appliance sources rather
+# than only borrowing their headers, and sysinfo.cpp is unconditionally POSIX —
+# arpa/inet.h, ifaddrs.h, sys/statvfs.h. So it needs the same guard the
+# appliance itself carries. Without it the Windows job failed to configure a
+# target it could never build, which broke `obs plugin build` and `core
+# reliability tests` on every commit, and took the v0.1.23-alpha release build
+# with it. The block was already indented as though it sat inside a condition;
+# the condition was what was missing.
+if(NOT WIN32)
     add_executable(test_cpu_usage tests/test_cpu_usage.cpp
                    src/appliance/sysinfo.cpp
                    src/appliance/log.cpp)
@@ -581,6 +590,7 @@ add_test(NAME aes67 COMMAND test_aes67)
         MULTISITE_PLAYER_VERSION="test")
     target_link_libraries(test_cpu_usage PRIVATE multisite_core)
     add_test(NAME cpu_usage COMMAND test_cpu_usage)
+endif()
 
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
