@@ -2327,6 +2327,55 @@ loop or the handover, not the bound.
 Kept here only as pointers so they aren't lost; each needs a decision, not
 a fix.
 
+- **An update experience like DistroAV's** (raised 2026-09-20, researched, not
+  decided). Worth correcting the premise first: **DistroAV does not install
+  anything from inside OBS.** Its "Install Update" button is
+  `QDesktopServices::openUrl(releaseUrl)` and nothing more
+  (`src/forms/update.cpp`). Actual installation is a *separate* manual button
+  in its settings that shells out to `brew reinstall --cask` or
+  `winget install`, in a visible terminal, with Linux told it is unsupported —
+  elevation and file replacement delegated entirely to the OS package manager.
+  Nothing replaces files in process, on any platform. What is nice about it is
+  the *presentation*, not the mechanism.
+
+  We already have most of the mechanism. `src/obs/update_check.{h,cpp}` asks
+  the GitHub releases API once per run over libcurl, off the UI thread, with a
+  machine-wide opt-out — and, unlike DistroAV, carries **no identifier at
+  all**. Theirs posts to its own API with OBS's install GUID, OS name, CPU
+  architecture and a SHA-256 of its own binary in the User-Agent. For a church
+  running this on its own hardware that is a privacy posture we should keep,
+  not copy.
+
+  So the delta is one dialog. What is worth taking:
+  - A `QDialog` parented to `obs_frontend_get_main_window()`, bracketed by
+    `obs_frontend_push_ui_translation` / `pop`, shown from a
+    `QTimer::singleShot` so it does not fight OBS's own startup.
+  - **Release notes rendered as Markdown with `QTextDocument::MarkdownNoHTML`.**
+    They keep a debug-only harness that feeds the dialog hostile markdown
+    (script tags, `onerror`, `javascript:` and `data:` URLs) to check the
+    escaping — our notes come from the GitHub API, so the same care applies.
+  - **Skip this version / Remind me later**, plus the auto-check toggle in the
+    dialog itself, persisted in the OBS config.
+  - Opening the release page for the install, and leaving installation to
+    whatever put the plugin there.
+
+  What not to take: the telemetry; the server-controlled UI delay and check
+  interval, which they apply with no bounds check (a compromised endpoint could
+  set either to anything); and any ambition to replace our own DLL while OBS
+  has it loaded.
+
+  **Licence is compatible.** DistroAV is GPL-2.0-**or-later**, so its code can
+  be taken into this GPL-3.0-or-later project. Note it is the "or later" that
+  makes this true — GPL-2.0-only would not be. Their HTTP layer is itself
+  copied from OBS Studio's `remote-text.{hpp,cpp}`, because OBS ships Qt with
+  no TLS backend and `QNetworkAccessManager` therefore cannot do HTTPS from a
+  plugin. We already use libcurl directly, so that problem does not reach us.
+
+  Open question: is a modal dialog at startup the right thing for a machine
+  that goes live on a schedule? An operator opening OBS twenty minutes before a
+  service does not want a dialog in front of the Go Live button. The dock line
+  we have now is quieter, and may simply be correct for this audience.
+
 - **Bucket-mediated status/control**: should campus *appliances* report
   status the same way OBS decoders would, and is the relay meant to be the
   only control plane, or should the encoder's own dock see campuses too?
