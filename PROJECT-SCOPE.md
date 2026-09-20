@@ -734,6 +734,20 @@ product line, planned and built outside this repository.
   rather than assuming either.
 - This also strengthens the HEVC step on the codec roadmap: HEVC is exactly
   what the Pi 5 accelerates.
+- **AV1 decodes in software at full rate, measured on a Pi 5** (2026-09-20):
+  libdav1d held a steady 30.0 fps on a 1080p AV1 recording for the whole of a
+  ten-minute playout, dropping frames only at the seeks that restart the
+  decoder. That was not assumed — the Pi 5 has no AV1 hardware decoder, and
+  the expectation was that AV1 would need one.
+  It means the low-cost tier is not confined to what the hardware block
+  accelerates: AV1 can be chosen for the bandwidth saving on the strength of
+  software decode alone, which matters most for the sites on the worst links.
+  HEVC remains the only codec the Pi 5 accelerates, so it is still the choice
+  where headroom matters — a box also running the AES67 daemon and its own
+  interface has less of it than this test did.
+  Note that libdav1d runs its own thread pool rather than FFmpeg's, so it
+  reports no thread count. `decoding on its own threads` in the log is that,
+  not single-threaded decode.
 - **Audio.** HDMI carries up to 8 channels of LPCM, which suits the packed
   multi-channel layout: an inexpensive HDMI audio de-embedder recovers the
   individual channels at the campus. That gives a third audio path alongside

@@ -110,6 +110,12 @@ public:
     int  audio_track_count() const;
     // Which decoder FFmpeg picked, and how many threads it opened it with.
     // Both are only known once a fragment has been opened.
+    //
+    // decode_threads() is 0 when the decoder manages its own threads instead
+    // of using FFmpeg's — libdav1d runs its own pool, so FFmpeg leaves the
+    // count alone and there is no number to report. That is NOT single
+    // threaded, and reading it as such invites somebody to go and fix a
+    // decoder that is already using every core.
     std::string video_codec() const;
     int  decode_threads() const;
 

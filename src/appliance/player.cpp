@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include <unistd.h>   // getpid() — printed in the stall warning below
@@ -606,11 +607,19 @@ void Player::on_video(const DecodedVideoFrame& f) {
     // so none of this is known there — it printed 0x0 and no audio tracks
     // every time. By the first frame it is all real.
     if (!m_logged_stream.exchange(true)) {
-        if (auto dec = decoder_ref())
-            plog_info("stream: %s %dx%d, %d audio track(s), decoding on %d "
-                      "thread(s)", dec->video_codec().c_str(),
-                      dec->video_width(), dec->video_height(),
-                      dec->audio_track_count(), dec->decode_threads());
+        if (auto dec = decoder_ref()) {
+            // A decoder that runs its own thread pool reports no count, and
+            // "0 thread(s)" next to a picture holding full frame rate reads
+            // like a fault rather than the arrangement it is.
+            const int threads = dec->decode_threads();
+            char how[48];
+            if (threads > 0) std::snprintf(how, sizeof(how),
+                                           "on %d thread(s)", threads);
+            else std::snprintf(how, sizeof(how), "on its own threads");
+            plog_info("stream: %s %dx%d, %d audio track(s), decoding %s",
+                      dec->video_codec().c_str(), dec->video_width(),
+                      dec->video_height(), dec->audio_track_count(), how);
+        }
     }
     const int64_t first = anchor_pts(f.pts_ns, true);
     m_last_video_pts_ns = f.pts_ns;
