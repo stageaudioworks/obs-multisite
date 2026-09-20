@@ -39,8 +39,6 @@
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
-
-#include <cstring>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QDateTime>
@@ -535,13 +533,6 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_tileLayout->addItem(tr_("TileLayout.2x2"), "2x2");
     m_tileLayout->setToolTip(tr_("TileLayout.Help"));
     mform->addRow(tr_("TileLayout"), m_tileLayout);
-
-    // Captions. Populated from the sources that actually exist, so a caption
-    // source cannot be a typo that is only discovered mid-service. Repopulated
-    // whenever the settings page is shown, since sources come and go.
-    m_captionSource = new QComboBox(mediaBox);
-    m_captionSource->setToolTip(tr_("CaptionSource.Help"));
-    mform->addRow(tr_("CaptionSource"), m_captionSource);
     // "Audio names" label OBS mixer TRACKS and only matter when sending more
     // than one. "Channel names" label channels INSIDE a multi-channel track and
     // only matter when OBS is running a surround layout. Showing both to
@@ -620,7 +611,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     for (QCheckBox* cb : { m_tags, m_lanEnabled, m_disableCloud })
         connect(cb, &QCheckBox::toggled, this,
                 [this](bool) { if (!m_loading) m_dirty = true; });
-    for (QComboBox* combo : { m_provider, m_encoder, m_tileLayout, m_captionSource })
+    for (QComboBox* combo : { m_provider, m_encoder, m_tileLayout })
         connect(combo, &QComboBox::currentIndexChanged, this,
                 [this](int) { if (!m_loading) m_dirty = true; });
     for (QSpinBox* sb : { m_lanPort, m_vBitrate, m_aBitrate, m_tracks })
@@ -855,7 +846,6 @@ void EncoderDock::loadIntoFields() {
             QString::fromStdString(cfg.tile_layout));
         m_tileLayout->setCurrentIndex(i >= 0 ? i : 0);   // unknown reads as 1x1
     }
-    refreshCaptionSources(cfg.caption_source);
     m_lanEnabled->setChecked(cfg.lan_enabled);
     m_lanPort->setValue(cfg.lan_port);
     m_lanToken->setText(QString::fromStdString(cfg.lan_auth_token));
@@ -867,51 +857,6 @@ void EncoderDock::loadIntoFields() {
     updateLanFields();
     m_loading = false;
     m_dirty = false;
-}
-
-// The text sources captions could come from.
-//
-// Enumerated rather than typed. A caption source that does not exist produces a
-// broadcast with no captions and no error anyone would notice until afterwards,
-// and the most likely cause of that is a name typed slightly wrong.
-//
-// A source a generator writes into is a text source, so the list is filtered to
-// those: offering every source in the scene would bury the two or three that
-// could possibly work. The stored name is kept even when it is not in the list,
-// so a scene collection that has not loaded yet cannot silently clear the
-// setting on the next Apply.
-void EncoderDock::refreshCaptionSources(const std::string& selected) {
-    m_captionSource->blockSignals(true);
-    m_captionSource->clear();
-    m_captionSource->addItem(tr_("CaptionSource.None"), QString());
-
-    struct Ctx { QComboBox* combo; };
-    Ctx ctx{ m_captionSource };
-    obs_enum_sources(
-        [](void* param, obs_source_t* src) -> bool {
-            auto* c = static_cast<Ctx*>(param);
-            const char* id = obs_source_get_id(src);
-            // Both platforms' text sources, and FreeType on Linux.
-            if (id && (strstr(id, "text_gdiplus") || strstr(id, "text_ft2") ||
-                       strstr(id, "text_pango"))) {
-                const char* name = obs_source_get_name(src);
-                if (name && *name)
-                    c->combo->addItem(QString::fromUtf8(name), QString::fromUtf8(name));
-            }
-            return true;
-        },
-        &ctx);
-
-    const QString want = QString::fromStdString(selected);
-    int i = m_captionSource->findData(want);
-    if (i < 0 && !want.isEmpty()) {
-        // Configured but not present: keep it, and say so rather than dropping
-        // it on the floor.
-        m_captionSource->addItem(want + tr_("CaptionSource.Missing"), want);
-        i = m_captionSource->count() - 1;
-    }
-    m_captionSource->setCurrentIndex(i >= 0 ? i : 0);
-    m_captionSource->blockSignals(false);
 }
 
 void EncoderDock::showTestConnection(const ProbeResult& r) {
@@ -1042,7 +987,6 @@ void EncoderDock::onSaveSettings() {
     cfg.track_labels       = m_trackLabels->text().toStdString();
     cfg.channel_labels     = m_channelLabels->text().toStdString();
     cfg.tile_layout        = m_tileLayout->currentData().toString().toStdString();
-    cfg.caption_source = m_captionSource->currentData().toString().toStdString();
     cfg.lan_enabled    = m_lanEnabled->isChecked();
     cfg.lan_port       = m_lanPort->value();
     cfg.lan_auth_token = m_lanToken->text().trimmed().toStdString();

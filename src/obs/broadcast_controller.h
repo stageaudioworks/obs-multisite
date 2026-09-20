@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-
-#include "caption_bridge.h"
 //
 // broadcast_controller.h — owns the encoder-side broadcast.
 //
@@ -75,16 +73,6 @@ struct BroadcastSettings {
     // a 3840x1080 frame is a legitimate ultrawide picture as well as a
     // plausible pair, and nothing in the video distinguishes them.
     std::string tile_layout = "1x1";
-
-    // Captions (see caption_bridge.h). The name of a TEXT SOURCE whose text is
-    // put on the wire as CEA-708 inside the video bitstream. Empty — the
-    // default — means no captions are sent at all.
-    //
-    // A source rather than an output, because that is the one integration point
-    // every caption generator has in common. LocalVocal's own "Stream Captions"
-    // cannot be used: it is hardwired to the frontend streaming output, so it
-    // never reaches ours.
-    std::string caption_source;
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — off by default: this
     // opens a port, and doing that without being asked is exactly the kind
@@ -237,7 +225,6 @@ private:
     // half-copied string.
     mutable std::mutex m_cfg_mtx;
     obs_output_t*  m_output = nullptr;
-    CaptionBridge  m_captions;
     obs_encoder_t* m_venc = nullptr;
     std::vector<obs_encoder_t*> m_aencs;
     uint64_t m_started_ns = 0;
