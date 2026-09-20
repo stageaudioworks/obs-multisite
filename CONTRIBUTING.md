@@ -55,6 +55,15 @@ A DCO gives us what we actually need, which is confidence about where code came
 from. Anything beyond that would be asking for a right we have no plan to use,
 in exchange for nothing.
 
+## Coding standards
+
+The conventions this codebase follows are written down in
+`docs/CODING-STANDARDS.md`, with the reason each one exists — they are observed
+from the code rather than aspirational, and most are there because breaking one
+produced a fault that reached an operator. `CONTEXT.md` defines the project's
+vocabulary, which is worth two minutes before writing anything about time or
+positions.
+
 ## Before you open a pull request
 
 Read the [developer guide](docs/DEVELOPER.md) for building, the test suite, and
