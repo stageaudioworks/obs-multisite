@@ -412,6 +412,11 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
         return false;
     }
 
+    // Captions. AFTER the output has started: libobs only allocates the
+    // output's caption track when its video encoder is set, and nothing can
+    // carry a caption until packets flow.
+    m_captions.start(m_output, m_cfg.caption_source);
+
     // Live now: the uploader's own traffic is the health signal, so retire the
     // idle probe.
     stop_idle_monitor();
@@ -425,6 +430,8 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
 void BroadcastController::end_broadcast() {
     if (!m_output) return;
     mlog_info("ending broadcast (draining the upload queue)");
+    // BEFORE the output stops: the bridge holds a pointer to it.
+    m_captions.stop();
     obs_output_stop(m_output);
     release_all();
     // Back to idle: resume the background probe so the operator still sees a
