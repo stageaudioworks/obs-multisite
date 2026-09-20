@@ -127,6 +127,75 @@ warn() { printf '\033[1;33m    %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31mThat did not work:\033[0m %s\n\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# ── How much of this box to use at once ──────────────────────────────────────
+# This used to be `make -j$(nproc)`, and that is what made the install kill the
+# machine. The daemon's heaviest translation units pull in Boost, and each g++
+# working on one can hold well over a gigabyte. Four of those at once do not fit
+# in a 4 GB Pi, and the failure is not a failed build — the kernel thrashes
+# until the box becomes unresponsive and reboots, always at the same percentage.
+#
+# Memory is the binding constraint here, not cores, so the job count is worked
+# out from the memory actually free at the moment the build starts — which on a
+# campus box is less than the memory installed, because the player is running.
+MEM_PER_JOB_MB="${MEM_PER_JOB_MB:-1200}"
+
+build_jobs() {
+    if [ -n "${JOBS:-}" ]; then echo "$JOBS"; return; fi
+
+    local cores avail_kb by_mem
+    cores="$(nproc 2>/dev/null || echo 2)"
+    avail_kb="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+
+    # No way to tell: one at a time is slow but it finishes.
+    case "$avail_kb" in ''|*[!0-9]*) echo 1; return ;; esac
+    [ "$avail_kb" -gt 0 ] || { echo 1; return; }
+
+    by_mem=$(( avail_kb / 1024 / MEM_PER_JOB_MB ))
+    [ "$by_mem" -lt 1 ] && by_mem=1
+    if [ "$by_mem" -lt "$cores" ]; then echo "$by_mem"; else echo "$cores"; fi
+}
+
+# A temporary swap file, so that a box which can only manage one compiler at a
+# time still has somewhere to put the peak rather than dying at it. It is
+# removed again whether the script succeeds, fails or is interrupted: leaving
+# swap on the SD card of a box that writes 3 GB an hour of segment cache would
+# be trading one wear problem for another.
+SWAPFILE=""
+SWAPFILE_MB="${SWAPFILE_MB:-2048}"
+
+remove_temp_swap() {
+    [ -n "$SWAPFILE" ] || return 0
+    swapoff "$SWAPFILE" >/dev/null 2>&1 || true
+    rm -f "$SWAPFILE" 2>/dev/null || true
+    SWAPFILE=""
+}
+trap remove_temp_swap EXIT INT TERM
+
+add_temp_swap() {
+    local existing_kb
+    existing_kb="$(awk '/^SwapTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+    case "$existing_kb" in ''|*[!0-9]*) existing_kb=0 ;; esac
+    # Raspberry Pi OS ships a couple of hundred megabytes, which is not enough
+    # to matter here. A gigabyte or more already on the box is.
+    [ "$existing_kb" -ge 1048576 ] && return 0
+
+    have mkswap || return 0
+    local target="${BUILD_DIR%/*}/aes67-build-swap"
+    note "adding ${SWAPFILE_MB} MB of temporary swap for the build"
+    if ! fallocate -l "${SWAPFILE_MB}M" "$target" 2>/dev/null; then
+        dd if=/dev/zero of="$target" bs=1M count="$SWAPFILE_MB" \
+           status=none 2>/dev/null || { rm -f "$target"; return 0; }
+    fi
+    chmod 600 "$target"
+    if mkswap "$target" >/dev/null 2>&1 && swapon "$target" >/dev/null 2>&1; then
+        SWAPFILE="$target"
+        note "it is removed again when this script finishes"
+    else
+        rm -f "$target"
+        warn "could not enable the temporary swap — carrying on without it"
+    fi
+}
+
 usage() {
     cat <<'USAGE'
 Put the open AES67 stack (Merging's kernel module + the aes67-daemon that
@@ -143,11 +212,16 @@ Options
   --no-source          Do not set up a stream. Do this if the box's streams are
                        managed elsewhere, or by hand.
   --channels N         Channels in that stream, default 8.
+  --jobs N             Compile N files at once. The default is worked out from
+                       the memory free when the build starts, because running
+                       one per core is what makes a small Pi lock up. Use 1 if
+                       it still does.
   --check              Look at what is already here and report, change nothing.
   -h, --help           This text.
 
 Environment
-  MERGING_URL, MERGING_REF, BUILD_DIR, PREFIX_BIN, RAW_BASE
+  MERGING_URL, MERGING_REF, BUILD_DIR, PREFIX_BIN, RAW_BASE, JOBS,
+  MEM_PER_JOB_MB, SWAPFILE_MB
 
 What it changes
   apt packages, /var/tmp/aes67-merging (build tree), /usr/local/bin/aes67-daemon,
@@ -155,7 +229,8 @@ What it changes
   /etc/status.json, /etc/systemd/system/aes67-daemon.service,
   /etc/sysctl.d/90-aes67.conf, an /etc/modules-load.d entry so the module
   loads at boot, and one stream — eight channels, at the multicast address the
-  daemon's configuration names.
+  daemon's configuration names. While it builds, it may add a temporary swap
+  file next to the build tree; that is removed again when the script finishes.
 
 What it never touches
   Any card already registered on the box, and the player's config unless
@@ -172,6 +247,7 @@ while [ $# -gt 0 ]; do
         --point-player)   POINT_PLAYER=1; shift ;;
         --no-source)      NO_SOURCE=1; shift ;;
         --channels)       SOURCE_CHANNELS="${2:?--channels needs a value}"; shift 2 ;;
+        --jobs)           JOBS="${2:?--jobs needs a value}"; shift 2 ;;
         --check)          CHECK_ONLY=1; shift ;;
         -h|--help)        usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
@@ -494,6 +570,17 @@ build_daemon() {
     fi
 
     say "Building the daemon"
+    add_temp_swap
+    local jobs; jobs="$(build_jobs)"
+    local cores; cores="$(nproc 2>/dev/null || echo 2)"
+    if [ "$jobs" -lt "$cores" ]; then
+        note "building $jobs at a time, not $cores — there is not enough free"
+        note "memory on this box to compile more of it at once safely"
+        note "(override with --jobs N if you know better)"
+    else
+        note "building $jobs at a time"
+    fi
+
     local top="$BUILD_DIR" dir="$BUILD_DIR/daemon"
     [ -d "$dir" ] || die "no daemon directory in the source tree"
     [ -d "$top/3rdparty/cpp-httplib" ] || die "the cpp-httplib submodule is missing"
@@ -524,7 +611,14 @@ build_daemon() {
         -DWITH_STREAMER="$streamer" \
         -DWITH_NMOS=OFF \
         . >/dev/null || die "cmake failed — see the output above"
-    make -j"$(nproc 2>/dev/null || echo 2)" || die "the daemon build failed"
+    if ! make -j"$jobs"; then
+        # Almost always memory, and the operator cannot tell that from the
+        # compiler's own output. Say it plainly and give them the way out.
+        warn "the daemon build failed at $jobs job(s) at a time"
+        warn "if the box became unresponsive or rebooted, it ran out of memory;"
+        warn "re-run with:  sudo bash $0 --jobs 1"
+        die "the daemon build failed"
+    fi
     [ -f aes67-daemon ] || die "the build finished but produced no aes67-daemon"
     cd - >/dev/null
     note "daemon built"

@@ -41,7 +41,22 @@ CONFIG_DIR="/etc/multisite-player"
 CONFIG="$CONFIG_DIR/config.json"
 STATE_DIR="/var/lib/multisite-player"
 SERVICE="multisite-player"
-JOBS="${JOBS:-$(nproc)}"
+# One compiler per core is what makes a small Pi lock up and reboot part-way
+# through a build: memory is the binding constraint, not cores, and the failure
+# is not a failed build but an unresponsive machine. Work it out from the memory
+# free when the build starts — which is less than the memory installed, because
+# on a box being updated the player is already running. JOBS=N overrides it.
+build_jobs() {
+    local cores avail_kb by_mem
+    cores="$(nproc 2>/dev/null || echo 2)"
+    avail_kb="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+    case "$avail_kb" in ''|*[!0-9]*) echo 1; return ;; esac
+    [ "$avail_kb" -gt 0 ] || { echo 1; return; }
+    by_mem=$(( avail_kb / 1024 / 900 ))
+    [ "$by_mem" -lt 1 ] && by_mem=1
+    if [ "$by_mem" -lt "$cores" ]; then echo "$by_mem"; else echo "$cores"; fi
+}
+JOBS="${JOBS:-$(build_jobs)}"
 
 say()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -205,7 +220,7 @@ fi
 note "$(git -C "$SRC_DIR" log -1 --format='%h %s')"
 
 # ── Build ────────────────────────────────────────────────────────────────────
-say "Building (this takes a few minutes on a Pi)"
+say "Building $JOBS at a time (this takes a few minutes on a Pi)"
 cmake -S "$SRC_DIR" -B "$SRC_DIR/build" \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_PLAYER=ON \
