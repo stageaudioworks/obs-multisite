@@ -888,6 +888,49 @@ here. The seek log also counts the two streams separately now — one total hid
 this completely, because the total looked plausible while video was skipping
 311 ms less than audio.
 
+### 4. The Pi player's timeline and scrubbing died on a zero — the sentinel trap, sixth time
+
+**Status: FIXED.** Reported the morning after the elapsed-time change as "the
+timeline and scrubbing in the pi player is not working at all". Not a decoder
+fault and not a regression in the positions themselves: four guards in
+`web/app.js` tested a media time with `!x`.
+
+Media time is how far into the programme a moment sits. The start of a
+recording is therefore **0** — and for a recording whose first segment is still
+in storage, `earliest_ms == 0` is not an edge case, it is the ordinary state.
+Before the change the same field was a wall-clock epoch, never anywhere near
+zero, so `!from` had been safe for as long as it had existed.
+
+Four sites, all the same mistake:
+
+1. `drawTimeline`: `if (!from || !to || to <= from) return;` — blanked the
+   whole timeline and returned.
+2. The click handler: `if (!from || !to) return;` — every scrub returned early.
+   `Number('')` is also 0, so emptiness has to be tested before the number is.
+3. The hover handler: the same.
+4. `passed` in the cue list: `s.playhead_ms &&` failed at the start of an event,
+   which is exactly when it matters.
+
+A fifth was a different error in the same family: the timeline placed cue ticks
+with `m.at_ms`, a time of day, on a scale that now starts at 0 — so every cue
+sat far off the right-hand end. The cue list had been converted and the timeline
+had not, one quantity derived in two places again (D1's lesson).
+
+The comment immediately above fault 1 read *"when 0 is exactly where a
+recording with its first segment still in storage begins. Explicit, and
+numeric"* — the guard for this trap was written, and then undone three lines
+later by the test that follows it.
+
+**Why it shipped: `app.js` had no tests, because it needs a browser.** The
+arithmetic does not. `web/media.js` now holds `markerMediaMs`, `timelineRange`,
+`pctOf` and `seekTargetMs` with no DOM in them, `tests/test_media_time.js`
+exercises them under `ctest`, and `app.js` calls them rather than keeping its
+own copies. Verified for real as well as by test: the page was served against a
+stub status and driven in a browser — the range comes out 0→3,600,000, the
+playhead sits at 33.3% for 20:00 of 1:00:00, all three cue kinds land correctly
+(including a legacy `at_ms` one at 66.7%), and a click at the far left now
+issues `/api/seek?ms=0` where it previously issued nothing at all.
+
 ## Recently landed (context, not action items)
 
 - **AV1 goes out over RTMP now, with the caveat that used to be the refusal —

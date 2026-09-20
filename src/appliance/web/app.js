@@ -255,15 +255,12 @@ function drawTransport(s) {
 function drawTimeline(s) {
   // Media time, and `|| started_ms` would be two faults at once: it mixes a
   // position with a time of day, and it treats earliest_ms === 0 as absent
-  // when 0 is exactly where a recording with its first segment still in
-  // storage begins. Explicit, and numeric.
-  const from = (typeof s.earliest_ms === 'number') ? s.earliest_ms : 0;
-  // s.plays_as_recording, not s.ended: a pinned event is played as a recording
-  // while the room is still live, and spanning it to the live edge made the bar
-  // grow under a playhead that was not moving.
-  const to = s.plays_as_recording ? (s.end_ms || s.live_ms) : s.live_ms;
+  // The range, and whether there is one at all, are decided in media.js so a
+  // test can exercise them without a browser. That they were NOT testable is
+  // how `!from` blanked the timeline for every recording that starts at 0.
+  const range = timelineRange(s);
   const el = $('#timeline');
-  if (!from || !to || to <= from) {
+  if (!range) {
     el.dataset.from = ''; el.dataset.to = '';
     $('#tl-stored').style.cssText = '';
     $('#tl-downloaded').innerHTML = '';
@@ -273,10 +270,10 @@ function drawTimeline(s) {
     $('#tl-right').textContent = '';
     return;
   }
+  const from = range.from, to = range.to;
   el.dataset.from = String(from);
   el.dataset.to = String(to);
-  const span = to - from;
-  const pct = (ms) => Math.max(0, Math.min(100, ((ms - from) / span) * 100));
+  const pct = (ms) => pctOf(ms, from, to);
 
   $('#tl-stored').style.left = '0';
   $('#tl-stored').style.right = '0';
@@ -288,9 +285,15 @@ function drawTimeline(s) {
     return `<i style="left:${a}%;width:${Math.max(0.4, b - a)}%"></i>`;
   }).join('');
 
+  // Placed in MEDIA time, because from and to are media times. These were
+  // still placed with m.at_ms — a time of day — against a scale that starts at
+  // 0, so every cue sat far off the right-hand end. markerMediaMs is the one
+  // conversion, shared with the cue list below.
+  const started_ms = s.started_ms || 0;
   $('#tl-markers').innerHTML = (s.markers || [])
-    .filter((m) => m.at_ms >= from && m.at_ms <= to)
-    .map((m) => `<i style="left:${pct(m.at_ms)}%" title="${escapeHtml(m.label)}"></i>`)
+    .map((m) => ({ at: markerMediaMs(m, started_ms), label: m.label }))
+    .filter((m) => m.at !== null && m.at >= from && m.at <= to)
+    .map((m) => `<i style="left:${pct(m.at)}%" title="${escapeHtml(m.label)}"></i>`)
     .join('');
 
   $('#tl-head').style.left = pct(s.playhead_ms) + '%';
@@ -303,20 +306,20 @@ function drawCues(s) {
   const box = $('#cues');
   const markers = s.markers || [];
   if (!markers.length) { box.innerHTML = ''; return; }
-  // A recording's cue times run 00:00 to the end of the event; live they are
-  // times of day. Same rule the playhead readout follows.
-  const vod = !!s.plays_as_recording;
   const started = s.started_ms || 0;
   box.innerHTML = markers.map((m) => {
     // Where in the programme this cue sits, from its own anchor. The box used
     // to subtract the event start from a time of day, which needed a wall->media
     // mapping that drifted 1.11% — about forty seconds by the end of an hour.
     // -1 means a cue older than the field with no event start to convert it.
-    const media = (m.at_media_ms >= 0)
-      ? m.at_media_ms
-      : ((m.at_ms && started && m.at_ms >= started) ? m.at_ms - started : null);
-    const passed = media !== null && s.playhead_ms && started
-                 && (started + media) <= s.playhead_ms;
+    const media = markerMediaMs(m, started);
+    // playhead_ms is a MEDIA time, so a cue is passed when the playhead has
+    // reached its media time. This used to add the event's start to both sides
+    // — a time of day compared against a position — which made every cue read
+    // as passed. And `s.playhead_ms &&` failed at the one moment it mattered:
+    // the start of an event, where the playhead is 0.
+    const passed = media !== null && Number.isFinite(s.playhead_ms)
+                 && media <= s.playhead_ms;
     const who = m.author
       ? ' <span class="muted">' + escapeHtml(m.author) + '</span>' : '';
     // Elapsed for a recording; time of day only while following a live event.
@@ -432,18 +435,27 @@ $('#lock').onclick = async () => {
 // the cursor first, so a click is never a guess.
 const timeline = $('#timeline');
 timeline.addEventListener('click', (e) => {
+  // dataset is blanked to '' when there is no timeline, and Number('') is 0 —
+  // so emptiness has to be tested before the number is, not with `!from`. A
+  // recording legitimately starts at 0, and testing truthiness here is what
+  // stopped a scrub from doing anything at all.
+  if (!timeline.dataset.from || !timeline.dataset.to) return;
   const from = Number(timeline.dataset.from), to = Number(timeline.dataset.to);
-  if (!from || !to) return;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
   const r = timeline.getBoundingClientRect();
-  const at = from + ((e.clientX - r.left) / r.width) * (to - from);
-  control('/api/seek?ms=' + Math.round(at));
+  control('/api/seek?ms=' + seekTargetMs((e.clientX - r.left) / r.width, from, to));
 });
 timeline.addEventListener('pointermove', (e) => {
+  if (!timeline.dataset.from || !timeline.dataset.to) {
+    $('#tl-hover').textContent = ''; return;
+  }
   const from = Number(timeline.dataset.from), to = Number(timeline.dataset.to);
-  if (!from || !to) { $('#tl-hover').textContent = ''; return; }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    $('#tl-hover').textContent = ''; return;
+  }
   const r = timeline.getBoundingClientRect();
-  const at = from + ((e.clientX - r.left) / r.width) * (to - from);
-  $('#tl-hover').textContent = elapsedClock(at);
+  $('#tl-hover').textContent =
+    elapsedClock(seekTargetMs((e.clientX - r.left) / r.width, from, to));
 });
 timeline.addEventListener('pointerleave', () => { $('#tl-hover').textContent = ''; });
 

@@ -159,6 +159,18 @@ add_test(NAME playout_timeline COMMAND test_playout_timeline)
 add_executable(test_seek_skip tests/test_seek_skip.cpp)
 add_test(NAME seek_skip COMMAND test_seek_skip)
 
+# The Pi player page's media-time arithmetic. Node rather than C++ because the
+# code under test is the page's, and it is only testable at all because the
+# arithmetic was split out of app.js (which needs a browser) into media.js.
+find_program(NODE_EXECUTABLE NAMES node nodejs)
+if(NODE_EXECUTABLE)
+    add_test(NAME media_time
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_media_time.js)
+else()
+    message(STATUS "node not found — skipping the media_time test")
+endif()
+
 # Dividing one encoded picture into discrete ones. Every way of getting this
 # geometry wrong is quiet — a rectangle a pixel out still shows a picture.
 add_executable(test_tile_layout tests/test_tile_layout.cpp)
