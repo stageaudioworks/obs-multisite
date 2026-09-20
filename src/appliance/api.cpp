@@ -916,7 +916,8 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     // setting a tablet left on a music stand must not be able to alter.
     auto aes67_state = [&player]() {
         const Config c = player.config();
-        return aes67_probe(c.alsa_device, c.aes67_channels, c.aes67_address);
+        return aes67_probe(c.alsa_device, c.aes67_channels, c.aes67_address,
+                           c.web_port);
     };
 
     auto aes67_json = [](const Aes67State& s) {

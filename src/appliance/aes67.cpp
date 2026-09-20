@@ -167,7 +167,8 @@ std::string aes67_card_device(const std::string& name) {
 }
 
 Aes67State aes67_probe(const std::string& alsa_device, int want_channels,
-                       const std::string& want_address) {
+                       const std::string& want_address,
+                       int player_web_port) {
     Aes67State st;
     st.port = aes67_daemon_port();
 
@@ -189,9 +190,24 @@ Aes67State aes67_probe(const std::string& alsa_device, int want_channels,
     const HttpReply ptp = http_request("GET", base + "/ptp/status", {});
     st.rest_reachable = ptp.transport_ok && ptp.status == 200;
     if (!st.rest_reachable && st.service_active) {
-        st.error = "the AES67 daemon is running but nothing answered on port " +
-                   std::to_string(st.port) + " — check http_port in " +
-                   std::string(kAes67DaemonConf);
+        if (player_web_port > 0 && st.port == player_web_port) {
+            // Not a daemon fault at all. Upstream's sample configuration puts
+            // the daemon on 8080, which is where this player already is, and
+            // the symptom of that is indistinguishable from a broken daemon
+            // unless somebody says so.
+            st.error = "the AES67 daemon is set to port " +
+                       std::to_string(st.port) + ", which is the port this "
+                       "player's own interface uses. Two things cannot hold "
+                       "one port, so the daemon starts and then answers "
+                       "nothing. Change http_port in " +
+                       std::string(kAes67DaemonConf) +
+                       " to a free port — the installer uses 8081 — and "
+                       "restart the daemon.";
+        } else {
+            st.error = "the AES67 daemon is running but nothing answered on "
+                       "port " + std::to_string(st.port) +
+                       " — check http_port in " + std::string(kAes67DaemonConf);
+        }
     }
     if (st.rest_reachable) {
         nlohmann::json j = nlohmann::json::object();

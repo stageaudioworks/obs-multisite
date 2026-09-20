@@ -673,10 +673,60 @@ install_daemon() {
 # `playout_delay` is left at the project's 0. It adds latency in whole
 # tic-frames, and lip sync is the open question on this box, so the less added
 # the easier it is to reason about. Raise it only if network jitter needs it.
+# The port the player's own interface is on, so the daemon can be kept off it.
+# Read from the player's config rather than assumed, because an operator may
+# have moved it.
+player_web_port() {
+    local port=""
+    if [ -f "$PLAYER_CONF" ]; then
+        port="$(sed -n 's/.*"web_port"[^0-9]*\([0-9]\{1,5\}\).*/\1/p' \
+                "$PLAYER_CONF" | head -1)"
+    fi
+    case "$port" in ''|*[!0-9]*) echo 8080 ;; *) echo "$port" ;; esac
+}
+
+# The http_port a daemon.conf actually names. What the daemon will really bind,
+# as opposed to what this script would have chosen.
+conf_http_port() {
+    local port=""
+    [ -f "$1" ] && port="$(sed -n 's/.*"http_port"[^0-9]*\([0-9]\{1,5\}\).*/\1/p' \
+                           "$1" | head -1)"
+    case "$port" in ''|*[!0-9]*) echo 0 ;; *) echo "$port" ;; esac
+}
+
 write_config() {
     say "Configuration"
     if [ -f "$DAEMON_CONF" ] && [ "$REWRITE_CONFIG" -ne 1 ]; then
         note "$DAEMON_CONF already exists — left alone (--rewrite-config to replace)"
+
+        # ...with one exception. Upstream's sample config puts the daemon on
+        # 8080, which is the port the player's own interface holds. A daemon
+        # that cannot bind its port starts, reports itself active, and answers
+        # nothing — which is exactly the state the player then reports as
+        # "running but not answering", with no way to act on it.
+        #
+        # Leaving a configuration alone is the right instinct, but not when the
+        # one value in it guarantees the install cannot work. So this single key
+        # is corrected, the old file is kept, and the change is spelled out.
+        local existing player
+        existing="$(conf_http_port "$DAEMON_CONF")"
+        player="$(player_web_port)"
+        if [ "$existing" -eq 0 ]; then
+            warn "it names no http_port — the daemon will use its own default"
+        elif [ "$existing" -eq "$player" ]; then
+            cp -a "$DAEMON_CONF" "$DAEMON_CONF.bak"
+            sed -i "s/\(\"http_port\"[[:space:]]*:[[:space:]]*\)$existing/\1$WEBUI_PORT/" \
+                "$DAEMON_CONF"
+            warn "it had the daemon on port $existing, which is the port the"
+            warn "player's own interface uses. Two things cannot hold one port,"
+            warn "so the daemon would have started and answered nothing."
+            warn "Moved the daemon to $WEBUI_PORT; the old file is $DAEMON_CONF.bak"
+        else
+            # Whatever the operator chose stands, and everything downstream now
+            # asks on that port rather than the one this script would have used.
+            WEBUI_PORT="$existing"
+            note "the daemon's interface is on port $WEBUI_PORT, as that file says"
+        fi
     else
         if [ -f "$DAEMON_CONF" ]; then
             cp -a "$DAEMON_CONF" "$DAEMON_CONF.bak"

@@ -575,8 +575,14 @@ const char* aes67_action_word(Aes67Action a);
 // Everything above, in one pass. `want_channels` and `want_address` are what
 // THIS player means to publish, so the answer can say whether the source that
 // exists is the source that was intended.
+// `player_web_port` is the port the player's OWN interface is on. It is here
+// only so the one failure that looks like a daemon fault can be named for what
+// it is: a daemon configured on that same port starts, binds nothing, reports
+// itself active and answers every request with silence. Told just the port, an
+// operator has no way to tell that apart from a broken daemon.
 Aes67State aes67_probe(const std::string& alsa_device, int want_channels,
-                       const std::string& want_address);
+                       const std::string& want_address,
+                       int player_web_port = 0);
 
 // Create our source, or correct it if it exists with the wrong shape. Never
 // touches whether it is switched on: that is the operator's, and repairing a
