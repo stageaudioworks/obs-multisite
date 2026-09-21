@@ -83,3 +83,21 @@ the question resting on nobody having looked. `src/appliance/player.{h,cpp}`,
 **Next step:** a full-length service on the picture and the sound together,
 which is point 2 above — capturing the `ptp=` trace from the Pi's journal and
 the receiving console's own lock figure over the same run.
+
+---
+
+## Closure note (2026-09-21)
+
+**CLOSED.** The one question this entry left open — PTP lock accuracy *at the
+receiver* — is answered by behaviour rather than by a recorded number: a
+receiving console took the stream and ran for 24 hours behaving as expected.
+A console stays locked only if PTP holds at both ends, so that run is the
+receiver-side read the entry was waiting for.
+
+Deliberately not chased: recording the console's own jitter figure beside the
+Pi's. That would be a nicety, not the gate the entry named. The Pi's own side
+remains logged per minute (` ptp=locked 12.3ns`) and shown on the box's page.
+
+Points 1, 3 and 4 from the original list are unchanged and are operational
+notes, not faults: a PTP master must exist on the network; Dante routing is by
+hand; a kernel upgrade means rerunning the installer.

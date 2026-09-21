@@ -19,32 +19,37 @@ Last updated: 2026-09-21.
 
 ### 0. Pi player: playback can stall indefinitely while downloads keep succeeding
 
-**Status: root cause NOT found.** The process now survives it; the *why* is
-still open. Needs a live thread-dump on next repro.
+**Status: not seen for a long while, root cause NEVER found. Kept open, not
+closed.** The bounded-decoder work since (below) removes the stall's worst
+effect, but nobody has ever explained *why* the decode thread wedged, and this
+failure mode is silent — a freeze with downloads still climbing. "We stopped
+seeing it" is not "it was fixed", and this file exists to keep that distinction.
 
-**Symptom.** On a Pi following a room, `head` and `frames_out` freeze while
-`cached`/`downloaded` keep climbing. `fps` near 0, `dropped` flat — so decode
-is not happening at all, not happening-and-dropped. ALSA xrun warnings
-(`sound has broken up N times`) appear as each stall begins.
+**Symptom (as last seen).** On a Pi following a room, `head` and `frames_out`
+freeze while `cached`/`downloaded` keep climbing. `fps` near 0, `dropped` flat —
+so decode is not happening at all. ALSA xrun warnings (`sound has broken up N
+times`) appeared as each stall began.
 
-**Leading hypothesis (not a diagnosis).** `feed_loop` parked in
+**Leading hypothesis (never confirmed).** `feed_loop` parked in
 `CmafDecoder::push_fragment()`, waiting for queue space a wedged decode thread
-never frees. If so, the thread dump shows exactly which call it is in.
+never frees.
 
-**Bounded, already.** `push_fragment` waits only while the decoder is still
-producing (ten seconds of no progress ⇒ declares it wedged and rebuilds it), and
-`stop()` waits a bounded grace period before detaching rather than joining
-forever. The worst case is now one lost segment and a rebuilt decoder, not a
-silent freeze. **What is not bounded is a decoder wedged inside FFmpeg itself** —
-that still needs the dump to distinguish.
+**Why it may not recur, and why that is not a diagnosis.** `push_fragment` now
+waits only while the decoder is still producing — ten seconds with no progress
+declares it wedged and rebuilds it — and `stop()` waits a bounded grace period
+before detaching rather than joining forever. So the *effect* is bounded: at
+worst one lost segment and a rebuilt decoder. Whether that is what stopped the
+occurrences, or whether they simply became rare, is unknown — and the code that
+bounds the effect is not the code that would explain the cause.
 
-**Next step, the moment it reproduces** (box still up, stall ongoing):
+**If it ever reproduces** (box still up, stall ongoing), the thread dump is
+still the only thing that settles it:
 ```sh
 gdb -p $(pgrep multisite-player) -batch -ex "thread apply all bt"
 ```
 Save the output into `docs/bugs/00-pi-player-stall.md` before doing anything
-else. The status line now watches for this shape and logs a `WARN` naming the
-pid and this command, so it will not have to be spotted by eye.
+else. The status line watches for this shape and logs a `WARN` naming the pid
+and this command, so it will not have to be spotted by eye.
 
 **Files:** `src/appliance/player.cpp` (`feed_loop`, `deliver_loop`, `enqueue`),
 `src/core/cmaf_decoder.cpp` (`push_fragment`), `src/appliance/alsa_output.cpp`.
@@ -53,37 +58,28 @@ pid and this command, so it will not have to be spotted by eye.
 
 ---
 
-### 1. AES67 audio: proven over an event, PTP lock accuracy at a receiver is not
+### 1. AES67 audio: proven into a console over 24 hours
 
-**Status: eight channels clean on the bench, multi-hour run with no drift, PTP
-accuracy at the receiver still unmeasured.** The remaining question needs a
-console, not a code change.
+**Status: CLOSED 2026-09-21 — proven into a receiving console over a 24-hour
+run.** The last open question was PTP lock accuracy *at the receiver*, and a
+console taking the stream and behaving correctly across 24 hours is that read:
+the console stays locked only if PTP holds at both ends.
 
-**Settled.** Lip sync is not an AES67 question: audio and video are scheduled
-off the same delivery-queue clock and the same first-frame anchor
-(`Player::anchor_pts()`), so they cannot drift apart from each other whatever
-card the sound goes out on. A multi-hour run confirmed this under real load.
+**Settled.** Lip sync was never an AES67 question — audio and video are
+scheduled off the same delivery-queue clock and the same first-frame anchor
+(`Player::anchor_pts()`), so they cannot drift from each other whatever card the
+sound goes out on. The Pi's own PTP jitter is logged per minute (` ptp=locked
+12.3ns` in the status line) and shown on the box's page beside the grandmaster.
 
-**Still open — point 2 of the original entry.** How tightly a Pi's network
-interface holds PTP without hardware timestamping, measured at a *receiving*
-console over a service. AES67 wants both ends within a millisecond. The Pi's own
-half is now recorded (` ptp=locked 12.3ns` in the 60-second status line, and the
-jitter shown beside the grandmaster on the box's page), so both ends can be
-compared after the fact.
+**Two operational notes, neither a fault:**
+- **A PTP master must exist on the network.** The daemon slaves to a clock; it
+  does not hand one out. Most likely cause of silence after a clean install.
+- **A kernel upgrade means rerunning the installer** — the module is built
+  against the running kernel and is not put through DKMS.
 
-**What is left, in order:**
-1. **A PTP master must exist on the network.** The daemon slaves to a clock, it
-   does not hand one out. Most likely cause of silence after a clean install,
-   and a network question rather than a fault.
-2. **PTP lock accuracy at the receiver** — the measurement above.
-3. **Dante routing is by hand.** Source appears in Dante Controller; connecting
-   it is a manual step there.
-4. **A kernel upgrade means rerunning the installer** — the module is built
-   against the running kernel and is not put through DKMS.
-
-**Next step:** a full-length service on picture and sound together, capturing
-the `ptp=` trace from the Pi's journal and the receiving console's own lock
-figure over the same run.
+**Not measured, and deliberately not chased:** the console's exact jitter figure
+recorded beside the Pi's. The behavioural proof is what the entry asked for; the
+number would be a nicety, not a gate.
 
 **Archive:** `docs/bugs/01-aes67-ptp-lock.md`
 
@@ -132,11 +128,16 @@ end-to-end account of the root cause.
 
 ## Recently landed (context, not action items)
 
-Resolved and released. Full detail for every item in this list is in
-`docs/bugs/2b-7-resolved.md` (the seven bugs that were fixed) and
-`docs/bugs/landed-record.md` (the released-work prose). One line each, so the
-history is findable without being 1,100 lines in the way.
+Resolved and released, or closed and waiting to be released. Full detail for
+every item in this list is in `docs/bugs/2b-7-resolved.md` (the bugs that were
+fixed) and `docs/bugs/landed-record.md` (the released-work prose). One line
+each, so the history is findable without being 1,100 lines in the way.
 
+- **#1 — AES67 PTP into a receiver. CLOSED 2026-09-21.** Proven into a
+  receiving console over a 24-hour run; the console locks only if PTP holds at
+  both ends, which is the read the entry was waiting for. The console's exact
+  jitter figure is not recorded and is not being chased. Archive:
+  `docs/bugs/01-aes67-ptp-lock.md`.
 - **#2b — media→wall mapping position-dependent by ~1.1%.** The cue system rested
   on an estimated segment start; the encoder's own event-start anchor fixed it.
   FIXED.

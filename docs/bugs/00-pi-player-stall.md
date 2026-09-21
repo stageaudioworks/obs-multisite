@@ -118,3 +118,21 @@ What remains genuinely un-diagnosed is *why* the decode thread wedged in the
 first place — the thread dump is still the only thing that settles it, and the
 self-watching WARN above is still what triggers one. The difference is that
 the process now survives it and keeps relaying.
+
+---
+
+## Status note (2026-09-21) — downgraded, NOT closed
+
+The stall has not been seen for a long while. It is **downgraded rather than
+closed**, and the distinction is deliberate: the root cause was never found, the
+failure mode is silent, and "we stopped seeing it" is not "it was fixed".
+
+What changed since the original entry is that the stall's *effect* is bounded —
+`push_fragment` declares the decoder wedged after ten seconds of no progress and
+the caller rebuilds it, and `stop()` no longer joins a wedged thread forever. So
+the worst case is one lost segment rather than a freeze. Whether that bounding is
+what stopped the occurrences, or whether they simply became rare, is unknown, and
+the code that bounds the effect is not the code that would explain the cause.
+
+Kept open so the trap is not lost: if it ever recurs, the thread dump above is
+still the only thing that settles it.

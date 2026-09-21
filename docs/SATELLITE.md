@@ -297,13 +297,12 @@ It builds from source, so give it a few minutes and let it finish.
 - **What is verified, and what is not.** On a bench Pi the module built, the
   daemon came up, the card appeared, the player opened it, and eight channels of
   clean audio arrived. A multi-hour run has since carried picture and sound
-  together with no drift found, so lip sync is settled. Not yet verified: how
-  accurate PTP becomes at the far end, since a Pi's network interface does no
-  hardware timestamping and the result is whatever the software manages. Measure
-  it at the receiver, on a real event — ten seconds of test tone cannot settle
-  it. The Pi's own side of the comparison is now logged once a minute and shown
-  under **This box**, so a run leaves something to compare against. The detail is
-  in [BUGS.md entry 1](../BUGS.md#1-aes67-audio-proven-over-an-event-ptp-lock-accuracy-at-a-receiver-is-not).
+  together with no drift found, so lip sync is settled. And PTP into a receiving
+  console is settled too: a console took the stream and ran 24 hours without a
+  fault, which is the receiver-side proof — it stays locked only if PTP holds at
+  both ends. Not recorded: the console's exact jitter figure. The Pi's own side
+  is logged once a minute and shown under **This box**. The detail is in
+  [BUGS.md #1](../BUGS.md).
 
 ### Controlling it from the player's own page
 

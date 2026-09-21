@@ -270,8 +270,9 @@ numbers.
 - **Multi-track audio, up to 6 tracks**, in the same fragment as the picture,
   exposed at the satellite as separate sources.
 - **AES67 audio on the appliance** — sound onto the network instead of HDMI,
-  switched from the player's page. Eight channels proven on a bench Pi; not yet
-  through an event. See [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
+  switched from the player's page. Eight channels on a bench Pi, and PTP proven
+  into a receiving console over a 24-hour run. See
+  [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
 - **One feed, several pictures** — a 2×1 or 2×2 composite arrives as discrete,
   already-cropped sources, downloaded once and decoded once. See
   [Choosing a satellite](docs/SATELLITE.md#what-running-the-decoder-in-obs-makes-possible).
@@ -389,10 +390,10 @@ gap, not the story behind it — that is in
   suite](https://github.com/atkAudio/PluginForObsRelease) already routes packed
   multi-channel to separate outputs; a de-interleaver of ours was dropped as a
   worse version of something that exists. Multi-track needs none of it.
-- **AES67: PTP lock accuracy at a receiver is unmeasured.** Lip sync is settled
-  (multi-hour run, no drift); how tightly a Pi holds PTP without hardware
-  timestamping is not. A PTP master must exist on the network, or nothing flows.
-  See [BUGS.md entry 1](BUGS.md).
+- **AES67 PTP into a receiving console is proven.** A console took the stream
+  and ran 24 hours without a fault, which is the receiver-side read the entry was
+  waiting for. The console's exact jitter figure is not recorded. A PTP master
+  must exist on the network, or nothing flows. See [BUGS.md #1](BUGS.md).
 - **AV1 reaches only destinations that document AV1 ingest.** YouTube does, and
   it is now measured — an AV1 event played there ten minutes without a fault.
   AV1 over SRT is refused, and always will be, until ffmpeg can put it in
