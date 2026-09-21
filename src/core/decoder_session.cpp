@@ -415,7 +415,7 @@ int DecoderSession::pump_downloads(int max) {
         // Buffer target in minutes of programme, converted to segments. When
         // far behind live this is a wide window on purpose: bank as much as
         // the link can manage rather than trickling at playback speed.
-        const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
+        const double seg = segment_duration_s();
         uint64_t want_ahead = (uint64_t)std::max(
             1.0, ((double)std::max(1, m_cfg.buffer_minutes) * 60.0) / seg);
         // The start gate must be reachable: never download less than the
@@ -512,7 +512,7 @@ int DecoderSession::pump_downloads(int max) {
 
 // ── Playback ─────────────────────────────────────────────────────────────────
 uint64_t DecoderSession::start_reserve_segments() const {
-    const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
+    const double seg = segment_duration_s();
     const uint64_t by_time =
         (uint64_t)std::ceil(std::max(0, m_cfg.start_buffer_seconds) / seg);
     return std::max((uint64_t)std::max(0, m_cfg.prebuffer_segments), by_time);
@@ -710,7 +710,7 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
         }
 
         out.seq = want;
-        out.duration_s = m_segment_duration_s.load();
+        out.duration_s = segment_duration_s();
         out.event_started_at_ms = m_started_at_ms.load();
         for (const auto& sg : m_manifest.segments) {
             if (sg.seq != want) continue;
@@ -966,7 +966,7 @@ uint64_t DecoderSession::discontinuity_id() const {
 int64_t DecoderSession::segment_ms() const {
     const int64_t measured = m_measured_segment_ms.load();
     if (measured > 0) return measured;
-    return (int64_t)(m_segment_duration_s.load() * 1000.0);
+    return (int64_t)(segment_duration_s() * 1000.0);
 }
 
 int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
@@ -1151,7 +1151,7 @@ double DecoderSession::buffered_ahead_s() const {
     // the UI thread.
     if (!m_head_set.load()) return 0.0;
     const uint64_t head = m_head.load();
-    const double seg = m_segment_duration_s.load();
+    const double seg = segment_duration_s();
     const auto idx = m_cache->cached_seqs();
     int n = 0;
     for (uint64_t s = head; idx.count(s); ++s) ++n;

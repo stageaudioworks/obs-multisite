@@ -2413,7 +2413,6 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     // than running away and reporting a delay that is not there.
     out.behind_live_s    = sess->behind_live_s();      // fallback below
     out.buffered_ahead_s = sess->buffered_ahead_s();
-    out.start_buffer_s   = sess->start_buffer_seconds();
     {
         // Longest contiguous run of cached segments. This is the number that
         // grows while the start buffer fills — the pre-Play state where a head

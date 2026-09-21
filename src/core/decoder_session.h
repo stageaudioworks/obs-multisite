@@ -354,7 +354,17 @@ public:
     // Nominal segment length. Needed by callers that reason in wall time about
     // where the live edge is, since the newest segment's content runs to its
     // start plus this.
-    double segment_duration_s() const { return m_segment_duration_s.load(); }
+    //
+    // This is the AUTHORITY, and it returns the value WITH its fallback already
+    // applied — never a raw hint a caller must floor itself. That closes D2:
+    // the dock and two internal sites each used to re-apply `> 0.1 ? : 6.0`
+    // over the snapshot, which is two answers to one question and exactly how
+    // the media-vs-wall faults started. A caller that floors this again is
+    // reintroducing the duplicate.
+    double segment_duration_s() const {
+        const double s = m_segment_duration_s.load();
+        return s > 0.1 ? s : 6.0;
+    }
 
     // Seconds of contiguous cached content ahead of the head — i.e. how long
     // playback could continue with no network at all.

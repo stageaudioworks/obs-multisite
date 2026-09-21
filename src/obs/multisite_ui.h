@@ -211,7 +211,6 @@ struct DecoderSnapshot {
     // is the longest contiguous run on disk, in seconds, so it grows as the
     // buffer fills whether the event is live or a recording.
     double      buffered_span_s = 0.0;
-    int         start_buffer_s = 0;
     bool        paused = false;
     size_t      cached = 0;
     std::string current_marker;

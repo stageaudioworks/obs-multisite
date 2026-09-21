@@ -1659,8 +1659,11 @@ void DecoderDock::refresh() {
     //
     // m_mediaSegMs survives only to cap one interpolation step; it is not used
     // to place anything.
-    const double seg_s = s.segment_duration_s > 0.1 ? s.segment_duration_s : 6.0;
-    m_mediaSegMs = (long long)(seg_s * 1000.0 + 0.5);
+    //
+    // No fallback is applied here: the snapshot's segment_duration_s is the
+    // session's own answer with its fallback already applied (D2). Re-flooring
+    // it was the second copy of that question.
+    m_mediaSegMs = (long long)(s.segment_duration_s * 1000.0 + 0.5);
 
     // The load is over: stop naming it, so a later wait cannot show a stale
     // name from a click that has long since finished.
