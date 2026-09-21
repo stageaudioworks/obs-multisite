@@ -6,21 +6,25 @@ GPL-3.0-or-later.
 
 ## Read these first
 
-The important knowledge in this repository is in prose, not in the code, and
-most of it is in two long files. Reading the relevant part of them is not
+The important knowledge in this repository is in prose, not in the code. Each
+open document is kept short enough to read; the measurements and reverted
+attempts that produced it are archived. Reading the relevant part is not
 optional for anything touching playout, seeking, timing or storage.
 
 | File | What it is the authority for |
 | --- | --- |
 | `CONTEXT.md` | The vocabulary. Short. Read it before writing about time or positions. |
 | `PROJECT-SCOPE.md` | How each component is meant to work. Numbered sections; cite them. |
-| `BUGS.md` | Every fault, its root cause, what was measured, and which attempts were reverted. |
-| `docs/CODING-STANDARDS.md` | The conventions this code follows, and why each one exists. |
-| `docs/adr/` | Decisions taken from now on. Settled ones are in the two files above. |
+| `BUGS.md` | Open faults, each one screen: status, symptom, root cause, next step, the trap. |
+| `docs/bugs/` | The archaeology behind each entry — measurements, four-revert histories. Read before changing timing. |
+| `docs/CODING-STANDARDS.md` | The conventions this code follows, and why each one exists (§10 is how to write the docs). |
+| `docs/adr/` | Decisions taken from now on. Settled ones are in the files above. |
 
-**`BUGS.md` before timing code.** Seeking has been broken five times in one
-afternoon, the hold/resume path three times, and the same zero-sentinel trap six
-times. The entry usually names the thing you are about to try.
+**`BUGS.md` before timing code, and its archive when the short entry points
+there.** Seeking has been broken five times in one afternoon, the hold/resume
+path three times, and the same zero-sentinel trap six times. The entry names the
+thing you are about to try; `docs/bugs/` shows why the last four attempts at it
+were reverted.
 
 ## The components
 

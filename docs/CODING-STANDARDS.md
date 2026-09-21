@@ -99,7 +99,39 @@ frame, and say a thing once per broadcast rather than once per event loop.
 after, and report the reading. Where a fix is defensive rather than diagnosed,
 say which — `BUGS.md` distinguishes them deliberately.
 
-## 10. Housekeeping
+## 10. Prose is for the reader, not the record
+
+The fault record in this project became unreadable by keeping everything: a bug
+entry that carried every measurement, every reverted attempt and every
+correction grew to 470 lines, and the measurement that mattered sat 400 lines
+below the paragraph that told you not to act on it. `BUGS.md` was 2,424 lines,
+over half of it shipped work nobody had an action for.
+
+The rule, and it applies to any long-lived document:
+
+- **A working entry is one screen.** Status, symptom, root cause, next step,
+  files, and the thing not to try. If it does not fit, the entry is several
+  bugs or the detail belongs elsewhere.
+- **The archive holds the archaeology, one file per subject** — `docs/bugs/`
+  for faults, `docs/scope/` for design rationale. Keep it verbatim. Nothing is
+  deleted; it is moved out of the path of someone trying to act.
+- **A design doc states the specification, not its history.** What a thing does,
+  what must be built, and the constraints; the "we considered X and rejected
+  it", the measurements and the reverted attempts go to `docs/scope/`.
+  `PROJECT-SCOPE.md` is cited as the authority, so a reader must be able to read
+  a numbered section and know what to build without following a link.
+- **Say the trap in the short form.** "Do not re-apply option (a)" belongs in
+  the entry, not in a 470-line file the reader will not reach. The archive
+  explains why; the entry says what.
+- **Resolved work leaves `Open`.** An `Open` section that is mostly closed
+  makes the project look worse than it is and hides the entries that are real.
+- **Commit messages already hold the reasoning** for shipped work (see §11);
+  do not restate it in an index. One line, and a pointer.
+
+This mirrors §1: a comment earns its place by recording what is *not* in the
+code. Prose earns its place the same way — by being where the reader needs it.
+
+## 11. Housekeeping
 
 - Git commits explain the reasoning, not the diff. `git log` here reads as a
   design record and is expected to.

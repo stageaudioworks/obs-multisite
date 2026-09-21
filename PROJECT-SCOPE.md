@@ -834,316 +834,130 @@ HTML with a WebSocket for live updates. It should carry the same plain language
 
 ## 8.2 Public simulcast relay
 
-The same segments that feed the campuses, pushed out to YouTube, Facebook or
-any RTMP destination. A separate sub-project in `relay/`, deployed as one
-Docker container on a small VPS. It is not part of the plugins and the core
-knows nothing about it.
+**Status: built.**
 
-**Why relay from the bucket rather than add a second OBS output.** The main
-site uploads once however many places the event goes, which is what makes
-this possible at all on a venue connection that will not carry a second
-upload. The public stream also inherits the buffering the campus feed already
-has: the relay deliberately runs a configurable time behind the event —
-three minutes by default — so a dropout at the main site is absorbed instead
-of reaching air. It is the same trade as §1, applied to the public stream:
-latency spent to buy resilience.
+The relay reads the same segments from the bucket that feed the campuses and
+pushes them to YouTube, Facebook or any RTMP destination. A separate sub-project
+in `relay/`, one Docker container on a small VPS; not part of the plugins and
+unknown to the core. History: `docs/scope/project-scope-relay-control.md`.
 
 **One destination per audience, each with its own sound.** Destinations are a
 list, not a setting: each has its own address, its own audio track — chosen by
 the name the main site published, never by track number — and its own
-supervision and reconnection. That is what makes the multi-lingual case work: the
-desk's interpreter feeds travel as separate tracks, so English can go to one
-stream, Spanish to another and a clean feed to a broadcast partner, all from the
-single upload the main site already made and with nothing re-encoded anywhere.
-Two limits belong written down rather than discovered. The *video* is identical
-on every destination, because this is a copy remux and there is no transcoder —
-there are no per-language bitrates and no adaptive ladder. And every destination
-costs the relay's own uplink another copy of the bitrate, which is why the status
-page reports the total going out rather than a per-destination rate alone.
+supervision and reconnection. The *video* is identical on every destination: a
+copy remux with no transcoder, so there are no per-language bitrates and no
+adaptive ladder. Every destination costs the relay's own uplink another copy of
+the bitrate, so the status page reports the total going out.
 
-**Two protocols, told apart by the address alone.** RTMP is what every public
-streaming site accepts, so one mechanism covers YouTube, Facebook and a
-church's own server. SRT is what broadcast partners, hardware decoders and the
-better contribution CDNs ask for, and it is what a lossy path between the VPS
-and the destination wants: it retransmits lost packets instead of letting them
-become a glitch. There is no protocol setting and no radio button — `rtmp://`
-and `srt://` are unmistakable, and asking a volunteer to declare which one
-they pasted is asking them to get it wrong.
+**Two protocols, told apart by the address alone.** RTMP covers YouTube,
+Facebook and a church's own server; SRT is for broadcast partners, hardware
+decoders and contribution CDNs, and retransmits lost packets rather than letting
+them become a glitch. There is no protocol setting: `rtmp://` and `srt://` are
+unmistakable, and the relay infers the protocol from the address.
 
-The two used to differ in one way that mattered upward: RTMP meant FLV, and
-FLV meant H.264. That is no longer true of either half. FLV carries HEVC
-through **Enhanced RTMP** — a released specification (§8.2's refusal rule
-below has the detail) — so **the codec rule is no longer written per
-protocol**: HEVC goes out over both, unchanged, and SRT's advantage is its
-loss recovery rather than the codecs it can carry.
+**SRT latency is 2000ms by default,** overridable under Advanced. ffmpeg's own
+default of 120ms is enough only on a path short enough to answer almost
+immediately; 2000ms is invisible because the relay already sits three minutes
+behind the event, and it buys recovery across a much longer path.
 
-That matters more than it sounds. Until SRT existed here, choosing HEVC for the
-campuses cost a church its public stream outright, which made a real bandwidth
-saving unusable for anyone who also streams. It then cost them the *RTMP*
-destinations only, and now costs them nothing.
-
-**SRT settles for a longer latency than ffmpeg's own.** Its `latency` is the
-window in which a lost packet can be asked for again; ffmpeg's default of 120ms
-is enough only on a path short enough that the answer comes back almost
-immediately. The relay sends 2000ms unless told otherwise. That is §1 applied
-where it is cheapest — the relay is already sitting three minutes behind the
-event, so two seconds is invisible, and it buys recovery across a path many
-times longer than the default can manage. It is on the form, under Advanced,
-for the case where it is not enough.
-
-**SRT can also be listened for rather than called out to,** for a broadcast
-partner or a hardware decoder that pulls from us. It is never the default and
-is never inferred from a setting: an address with nothing before the port —
-`srt://:9000` — is how one is written down, and writing it that way is how one
-is asked for. It does mean opening an inbound port on a machine we have
-otherwise been careful to keep closed, which is why it takes a deliberately
-odd-looking address to get one.
-
-A listener nobody has attached to yet is the reason §8.2's supervision grew a
-second half. The finding it was built on is that ffmpeg says nothing when it
-is *starved*; the same is true when the far end stops *reading*. Both have to
-be noticed by watching, and they mean opposite things depending on which end
-opened the connection. A destination we called that stops taking content has
-gone wrong and is dropped and rebuilt like any other lost connection. A
-listener that has never carried anything is simply waiting, possibly for the
-whole first half of an event, and is neither reported nor acted on as a
-failure — it keeps taking up position behind the live edge while it waits, so
-whoever finally attaches gets the event as it is now rather than the forty
-minutes they missed. Once a listener has carried content, losing it is a fault
-like any other: the distinction is whether anything ever went out, not the
-mode.
-
-Watching the outbound side at all is new with SRT and fixes a latent hole in
-the RTMP path too — before it, a destination that quietly stopped reading was
-fed for ever into a pipe nobody was emptying.
+**SRT listener mode** is requested by an address with nothing before the port,
+`srt://:9000`; it is never the default. It requires opening an inbound port on a
+machine otherwise kept closed. A listener nobody has attached to yet is not a
+fault and is not reported — it keeps taking up position behind the live edge.
+Once it has carried content, losing it is a fault like any other.
 
 **Copy remux, never a silent transcode.** Segments are pushed on unchanged: no
-decode, no encode, no quality loss, and little enough CPU that the cheapest VPS
-tier is the target rather than a stretch. What cannot be sent that way is
-refused rather than adapted, in the two cases where adapting it silently would
-put the wrong thing on air:
+decode, no encode, no quality loss. What cannot be sent that way is refused
+rather than adapted:
 
-- **AV1.** Allowed to a streaming site, refused over SRT — and the two halves
-  have entirely different reasons, which is why the rule is written per protocol
-  rather than once.
-
-  **Over RTMP it goes out**, as Enhanced RTMP, the same mechanism HEVC uses
-  (verified at the byte level: the tag comes out with the extended header set
-  and a FourCC of `av01`, and reads back as AV1). What remains is a *destination*
-  question — YouTube documents AV1 ingest and nothing else obviously does — and
-  that is the operator's to weigh rather than ours to refuse. It was refused for
-  a while on exactly that basis, which was the same mistake as refusing HEVC on
-  an assumption that had stopped being true; now the page carries the caveat
-  above every destination ("only a site that documents AV1 ingest will take it
-  over RTMP… an SRT destination cannot carry AV1 at all") and the relay's own
-  supervision reports a destination that drops the stream instead of hiding it.
-
-  **Over SRT there is nothing to send.** ffmpeg cannot put AV1 into MPEG-TS: its
-  muxer has no AV1 stream type, falls back to private data and says so ("codec
-  av1, is muxed as a private data stream and may not be recognized upon
-  reading"), and its own demuxer reads the result back as `bin_data`. There is
-  an AOMedia mapping for AV1 in MPEG-2 TS; ffmpeg implements it in neither
-  direction. Carrying AV1 over SRT would mean patching ffmpeg *and* finding a
-  receiver that understands the result — a different size of job, and not one to
-  do for a path whose only known destination is reachable over RTMP anyway.
-
-  An unknown codec is still refused outright on both, which is the line the gate
-  draws: what we can name and carry, we carry; what we cannot, we decline with a
-  sentence rather than guessing.
-
-  This rule used to have HEVC in it too, on the grounds that FLV cannot carry
-  HEVC. That was wrong twice over, and worth writing down because of how it was
-  arrived at. **Enhanced RTMP** is a released specification — E-RTMP v2, whose
-  contributors include Adobe, Google, Meta, Twitch, FFmpeg and OBS — which
-  extends the FLV video tag with `isExVideoHeader`, a `VideoPacketType` and a
-  FourCC (`avc1`, `hvc1`, `av01`). ffmpeg has written it since **6.1**
-  ("Support HEVC,VP9,AV1 codec in enhanced flv format"), and YouTube documents
-  H.264, H.265 and AV1 for RTMP/RTMPS ingest, recommending H.265 over RTMP(S)
-  for HDR. So the destination was never refusing HEVC as such.
-
-  What was actually happening is that the relay's container ran Debian
-  bookworm's **ffmpeg 5.1**, whose FLV muxer has no HEVC in its codec-tag table
-  at all and fails outright — so a test of "HEVC to RTMP" from that image
-  could not have produced an Enhanced RTMP stream to be accepted or rejected.
-  The constraint was measured, and measured on the wrong artefact: a toolchain
-  limit and a destination limit look identical when only one of them is in
-  front of you. The container is trixie now (ffmpeg 7.1), and the extended tag
-  is verified at the byte level — a copy remux through the relay's own argument
-  vector emits `0x90` (isExVideoHeader set, KeyFrame, SequenceStart) with a
-  FourCC of `hvc1`, where H.264 emits the legacy `0x17`.
-
-  H.264 remains the default and the roadmap's first codec precisely because it
-  decodes everywhere, a Pi 5 included (§8.1: software decode handles 1080p
-  comfortably), so a site that has not gone out of its way to change codec can
-  stream publicly with nothing to reconsider. Re-encoding on the way out is
-  still the eventual answer for the RTMP case, is not built, and would end the
-  $5-a-month claim when it is.
-- **Packed multi-channel audio (§4.3.1),** where the mix, the ISOs and the
-  click share one track. Selecting a pair out of it is not built, and sending
-  it unchanged would put a mic ISO or the click out to the public. Multi-track
-  events (§4.3, the primary mode) are handled: each destination carries one
+- **AV1** is allowed over RTMP and refused over SRT. Over RTMP it goes out as
+  Enhanced RTMP; whether the destination takes AV1 is the operator's call
+  (YouTube documents AV1 ingest and nothing else obviously does), and the page
+  carries that caveat above every destination. Over SRT there is nothing to
+  send: ffmpeg cannot mux AV1 into MPEG-TS.
+- **Packed multi-channel audio (§4.3.1)** — the mix, ISOs and click sharing one
+  track — is refused; sending it unchanged would put a mic ISO or the click out
+  to the public. Multi-track events (§4.3) are fine: each destination carries one
   track, chosen by the label the main site published.
+- **An unknown codec is refused outright** on both protocols.
 
-**Supervision is the point, not a refinement.** Most destinations end a
-broadcast after roughly a minute without data, so an unattended relay that
-cannot recover is worse than none. Each destination has one ffmpeg child and
-one thread that owns it; a child that dies is restarted and resumes from the
-segment it was on, so nothing is skipped. A silence shorter than 45 seconds is
-ridden out without dropping the connection at all — fragment timestamps are
-absolute, so content resumes exactly where it stopped and a destination that
-tolerates the pause never knows. Beyond that the connection is dropped
-deliberately and rebuilt, which splits the recording at the far end and is
-reported as such.
+**Supervision is the point, not a refinement.** Each destination has one ffmpeg
+child and one thread that owns it; a child that dies is restarted and resumes
+from the segment it was on, so nothing is skipped. A silence shorter than 45 seconds is
+ridden out without dropping the connection — fragment timestamps are absolute,
+so content resumes exactly where it stopped. Beyond that the connection is
+dropped deliberately and rebuilt, and reported as such.
 
-Detecting that silence is the relay's own job: ffmpeg given a pipe that stops
-producing blocks quietly and holds the socket open indefinitely without
-reporting anything, so waiting for the child to complain is waiting for ever.
+**Finished events,** both gated on the event actually being finished (§7.5.1):
+download as one MP4, streamed from storage as requested rather than assembled on
+the server, carrying every audio track (the ISOs and the click are what a
+post-production edit needs); and replay to a destination, playing a finished
+event at normal speed as though live — proof of concept, one at a time, by hand.
 
-**What it reuses.** The receive path, unchanged: event discovery, the durable
-cache, checksum verification, and the live/ended/interrupted classification of
-§7.5. It is the same code a campus runs, so the relay and a campus can never
-disagree about whether an event is still running — and an event that ends
-cleanly is played out to its last segment and then closed deliberately, rather
-than being cut off or left to time out.
+**Access.** The relay requires a login on every endpoint but the sign-in itself,
+stores the password as PBKDF2-HMAC-SHA256 over a random salt, and binds to
+localhost so that exposing it is a decision. It does not terminate TLS: a proxy
+in front of it does, shipped as a working example.
 
-**Finished events.** The relay also does two things with events that have
-already ended, both gated on the event actually being finished (§7.5.1's
-classification, so it and a campus agree on what "finished" means):
-
-- **Download as one MP4**, streamed from storage as it is requested rather than
-  assembled on the server, so a two-hour event costs no disk and several
-  people can download at once. It carries every audio track, not just the
-  streamed one — the ISOs and the click are what a post-production edit needs.
-- **Replay to a destination**, playing a finished event out at normal speed
-  as though it were live, for a second congregation or an evening repeat. This
-  falls out of §7.5 rather than being new machinery: a finished event already
-  plays and then ends, which is what a replay is. Proof of concept — one at a
-  time, started by hand.
-
-**Access.** The relay can change where a church broadcasts, so unlike the
-campus appliance it cannot rely on being on a trusted network. It requires a
-login on every endpoint but the sign-in itself, stores the password as
-PBKDF2-HMAC-SHA256 over a random salt, and binds to localhost so that exposing
-it is a decision. It does not terminate TLS: a proxy in front of it does, and
-one is shipped as a working example.
-
-**Not built.** Re-encoding; splitting packed audio; SRT in listener mode being
-reachable through anything (the port has to be published, and nothing is
-shipped to help); signing in to YouTube (a stream key is pasted, and the
-broadcast is still created in YouTube's own page); and starting by itself,
-either on a schedule or when the encoder goes live. Scheduling matters most,
-because events start late — the intended trigger is `live.json` actually
-going live, optionally bounded by a time window, and `markers.json` makes
-"start the public stream at Sermon Start" possible.
+**Not built.** Re-encoding; splitting packed audio; SRT listener mode being
+reachable through anything (the port has to be published, and nothing is shipped
+to help); signing in to YouTube (a stream key is pasted, and the broadcast is
+still created in YouTube's own page); and starting by itself, either on a
+schedule or when the encoder goes live. The intended trigger is `live.json`
+going live, optionally bounded by a time window, and `markers.json` makes "start
+the public stream at Sermon Start" possible.
 
 ## 8.3 External control API (planned)
 
-Operators reach for a physical button, not a dock. A volunteer running a
-event on a Stream Deck should be able to hold, resume and catch up without
-finding a window, and the main site should be able to go live from a button.
-The target is **Bitfocus Companion**, which is what churches in this bracket
-actually use.
+**Status: built — sub-phases 1 and 2.**
 
-**One surface, two transports.** The appliance already exposes its controls as
-HTTP routes (§8.1): `/api/play`, `/api/hold`, `/api/seek`, `/api/status` and the
-rest. The OBS plugins will expose *the same command names with the same
-payloads* over **obs-websocket vendor requests**. One API to learn and document,
-two ways in, and a control surface written against either works against both.
+Operators reach for a physical button, not a dock: a volunteer on a Stream Deck
+should hold, resume and catch up without finding a window, and the main site
+should go live from a button. The target is **Bitfocus Companion**.
+
+**One surface, two transports.** The appliance exposes its controls as HTTP
+routes (§8.1): `/api/play`, `/api/hold`, `/api/seek`, `/api/status` and the
+rest. The OBS plugins expose *the same command names with the same payloads*
+over **obs-websocket vendor requests** — one API, two ways in, so a control
+surface written against either works against both.
 
 **Why vendor requests rather than a server inside the plugin.** obs-websocket
-ships with OBS 28 and later, so there is nothing for a church to install. Its
-`obs-websocket-api.h` is header-only and works through OBS's proc handler, so
-the plugin gains no link dependency, and if obs-websocket is absent every call
-returns false after one log line — control disappears, nothing breaks.
-Authentication, the listening socket and TLS are already solved there. A
-bespoke HTTP server inside the plugin would duplicate all of it and open a
-second port on a machine we have otherwise been careful to keep closed.
+ships with OBS 28 and later and its `obs-websocket-api.h` is header-only, so the
+plugin gains no link dependency and nothing needs installing; if obs-websocket
+is absent every call returns false after one log line — control disappears,
+nothing breaks. A bespoke HTTP server would duplicate the authentication,
+listening socket and TLS already solved there, and open a second port on a
+machine otherwise kept closed.
 
 **Both ends, equal weight.** The encoder needs go-live, stop, drop-marker and
 status; the decoder needs play, stop, hold, resume, catch-up, seek, jog, delay,
 load-event, follow-live, audio-track selection, status and the event list. The
 command set already exists as `EncoderControls` and `DecoderControls`, so the
-API layer is an adapter over what the docks and hotkeys already call — no new
-control logic, and no second path to keep in step.
+API layer is an adapter over what the docks and hotkeys already call.
 
-**Two phases, because Companion needs more than actions.**
+**Sub-phase 1, the vendor API — built.** Every command of both halves is a
+vendor request under `obs-multisite` (`encoder/go-live`, `decoder/hold`, …),
+with vendor events on change and a `status` request for polling. The names live
+in one list in the portable core (`src/core/control_api.h`) that the HTTP routes
+read too, so "the same command names" is true by construction and a core test
+pins it. It registers from `obs_module_post_load()`, as the header requires.
 
-1. **The vendor API.** Every command registered as a vendor request, plus vendor
-   events on state change and a `status` request for polling. Companion can
-   drive all of it immediately through its OBS module's *Custom Vendor Request*
-   action, and so can any obs-websocket client — scripts, Stream Deck plugins,
-   another automation system.
-2. **A Companion module.** *Custom Vendor Request* is an action only: it cannot
-   light a button red while an event is live, or show "12 s behind" on a
-   display. Feedbacks, variables and presets need a purpose-built Companion
-   module (Node.js, submitted to Bitfocus) subscribing to the vendor events.
-   That is a separate deliverable in a separate repository, and it depends on
-   phase 1 existing first.
+**Sub-phase 2, the Companion module — built.** A Bitfocus Companion module
+lives at
+[stageaudioworks/companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite).
+Every action is one vendor request and every feedback is one status field: Go
+live, End and marker buttons for a main site; transport and timeslipping for a
+campus; on-air/held/behind-live/offline feedbacks; variables for both halves;
+two preset banks; and a pass-through action for any vendor request by name. The
+same module also drives a campus player appliance directly over its HTTP API
+(§8.1). Its own obs-websocket connection and its source/distribution licensing
+were forced rather than chosen (archived in
+`docs/scope/project-scope-relay-control.md`).
 
-**Available before any of this:** the plugins already register thirteen named
-hotkeys, and Companion's OBS module can trigger hotkeys by id. Play, stop, hold,
-resume, catch-up, jog and drop-marker are therefore controllable from a Stream
-Deck today, without parameters or feedback. Worth wiring up before building
-anything, both because it is free and because it will show which commands
-operators actually reach for.
-
-**Built: sub-phase 1, the vendor API.** Every command of both halves is
-registered as a vendor request under `obs-multisite` — `encoder/go-live`,
-`decoder/hold`, `decoder/jog` and the rest — with vendor events
-(`encoder/state`, `decoder/state`) emitted on change and a `status` request for
-polling. It is an adapter: each request calls the same function the docks, the
-hotkeys and the pages already call, so there is no second code path to keep in
-step. The names live in one list in the portable core (`src/core/control_api.h`)
-that the HTTP routes read too, which is what makes "the same command names" true
-by construction rather than by discipline, and which a core test pins. It
-registers from `obs_module_post_load()` — the header's requirement, and the
-reason a vendor registered in `obs_module_load()` is never seen. With
-obs-websocket absent the plugin logs one line and everything else carries on.
-
-**Built: sub-phase 2, the Companion module.** A Bitfocus Companion module lives
-at [stageaudioworks/companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite).
-It is an adapter in the same sense as sub-phase 1: every action is one vendor
-request and every feedback is one field of the status document, so a Stream Deck
-button and a keypress on the desk cannot disagree. It offers Go live, End and the
-marker buttons for a main site, the transport controls and timeslipping for a
-campus, feedbacks that light a button while an event is on air or a campus is
-held, behind live or offline, variables for both halves, and two preset banks
-with the feedbacks already attached. It also carries a pass-through action that
-calls any vendor request by name, so a command this plugin adds later is
-reachable without waiting for a module release.
-
-**And it drives either end of the system.** The same module talks to a campus
-player appliance as well as to OBS: the appliance serves the same controls on its
-own HTTP API (§8.1) and has no OBS in it at all, so which end is a choice on the
-connection while the actions, feedbacks, variables and presets are written once.
-The two places the appliance names a command differently — `follow-live` for
-`return-to-live`, `load` for `load-event` — are a route table in one file of the
-module, which is what keeps that difference from ever reaching an operator.
-
-Two things about it are worth recording, because both were forced rather than
-chosen. It opens **its own obs-websocket connection**, so the operator types the
-host, port and password a second time — Companion modules each own their
-connection, and there is no way around it. And its **source is MIT** while the
-module is *distributed* under `GPL-3.0-only`: the Companion module store
-requires module source to be MIT, so the plugin's `-or-later` cannot be carried
-across. The manifest states the distribution licence, which is what an installer
-sees.
-
-Since then both ends have been driven for real: the plugin against an OBS, and
-the module against an OBS and a campus player. The module is tagged **v0.2.0**.
-Two things are still open, and neither is code: nothing has yet run a whole
-event, and the module is not in the Companion store — until it is, Companion
-loads it as a *developer module* (a directory set in the launcher's Developer
-section; each folder in it with a `companion/manifest.json` is one module), and
-that needs **Companion 4.0 or later**.
-
-**Two names still differ from the appliance's** — the plugin's
-`decoder/return-to-live` and `decoder/load-event` against the appliance's
-`/api/follow-live` and `/api/load`. The Companion module maps them, so nothing
-an operator sees depends on the two being brought together any more: it is
-tidiness now, not a gap. The plugin's names are already served to the v0.1.8
-pages, so unifying them is a change to both surfaces at once rather than a
-rename in one place.
+Both ends have been driven for real, and the module is tagged **v0.2.0**. Two
+things are still open, and neither is code: nothing has yet run a whole event,
+and the module is not in the Companion store — until it is, Companion loads it
+as a *developer module* and needs **Companion 4.0 or later**.
 
 ---
 
@@ -1200,75 +1014,21 @@ and the tablet that set it is long since charged and put away.
 
 ## 8.5 Storage credentials: direct or brokered (planned)
 
-Setting this up asks a volunteer to create a cloud account, mint an API token
-with exactly the right scope — `s3:ListBucket` included, which the obvious
-object-scoped token omits — and write a lifecycle rule that is also, without
-saying so, the DVR depth. Those three steps are the wall. Everything else in
-QUICKSTART is copying files.
+**Status: not built** — designed here; Phase 12 in §10 delivers it.
 
-So there should be a second way to answer "which bucket, and with what keys",
-without removing the first.
-
-**Two providers, one `S3Config`.** Today one thing builds the `S3Config` the
-transport takes: the fields an operator typed. A second producer is added
-beside it, and nothing downstream learns which one it got.
-
-- **Direct** — endpoint, bucket, key, secret, region. What exists now, unchanged
-  and never deprecated. Somebody running MinIO in their own rack is a first-class
-  user of this project, not a legacy case.
-- **Brokered** — the plugin holds a device identity and a service URL, and
-  fetches short-lived credentials from a broker that manages the bucket on the
-  operator's behalf.
-
-**Pairing is a device-code flow**, the one a television uses to sign into a
-video service — not a password typed into OBS, and not a key pasted from an
-email:
-
-```
-1. First run, offline. The plugin mints a device id locally. No network.
-2. The operator presses "Connect to a storage service".
-3. The plugin asks the broker for a code and shows it:   JNB-4K7M
-4. The operator opens the broker's page on any device and enters the code.
-5. The plugin polls, receives credentials, and caches them.
-```
-
-The same flow serves the appliance, which is the reason to prefer it over
-anything bespoke: a headless player with no keyboard shows the code on its own
-screen and is paired from a phone, using the code path the plugin already has.
-
-**What holds this honest.** A brokered mode is a place where a plugin could
-quietly start working for somebody other than the person running it, so the
-constraints matter more than the mechanism and belong here rather than in a
-commit message:
-
-- **Inert until asked.** Nothing contacts anything but the configured bucket
-  until an operator presses Connect. No registration on first run, no version
-  check riding along, no telemetry. A fresh install that is never paired must
-  produce no traffic a packet capture would surprise anyone with.
-- **The broker URL is a field, not a constant.** It may ship with a default,
-  and it must be editable. Anyone can run a broker — an integrator looking
-  after a dozen churches has better reason to than most — and the protocol
-  between plugin and broker is documented here for that reason.
-- **Cached credentials are never a precondition.** If the broker cannot be
-  reached, the last good credentials are used and the event goes live. A
-  service that can stop a Sunday is not one this project will depend on.
-- **Always visible.** Mode, bucket, endpoint and expiry are shown in the dock.
-  Brokered must not come to mean opaque.
-- **Disconnect is a real button**, and it offers the underlying bucket details
-  on the way out. The promise that nothing here can be taken away is worth
-  little if leaving is undocumented, and the code path that proves it should
-  exist whether or not it is ever used.
-
-One side effect worth stating, because it runs against the intuition that
-managed means less safe: a brokered credential is short-lived, where today a
-long-lived key sits in the settings in plain text. The managed path is the more
-defensible of the two at rest, not the less.
-
-**Not settled.** What a broker owes a plugin when a subscription lapses — the
-answer must not be "the event stops" — and whether a decoder pairs
-independently or inherits from the encoder that already knows the room. Both are
-design questions, not details, and neither should be answered by the first
-implementation that happens to work.
+**Brokered** credentials are added beside the typed keys, never instead of
+them: the plugin holds a device identity and a service URL and fetches
+short-lived credentials from a broker that manages the bucket for the operator.
+**Direct** (endpoint, bucket, key, secret, region) stays unchanged and never
+deprecated. Pairing is a **device-code flow**, the one a television uses to sign
+into a video service: a short code shown in the dock and entered on the broker's
+page from any device, never a password typed into OBS or a key pasted from an
+email. It is **inert until asked** — nothing contacts anything but the configured
+bucket until an operator presses Connect — and the **broker URL is a field, not
+a constant**: it may ship with a default and must be editable. It lands in the
+greyed-out **"Multisite Cloud"** entry already sitting in §8.6's dropdown; the
+sequence, constraints and unsettled questions are archived in
+`docs/scope/project-scope-phases.md`.
 
 ---
 
@@ -1359,167 +1119,70 @@ same list.
 
 ## 8.7 LAN / direct delivery
 
-**Status: built, both halves, and every kind of receiver.** A receiver —
-the OBS decoder plugin, the Raspberry Pi appliance, or the simulcast relay —
-on the same network as the encoder, or reachable over an existing
-site-to-site VPN, downloads directly from it: manifest, init segment, media
-fragments and markers, instead of from the bucket, automatically preferring
-that path when it answers and falling back to cloud, per request, when it
-doesn't. Cloud delivery can also be turned off entirely for an operator who
-wants everything to stay on one network and never touch a bucket at all. The
-appliance's `Config`/`Player` (`src/appliance/config.h`, `player.h/.cpp`)
-and the relay's `ConfigStore`/`RoomFeeder` (`relay/src/config_store.h`,
-`room_feeder.h/.cpp`) both gained the identical `lan_host`/`lan_port`/
-`lan_auth_token` fields and the same `LanTransport`/`FallbackTransport`
-wiring as the OBS decoder — one codebase (`src/core/`), three independent
-settings surfaces, no divergence in behaviour. The relay's own past-events
-browsing, download and rebroadcast stay cloud-only regardless of LAN
-settings: they are `list()`-based, which `LanObjectServer` does not serve —
-it only ever holds the one event currently in progress, the same reason a
-satellite's event browser is cloud-only too. What follows is kept in its
-original, before-the-fact form, with
-corrections noted in place where building it changed something — the
-reasoning here is still the reasoning for why it works the way it does.
+**Status: built, both halves, and every kind of receiver.** A receiver — the OBS
+decoder plugin, the Raspberry Pi appliance, or the simulcast relay — on the same
+network as the encoder, or reachable over an existing site-to-site VPN,
+downloads directly from it: manifest, init segment, media fragments and markers,
+instead of from the bucket, preferring that path when it answers and falling
+back to cloud, per request, when it doesn't. Cloud delivery can also be turned
+off entirely. The appliance's `Config`/`Player` and the relay's
+`ConfigStore`/`RoomFeeder` gained the same `lan_host`/`lan_port`/`lan_auth_token`
+fields and the same `LanTransport`/`FallbackTransport` wiring as the OBS decoder
+— one codebase (`src/core/`), three settings surfaces, no divergence.
 
-Every campus today reaches the main site the same way, and only that way:
-through the bucket, over whatever internet connection each site has. That is
-correct and stays correct — it is the whole reason this project works on
-mobile data and LEO satellite links that would defeat a direct stream. But a
-campus on the same building network as the main site, or reachable over a
-VPN the church already runs between sites, has a faster and cheaper path
-sitting unused: the encoder machine itself.
+**What it adds, and what it does not replace — unless told to.** By default the
+encoder keeps uploading to the bucket exactly as it does today, unconditionally:
+a cloud-only decoder, a LAN decoder whose link just dropped, and the archival
+recording all still depend on it. It serves the *identical* object shape a cloud
+decoder already reads, so media and signaling remain one path with a second,
+local way to walk it. The relay's past-events browsing, download and rebroadcast
+stay cloud-only: they are `list()`-based, which `LanObjectServer` does not serve.
 
-**What this adds, and what it deliberately does not replace — unless told
-to.** A satellite that can reach the encoder directly — over the LAN, or over
-an existing site-to-site VPN — downloads from it instead of from the bucket,
-while the encoder, by default, keeps uploading to the bucket exactly as it
-does today, unconditionally. Nothing about §3's "decentralized, no control
-plane" holds any less true for this: the encoder serves the *identical*
-object shape (`manifest.json`, `event.json`, `init.mp4`,
-`segments/{seq}.m4s`, and — for LAN satellites following the room rather
-than a pinned event — `live.json`) a cloud decoder already reads. The media
-path and the signaling path are still the same path; there is just a second,
-local way to walk it.
+**Turning cloud off entirely.** Cloud-off hands `Session` a `NullTransport` in
+place of the real transport: every PUT reports instant success, so the spool →
+retry-uploader → manifest pipeline runs exactly as always — segments confirm
+immediately, LAN hooks fire on schedule — and nothing leaves the machine. It is
+not a separate code path, just the same one pointed at a transport that keeps
+nothing. The dock refuses to go live with both cloud and LAN off at once, and
+the cloud-off checkbox only appears once LAN delivery is on.
 
-Cloud upload staying on by default is what makes LAN mode safe to *attempt*
-in the first place: a cloud-only decoder, a LAN decoder whose link just
-dropped, and the archival recording all still depend on it running
-regardless of who else is connected directly. But an operator who has no use
-for a cloud copy at all — a single building, no remote viewers, no interest
-in an off-site archive — can turn cloud delivery off entirely for an event.
-Doing so hands `Session` a `NullTransport` (`src/core/null_transport.h`) in
-place of the real `S3Transport`: every PUT reports instant success, so the
-spool → retry-uploader → manifest pipeline runs exactly as it always has —
-segments confirm immediately, the LAN hooks fire on schedule — and nothing
-ever actually leaves the machine. `Session` cannot tell the difference,
-which is the point: cloud-off is not a separate code path, it is the same
-one pointed at a transport that keeps nothing. The dock refuses to go live
-with both cloud and LAN off at once (there would be nowhere for anything to
-go), and the checkbox for it only appears once LAN delivery is turned on.
+**LAN serving keeps its own cache, not the spool.** The spool holds a segment
+only until the bucket confirms it, then deletes it, so the segment a LAN decoder
+most wants is by design the one the spool no longer has. `LanObjectServer`
+(`src/core/lan_object_server.h`) therefore combines a bounded `SegmentCache` —
+the class a decoder already uses for its own cache — with `Session` hooks fired
+as the bytes or JSON are in hand; `Session` stays unaware LAN delivery exists,
+and the hooks cost nothing when unset. The cache lives in the operator's **Cache
+folder** under `lan_cache`, or the plugin's config when that is blank. Routes
+served (`http_server.h`'s longest-prefix-first `route_prefix()`, since a segment
+path names a sequence number): `manifest.json`, `event.json`, `init.mp4`,
+`segments/{seq}.m4s`, `markers.json`, `rooms/{room}/live.json`.
 
-**One correction from the original plan, found while building the encoder
-half:** this was going to serve straight from "the same durable spool" a
-cloud decoder's segments pass through. It cannot. The spool's entire job is
-to hold a segment only until the bucket confirms it, then delete it (see
-`spool_queue.h`) — which means the segment a LAN decoder is most likely to
-actually want (recent, ordinary programme, already confirmed) is by design
-the segment the spool no longer has. LAN serving keeps its own bounded
-retention window instead — a `SegmentCache`, the exact same class a decoder
-already uses for its own cache, fed via three new `Session` hooks
-(`set_event_started_callback`, `set_segment_confirmed_callback`,
-`set_manifest_published_callback`) fired at exactly the moments `begin_common()`,
-`on_confirmed()` and `publish_manifest_locked()` already have the relevant
-bytes or JSON in hand. `Session` itself stays completely unaware that LAN
-delivery exists — the hooks cost nothing when unset, and it never holds a
-reference to the class that uses them. The window's directory is the operator's
-**Cache folder** with `lan_cache` beneath it, or the plugin's own config when
-that is left blank, so the outgoing queue and the LAN copies sit in one place an
-operator can find (and clear).
+- **Discovery — built, deliberately manual.** Host, port and optional token are
+  typed into the decoder dock, the same place cloud credentials go; mDNS was set
+  aside (it does nothing for the VPN case and is one more thing to fail silently
+  on a locked-down network). A LAN host with no cloud credentials works LAN-only,
+  and a room-following satellite learns the live event id from `live.json`.
+- **Auth — built, still a shared bearer token, not yet paired.** `Authorization:
+  Bearer <token>` is enforced end to end; getting that token onto a decoder is
+  still typing it into both docks, not yet §8.5's device-code pairing — the goal
+  is one pairing flow used for both. A plain LAN inside one building is already
+  the trust boundary elsewhere here; a token matters more across a VPN.
+- **Preference and fallback — built, per request, not per session.**
+  `FallbackTransport` tries LAN first and only reaches for cloud if LAN didn't
+  answer, so one aged-out segment falls back alone without flipping the session
+  — simpler by design than per-transport `LinkHealth` hysteresis, with no timer,
+  state machine or operator-visible mode.
+- **Visibility — built.** The dock's storage-link line names the path the most
+  recent fetch took — *"via LAN"* or *"via cloud"* — and appears only once a LAN
+  host is configured.
 
-**Shape, as built.** The encoder's HTTP server (`src/core/http_server.h`)
-gained `route_prefix()` — a "starts with", not "equals", route, matched
-longest-prefix-first, needed because a segment's path names a sequence
-number that cannot be registered as one exact route per possible value. A
-new `LanObjectServer` (`src/core/lan_object_server.h`) combines that with a
-`SegmentCache` and five `Session` hooks (`set_event_started_callback`,
-`set_segment_confirmed_callback`, `set_manifest_published_callback`,
-`set_live_published_callback`, `set_markers_published_callback`) into the
-actual object server: `GET .../manifest.json`, `.../event.json`,
-`.../init.mp4`, `.../segments/{seq}.m4s`, `.../markers.json`, and
-`.../rooms/{room}/live.json` — all proven end to end over a real loopback
-socket in `tests/test_lan_object_server.cpp`, including the retention cap,
-an event switch discarding the previous event's window and markers, and
-auth enforcement. `markers.json` earned its own hook rather than riding
-along with the manifest: found live, once cloud delivery could actually be
-turned off — without it, a marker dropped mid-event never reached a
-LAN-only satellite at all, since there is no cloud copy to fall back to for
-just that one object.
+**Deferred rather than decided against.** Whether LAN mode serves a segment the
+moment it's spooled (lower latency) or only once the bucket confirms it (cloud's
+consistency guarantee, simpler) is left for a later, explicitly opt-in mode. A
+first build serves only what's already confirmed.
 
-On the decoder side, `LanTransport` (`src/core/lan_transport.h`) implements
-the same `Transport` interface a decoder already downloads through, as a
-plain HTTP client against exactly those routes — proven against a real
-`LanObjectServer` in `tests/test_lan_transport.cpp`, including what a
-genuine miss (404, LAN path alive) looks like next to a connection failure
-(LAN path itself down), which is what tells `FallbackTransport`
-(`src/core/fallback_transport.h`) which one happened. That class is the
-whole of "preference and fallback": it holds a LAN `Transport&` and a cloud
-`Transport&` and, per `get()` call, tries LAN first and only reaches for
-cloud if LAN didn't answer — so a segment that aged out of the LAN's bounded
-retention window falls back to cloud for *that segment alone*, without
-flipping the whole session to cloud over one old fragment. `DecoderSession`
-is handed whichever of the two — or, for a LAN-only satellite with no cloud
-credentials at all, `LanTransport` alone — it never learns which, the same
-boundary `Session`'s hooks keep on the encoder side.
-
-The Raspberry Pi appliance (`src/appliance/`) is the second satellite this
-applies to, wired the same way: `Player::rebuild_session()` builds the same
-LAN/cloud/fallback choice `multisite_source.cpp` does, `Config` carries the
-matching three fields, and the web settings page (`web/index.html`,
-`api.cpp`'s `/api/config`) is the appliance's equivalent of the decoder
-dock's settings dialog. `Player::storage_health()` (`/api/storage`) reports
-`lan_configured`/`lan_active` the same way the OBS decoder's status JSON
-does, including for a LAN-only box with no cloud transport at all to ask
-about — proven with a real `multisite-player` process pointed at a real
-`LanObjectServer` (an OBS encoder with LAN on), which correctly reported
-"room is LIVE" and served segments with no bucket involved at any point.
-
-- **Discovery — built, and deliberately manual.** A host (and port, and an
-  optional shared token) typed into the decoder dock's settings, the same
-  place cloud credentials go — not auto-discovered. mDNS was considered and
-  set aside: it does nothing for the VPN case, where the two ends are rarely
-  on the same broadcast domain, and it is one more thing to fail silently on
-  a locked-down church network. A satellite with a LAN host configured but no
-  cloud credentials at all now works LAN-only — `DecoderSettings::configured()`
-  accepts either, not just cloud — and one following the room (not a pinned
-  past event) discovers the live event id from the LAN server's own
-  `live.json`, needing no bucket at all when the encoder also has cloud
-  delivery turned off.
-- **Auth — built, still a shared secret, not yet paired.**
-  `LanServerConfig::auth_token` / `LanTransportConfig::auth_token` and the
-  `Authorization: Bearer <token>` check are real and enforced end to end;
-  what generates that token and gets it onto a decoder is still typing the
-  same string into both docks, not yet the device-code pairing flow §8.5
-  designs for cloud credentials — the eventual goal is still one pairing flow
-  an operator learns once, used for both. A plain LAN inside one building is
-  already treated as the trust boundary elsewhere in this project (the
-  remote-control pages have no password and no TLS, deliberately); a token
-  matters more once the path crosses a VPN.
-- **Preference and fallback — built, per request rather than per session.**
-  See `FallbackTransport` above. Deliberately simpler than tracking
-  `LinkHealth` hysteresis per transport and switching on a threshold: a
-  per-request decision cannot get "stuck" preferring the wrong path, and it
-  needs no timer, no state machine, and no operator-visible mode to explain.
-- **Visibility — built.** The decoder dock's storage-link line names which
-  path the most recent fetch actually took — *"via LAN"* or *"via cloud"* —
-  next to the existing colo/throughput readout, and only appears at all once
-  a LAN host is actually configured.
-
-**Deferred rather than decided against.** Whether LAN mode serves a segment
-the moment it's spooled (lower latency than cloud, since it skips waiting for
-upload confirmation) or only once the bucket has confirmed it (identical
-consistency guarantee to cloud, simpler to reason about) is left for a later,
-explicitly opt-in mode. A first build serves only what's already confirmed —
-the same manifest a cloud decoder would eventually see, just sooner.
+> Full rationale, internals and measurements: `docs/scope/project-scope-lan-delivery.md`.
 
 ---
 
@@ -1675,560 +1338,89 @@ this needs any tradeoff at all.
 
 ## 10. Delivery phases
 
-Each phase leaves the project in a testable, usable state. Phases 1–5 are
-built and have been run end to end. Phase 6 is built, proven on a Pi 5 and
-carrying `v0.1.12-alpha`; the hardware beyond it — SDI output, larger signal
-paths — is a separate Stage Audio Works product line now, not built here.
-Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
-API and the Companion module — and both have been driven against a real OBS, the
-module also against a real campus player, though nothing has yet run a whole
-event. Phase 10 is built, and its own entry below says what is not: assigning
-tiles to several outputs from one box needs hardware beyond the Pi, which is out
-of this project's scope. Phase 13 is built. Phase 14 is built.
-Phases 9, 12 and 15 have not been started.
+Each phase leaves the project in a testable, usable state. Phases 1–5
+(Reliability core, Format/namespace/audio, Timeslipping, Markers & cues, User
+interface) are built and have been run end to end. The status of each later
+phase, with one or two lines of what it does, is below; the full rationale,
+measurements and "not built" notes are archived in
+`docs/scope/project-scope-phases.md`.
 
-**Phases 11, 12 and 13 carry weight together.** Between them they are most
-of the distance between a project a technician can deploy and one an
-ordinary church can — knowing a new build exists and installing it without a
-manual reinstall, connecting a bucket without minting a token by hand, and
-choosing a provider from a list rather than typing a hostname convention
-nobody outside this project has memorized. 13 was deliberately the smaller
-half of what 12 needs anyway, and is done first for that reason — "Multisite
-Cloud" is already sitting in the dropdown, greyed out, waiting for 12 to make
-it real. Phase 14 answers a different question — cost and reliability for a
-campus already on the same network or VPN as the main site — and depends on
-none of the others. None of the four depends on 9 or 10, and all were
-written as late phases when the list
-assumed the hardest problem was features rather than deployment.
+**Phases 11, 12 and 13 carry weight together** — between them they are most of
+the distance between a project a technician can deploy and one an ordinary church
+can: knowing a new build exists and installing it without a manual reinstall,
+connecting a bucket without minting a token by hand, and choosing a provider from
+a list. Phase 13 was deliberately the smaller half of what 12 needs and is done
+first; "Multisite Cloud" already sits in its dropdown, greyed out, waiting for
+12. Phase 14 answers a different question — cost and reliability for a campus on
+the main site's own network — and depends on none of the others. None of the four
+depends on 9 or 10.
 
-This project's scope is now the OBS plugin pair and the Raspberry Pi
-appliance — nothing wider. Three things that used to be on this list are not
-any more. They are written up after the phases, with the reasoning, rather
-than deleted.
-
-- **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
-  resume-after-crash, decoder cache with verification, and stale detection. This
-  is format-agnostic and lands before the media format work. Resume-after-crash
-  now also asks rather than deciding silently, when it matters — see §5.1.
-- **Phase 2 — Format, namespace & audio.** ✅ FFmpeg CMAF muxing (`init.mp4` +
-  `.m4s`), codec-agnostic wrapper (H.264, HEVC and AV1 all round-tripped end to
-  end under test; HEVC and AV1 still the less travelled of the three in the
-  field), packed multi-channel production audio, the
-  `rooms/live.json` + `events/{ulid}` model, keyframe-aligned segments,
-  prefix/age lifecycle, and generalized S3 endpoint configuration.
-- **Phase 3 — Timeslipping.** ✅ Decoder DVR: playback head vs live edge, deep local
-  cache, pause/resume/jump-to-live/scrub, behind-live indicator, restart
-  recovery.
-- **Phase 4 — Markers & cues.** ✅ Authoring from any site, a shared per-author
-  cue list (§7), consumption and jump-to-cue at the satellite, and a Cues dock
-  present in both roles.
-- **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
-  plain-language status, plus event browsing (section 7.5.1), which needs
-  bucket listing.
-- **Phase 6 — Satellite appliance.** ✅ The low-cost tier: a headless Linux decoder
-  with HDMI output and a browser-based operator UI (section 8.1), built on the
-  existing receive core. Built: the player engine, DRM/KMS display output with
-  its own modesetting, ALSA multichannel audio, the splash and idle screens, the
-  web control surface (decoder controls, event list, storage and system
-  settings, decoupled preview), and the systemd/install path that makes it start
-  on power-up, **proven on a Pi 5 on 2026-09-07** and carrying `v0.1.12-alpha`,
-  though not yet through a congregation's event. Complete **for the tier it
-  defines**, in section 8.1's terms: the ARM64/HDMI appliance is what this phase
-  set out to build. One item remains within this same phase rather than moved
-  elsewhere, since it needs no wider hardware tier to answer: hardware-decoder
-  selection on Pi 4 (`h264_v4l2m2m`), alongside the software path Pi 5 already
-  uses — prefer a hardware decoder when one exists, fall back to software.
-  DeckLink SDI output belongs to hardware beyond the Pi, which is out of this
-  project's scope — see "Appliance hardware beyond the Pi" near the end of
-  this section. The channel de-interleaver has been dropped from scope rather
-  than deferred (§4.3.1).
-- **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
-  separate container in `relay/` — copy remux to one or more RTMP **or SRT**
-  destinations, per-destination audio selection, a delay buffer, and
-  supervised reconnection, with its own browser UI. Like the appliance it has
-  not yet carried an event. HEVC goes out over both protocols now — over SRT
-  as MPEG-TS, over RTMP as Enhanced RTMP, which this container's ffmpeg could
-  not write until it moved off Debian bookworm's 5.1. Both remuxes are
-  verified, and AV1's — the same code path — has carried real encoder output
-  through the relay to YouTube and played there for over ten minutes. HEVC's
-  has not been through that, and the shared code path makes the AV1 result
-  encouraging rather than conclusive.
-  Not started: re-encoding, web/mobile simulcast
-  served from the bucket, scheduling and auto-go-live, redundancy, and local
-  insertion.
-
-- **Phase 8 — External control API.** ✅ Both halves. The command surface of each
-  plugin is an obs-websocket vendor request, mirroring the control pages name for
-  name and driven through one shared command layer; and a Bitfocus Companion
-  module provides the buttons, feedbacks, variables and presets (§8.3). What is
-  left is not code: it has been driven against a real OBS and a real campus
-  player but has not run a whole event, and the module is not in the Bitfocus
-  store yet. Hotkey-based control from Companion works as well, and needs
-  nothing.
-
-- **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
-  provider outage, a regional failure, an account lockout or an accident in one
-  console stops being a single point of failure for every campus at once. Two
-  modes, chosen per room: **active/active**, where all media goes to both, and
-  **active/passive**, where the manifests and `live.json` go to both but the
-  media only to the primary until a failover.
-  The question that needs answering before any code is what *confirmed* means
-  with two targets. The whole reliability claim rests on a segment appearing in
-  the manifest only after storage has acknowledged it (§4.7); requiring both
-  acknowledgements doubles the exposure to the slower link and lets one bad
-  provider stall the feed. The original proposal — whose failover half the
-  decision below replaces — was to keep the invariant per target: manifest on
-  primary confirmation, secondary mirrored best-effort, each target's state
-  carried in the manifest, with a failover state machine over the link health
-  that already exists. The decoder side follows from `live.json` naming both
-  targets, and the checksums already in the protocol are the proof that a mirror
-  is a true copy rather than a hopeful one.
-  Costs to state plainly: double storage and double origin writes, lifecycle
-  rules needed on **both** buckets, *Manage storage…* extended to say which
-  target an event is in and to delete from both — and, the one that bites during
-  an event rather than after it, **the mirror competes for the same uplink as the
-  live feed**. It has to yield to it, or a best-effort second copy becomes the
-  stalling this phase was warned about.
-
-  **Decided (2026-09-17): the promise is that an event is never lost to one
-  provider failing.** Not "broadcasting continues through a provider outage" —
-  that is a larger, different claim, and this phase does not make it.
-
-  What that means in the workflow, which is the part that had to be settled:
-
-  1. **Both targets receive everything, for the whole event** — media,
-     `manifest.json`, `live.json`, `event.json`, the cue objects. Not a
-     control-objects-first stage: an event that is only half in the second
-     bucket cannot be played from it, so a partial mirror is not insurance at
-     all. There is a threshold here, not a gradient.
-  2. **Both targets are written independently, and the manifest is published on
-     the preferred available target's acknowledgement.** Each target gets its
-     own upload stream and its own confirmed position; publication waits only
-     for the preferred target that is currently working — the primary while it
-     is up. So the slower link never sets the pace, *and* the event does not
-     stall when one of them is down. Writing to both and publishing on whichever
-     is preferred-and-available is the whole mechanism; there is no separate
-     "mirror" step whose trigger could be the wrong target.
-  3. **The decoder reads the primary, and the second target only for an object
-     the primary cannot serve.** On a metered provider that egress is a real
-     cost and a working primary should carry the load; it is the same
-     per-request fallback the LAN path already uses (§8.7), and for the same
-     reason — one object missing is not the target being down.
-  4. **If one target fails mid-event, the other keeps receiving** — which falls
-     out of (2) rather than needing its own machinery: the failed target's
-     confirmed position simply stops advancing while the survivor carries the
-     event to its end. The hole the failed target is left with is recorded and
-     shown. This is the point of the whole phase: the spool alone rides out an
-     outage, but it cannot survive a provider that never comes back, and the
-     provider that never comes back is the account-lockout case.
-  5. **Completeness is proved, not assumed.** The protocol already carries a
-     checksum per segment, so the two targets can be compared — after an event,
-     and on demand — and every object present in one and not the other is named.
-     Without that, "mirrored" is a claim rather than a fact.
-
-  **Deliberately not in scope: seamless live cutover.** A campus buffers minutes
-  ahead, so a failover whose lag is below that buffer is invisible to one that
-  was already playing — but a campus that *joins* during an outage has no buffer
-  to cover the hole. That is a separate capability with its own limitation, and
-  claiming it is what would make this phase's promise dishonest.
-
-  **The uplink: the mirror has to yield, and the operator has to be told.** A
-  second copy is a second upload, and most venues have one thin uplink. This is
-  not a nicety to add later — without it the promise fails *silently*, because
-  the second copy would simply never complete and nothing would say so.
-
-  Two facts shape it. First, **spare capacity cannot be measured from the live
-  stream**: the encoder only ever produces at its configured bitrate, so its
-  achieved upload rate says whether the link is coping with the stream, never
-  what is left over. On a 8 Mbps link a 6 Mbps stream reads exactly like a
-  6 Mbps link, until something else asks for the difference. Second, the primary
-  is what is on air, so the mirror may never be the reason it suffers.
-
-  So:
-
-  - **The mirror yields to a WORKING primary, not to a dead one.** The
-    distinction is the whole rule, and it is easy to get wrong: "uploads only
-    while the primary is caught up" sounds right and is not — a primary that has
-    failed is never caught up, so the mirror would never run and the survivor
-    would receive nothing, which breaks decision 4 in exactly the case this
-    phase exists for. So the mirror waits while the primary is making progress
-    and has backlog, and proceeds regardless once the primary has stopped making
-    progress for a sustained window. The policy belongs to `Session`, which can
-    see both streams; the uploader only asks whether it may go.
-  - **It then catches up after the event.** The spool holds what the second
-    target has not confirmed (see the per-target position above), so the mirror
-    drains when the uplink is idle, and the second copy completes then. Costs:
-    the box has to stay on, and local disk has to hold the event until it does.
-    This is the graceful degradation — "your link cannot carry both at once"
-    becomes "your link takes longer to do both" — and it is the same
-    store-and-forward bargain the spool already makes for the primary.
-  - **The operator is told, in time.** Three moments: while the second bucket is
-    being configured, the achieved rate of the last event against this event's
-    configured bitrate (weak, since it says nothing about headroom, but it is
-    what is free); during an event, when the second target has made no progress
-    for several minutes while the event runs — *the link cannot carry both,
-    here is the lag* — and the reason, primary-never-caught-up or
-    second-unreachable, which are different faults; and after, when the second
-    copy is complete, so "mirrored" is a fact rather than an assumption.
-  - **An on-demand uplink test**, operator-initiated and nothing else, because it
-    is the only way to know spare capacity *before* an event: upload a measured
-    payload and report the achieved rate beside the configured bitrate. Off by
-    default and never automatic: it is a burst of traffic, and a venue's link is
-    not ours to fill uninvited.
-
-  **Where it goes, and why there is only one new seam.** Both halves already
-  speak through a `Transport&` and nothing above it knows which store is really
-  behind that reference — that is how LAN-vs-cloud fallback was added without
-  `DecoderSession` learning it exists (§8.7). Redundancy is the same shape:
-
-  - **Writes (encoder).** Both targets are written from one spool, so the spool
-    stops being "what the bucket has not confirmed" and becomes "what at least
-    one target has not confirmed": it tracks a confirmed position **per target**,
-    and removes a segment's files only once *both* have it. That single change is
-    what makes (4) true without a second copy of anything — a segment confirmed
-    by the primary but not yet by the second simply stays on disk, and the
-    second's uploader picks it up whenever it can. Under the disk cap the oldest
-    unconfirmed segment is still dropped, and the hole that leaves is per
-    target and is named, because a mirror that silently fell behind would be
-    worse than none.
-    Publication (the manifest) follows the preferred target that is currently
-    working, so `Session` needs only to ask "which target may I publish on",
-    not to know there are two.
-    The small objects (`live.json`, `event.json`, `manifest.json`,
-    `cues/*.json`) go to both directly — they are tiny, and they are what makes
-    an event findable at all, so they must not be the ones left behind.
-  - **Reads (decoder and appliance).** A second `FallbackTransport`, composed
-    from two `S3Transport`s rather than LAN and cloud, chosen per request for
-    the same reason: one object missing from the first target is not the target
-    being down. Reading the primary by default is also what keeps the second
-    provider's egress bill at zero in the ordinary case.
-    One consequence to design for: when the encoder has failed over, the
-    primary's `manifest.json` stops advancing but still answers 200. A decoder
-    reading it would call the event interrupted rather than fall back, so the
-    live object has to name both targets and the decoder has to prefer the one
-    that is actually advancing.
-
-  **Slices, so each step is reviewable:**
-
-  1. ✅ **The decision above, and the settings surface** — the second target's
-     fields in both docks and the machine-wide store behind them. Nothing writes
-     anywhere different yet.
-  2. ✅ **Everything to both** — a confirmed position per target in the spool, a
-     second upload stream that yields to the primary, publication following the
-     preferred available target, and the control objects written to both
-     directly. Survivor completeness is a property of this step, not a step of
-     its own.
-  3. ✅ **Telling the operator** — the second target's lag and its reason in the
-     dock, the after-the-event "the second copy is complete", the catch-up-when-
-     idle behaviour made visible, and the on-demand uplink test. Without this
-     step the promise can fail without anyone knowing, which is why it is a step
-     and not a footnote.
-  4. ✅ **Read fallback** — the decoder and the appliance prefer the primary and
-     fall back per object to the second; `live.json` names both, and the decoder
-     prefers whichever is actually advancing; *Manage storage…* says which
-     target an event is in.
-  5. ✅ **Verification** — compare the two targets by checksum and report what is
-     in one and not the other, after an event and on demand.
-
-- **Phase 10 — Tile layout and assigned outputs.** ✅ A room that needs two or
-  four discrete pictures composites them at the main site today and pulls them
-  apart at the satellite with OBS filters by hand ([Choosing a
-  satellite](docs/SATELLITE.md)). This makes the split a property of the
-  decoder instead: the encoder declares a layout (`1x1`, `2x1`, `2x2`) in
-  `event.json`, and each region becomes its own video source, already cropped,
-  assignable to a fullscreen output, a DeckLink or AJA output, or a video wall.
-  The shape is deliberately the one audio already uses — one decoder, many
-  sources, no extra download and no extra decode. Assignment is the plugin
-  driving OBS's own outputs rather than a new output of its own: each tile
-  source carries a **Send to screen** setting that opens one of OBS's own
-  fullscreen projectors on the chosen display, which is what lets a region reach
-  a second monitor or a DeckLink without this code knowing what either of those
-  is. A satellite with fewer outputs than tiles needs nothing special — every
-  tile is a source, each is sent to a screen or left unsent, and an unsent one is
-  still there to put in a scene. Nothing has to survive a layout change
-  mid-event, because there is none: the layout is written at Go Live, and a later
-  event that declares a different one is picked up from the manifest on every
-  poll, so no satellite is ever reconfigured. Audio does not follow the tile — a
-  picture is a region of the frame, and the programme audio belongs to the feed
-  rather than to one quarter of it.
-  Built: the layout in `event.json` and the crop geometry live in
-  `src/core/` (`TileLayout::tile_rect` and `tile_view()`), the OBS plugin
-  exposes each region as its own source, and the headless campus player can put
-  one chosen region on its single screen — a `tile_index` setting (`-1` whole
-  picture, `0..3` in reading order) crops in the present path as a non-owning
-  view, so no frame is copied and the audio is left where it is. The web
-  preview offers both views of the same instant — the region going out and the
-  whole feed — because once a tile is selected those are no longer the same
-  picture, and an operator checking the crop needs to see the edges. Assigning
-  tiles to several outputs from one box needs hardware beyond the Pi, which is
-  out of this project's scope — see "Appliance hardware beyond the Pi" near
-  the end of this section.
-- **Phase 11 — Keeping installations current.** ⬜ Installing the plugin is a
-  manual act — unzip, move files, restart OBS — and the only way to learn that a
-  newer build exists is to go and look at the releases page. Two jobs live here
-  and they are not the same size.
-
-  **Telling the operator** is the small one. The plugin already speaks HTTPS
-  through the libcurl it links for uploads and already bundles on Windows, so a
-  version check costs one request and a comparison against `PLUGIN_VERSION`; it
-  belongs off the render thread, cached, and stated in the dock the operator
-  already has open rather than in a dialog nobody reads. OBS offers nothing to
-  build on: there is no update or upgrade entry point in `libobs` or in
-  `obs-frontend-api`, so this is written once, for all three platforms. The
-  decision to settle first is whether the check runs by default, because it is
-  the one request this project makes that tells a third party that OBS with this
-  plugin is running — and a project whose deployments are otherwise entirely
-  inside a church's own network should say that plainly rather than bury it in a
-  settings page nobody opens. Publishing a small manifest beside the release —
-  one request, one number, which build is for which OBS — also keeps the check
-  off GitHub's API and its rate limit, and is where the platform and OBS-version
-  matching has to live anyway, since OBS refuses a plugin built for a different
-  major version and offering the wrong asset is worse than offering none.
-
-  **Applying the update** is the part to be decided rather than assumed. Windows
-  cannot overwrite a DLL OBS has loaded: it can be renamed, or a helper can be
-  left behind to wait for OBS to exit, but either way the new version appears on
-  the *next* start, and the install directory needs elevation to write into.
-  macOS is the opposite — the per-user plugin directory is writable without
-  privileges, so the swap itself is easy — but these builds are neither signed
-  nor notarised, so an update arrives quarantined and OBS then loads nothing at
-  all and logs nothing, which is exactly the failure OPERATOR.md already warns
-  about; an updater would have to clear the flag itself. Linux is the easiest of
-  the three and the Flatpak case the most awkward, because a plugin that cannot
-  write its own directory should not pretend otherwise. OBS does not do this
-  in-process for itself either: on macOS it hands updates to Sparkle.
-
-  **The prerequisite is done.** Our Windows artifacts and the operator guide
-  used to use the legacy layout — files merged into the OBS install directory
-  under `C:\Program Files\obs-studio\` — which OBS's own plugins guide warns
-  will stop working in a future version. Both now use the recommended
-  `C:\ProgramData\obs-studio\plugins\obs-multisite\`, one self-contained
-  directory holding `bin\64bit\` and `data\` (see `.github/workflows/obs-plugin.yml`
-  and `docs/OPERATOR.md`). That was the actual blocker for a Windows update
-  mechanism: the files an updater would replace are now data it can own,
-  rather than files inside `Program Files`.
-
-  Nothing here depends on phases 9–12, and it is small enough to pull forward if
-  reinstalling by hand on each release is costing more than those phases are
-  worth.
-
-- **Phase 12 — Storage credentials and pairing.** ⬜ A second way to answer
-  "which bucket, and with what keys" — a device-code pairing against a
-  credential broker, beside the typed keys that exist now and never instead of
-  them. Designed in §8.5, including the constraints that keep it honest: inert
-  until an operator asks for it, a broker URL that is a field rather than a
-  constant, cached credentials that never gate going live, and a disconnect
-  that hands back the bucket details.
-
-  This is on the list because of what §8.5 opens with. Creating a cloud
-  account, scoping a token correctly and writing a lifecycle rule are the three
-  steps that decide whether a church can deploy this at all, and they are the
-  three a broker removes. Whatever the eventual split between what a church
-  does itself and what it pays somebody for, the plugin needs the seam — and
-  the seam is small, because `S3Config` is already a plain value struct that
-  something builds rather than something the transport reaches out for.
-
-  Depends on nothing else here. Along with Phase 11, the most useful work
-  available once the plugins are finished.
-
-- **Phase 13 — Storage provider selection.** ✅ A provider dropdown
-  (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom / other
-  S3-compatible) that shows only the fields each one actually needs and
-  derives the rest, instead of six blank fields regardless of where the
-  bucket lives. Built per §8.6, in both OBS docks and — added in later
-  passes, once its absence there was noticed — the Raspberry Pi appliance's,
-  the simulcast relay's and the OBS plugin's own remote-control pages too.
-  `S3Config` itself did not change; this is a UI-layer derivation in front
-  of it (`src/core/storage_providers.h/.cpp`), read by all five settings
-  surfaces rather than reimplemented per surface, backward compatible with
-  every saved setup — a configuration saved before
-  this existed reads back as whichever provider its endpoint actually
-  matches, or "Custom" if none does, never misrepresented as something it
-  isn't. Also the seam Phase 12's brokered credentials will slot into later —
-  "Multisite Cloud" is already a greyed-out entry in the same dropdown, not a
-  second settings surface waiting to be built.
-
-  Depended on nothing else here, and nothing here depends on it.
-
-- **Phase 14 — LAN / direct delivery.** ✅ A satellite on the same network as
-  the main site, or reachable over a VPN the church already runs, downloads
-  directly from the encoder instead of from the bucket — automatically
-  preferred when it answers, falling back to cloud per request the instant it
-  doesn't. Designed and built in §8.7. Cloud upload keeps running by default
-  throughout — this adds a second path to reach the same objects, it does
-  not remove the first or introduce a control plane §3 doesn't already have
-  — but can now be turned off entirely for an operator with no use for a
-  cloud copy at all.
-
-  **Built, both sides:** the encoder's `HttpServer::route_prefix()`, a
-  `LanObjectServer` serving `manifest.json`/`event.json`/`init.mp4`/segments/
-  `markers.json`/`live.json` from a bounded retention window fed by five
-  `Session` hooks, an auth-token check; the decoder's `LanTransport` (the
-  same `Transport` interface a decoder already downloads through, against
-  those exact routes)
-  and `FallbackTransport` (LAN preferred, cloud per request otherwise) — all
-  proven over real loopback sockets
-  (`tests/test_lan_object_server.cpp`, `tests/test_lan_transport.cpp`,
-  `tests/test_fallback_transport.cpp`). A `NullTransport`
-  (`tests/test_null_transport.cpp`) lets cloud delivery be switched off
-  without Session knowing anything changed. The Raspberry Pi appliance
-  carries the identical decoder-side wiring (`Config`, `Player`, the web
-  settings page) — proven with a real `multisite-player` process against a
-  real encoder, receiving an entire event over LAN with no bucket involved.
-  The simulcast relay carries the same wiring for the live feed it reads
-  before pushing onward (`RoomFeeder`, `ConfigStore`, the web settings
-  page) — a relay in the same building as the encoder can now read the
-  feed straight from it instead of round-tripping through the bucket, LAN-
-  preferred with cloud fallback or LAN alone. Past events stay cloud-only
-  on the relay, exactly as they do everywhere else this pattern appears:
-  browsing them is a `list()` operation, and `LanObjectServer` only ever
-  holds the event currently in progress. **Still not built:** anything
-  beyond manual host:port discovery (no mDNS —
-  see §8.7 for why), and the device-code pairing flow §8.5 designs for cloud
-  credentials, which LAN's shared-token auth is meant to eventually share
-  rather than duplicate.
-
-  Depends on nothing else here. The pairing step designed for LAN auth is
-  meant to eventually match §8.5's device-code flow, but does not require
-  §8.5 or Phase 12 to be built first — the plain pre-shared-token exchange
-  already built is enough on its own until brokered pairing exists to share.
-
-- **Phase 15 — Lossless high-quality mode.** ⬜ FLAC in place of AAC on every
-  audio track, alongside roughly 10 Mbps HEVC video, as an opt-in mode for an
-  event where bandwidth genuinely is not the constraint — a from-the-source
-  archival/monitoring copy rather than the bandwidth-tuned broadcast one this
-  project is otherwise built around. Switched per event, not per track: an
-  event runs either the normal delivery or this ceiling, not a mix.
-
-  **Researched, not yet built** (2026-09-14). OBS already ships what this
-  needs: `obs-ffmpeg` registers a FLAC encoder (`ffmpeg_flac`) through the
-  identical machinery its AAC encoder uses — same lossless-aware creation
-  path, same packet shape — and the mux/decode core here is already
-  codec-agnostic: `CmafMuxer`/`CmafDecoder` (`src/core/cmaf_muxer.*`,
-  `cmaf_decoder.cpp`) carry whatever `AVCodecID` and extradata they are
-  given, which is why this is a plugin-layer change and not a core one. What
-  would actually move: `BroadcastController`'s hardcoded
-  `obs_audio_encoder_create("ffmpeg_aac", …)`, `multisite_output.cpp`'s
-  hardcoded `AV_CODEC_ID_AAC`/`"aac"` track metadata (and its `frame_size`,
-  which is never read off the real encoder today and silently defaults to
-  AAC's 1024), and the `encoded_audio_codecs` compatibility string OBS
-  checks (semicolon-separated — `"aac;flac"`). The Raspberry Pi appliance
-  needs no changes at all: it decodes through this same `CmafDecoder`, and
-  `pcm_convert.h` already works from however many samples a decoded frame
-  actually carries rather than assuming AAC's frame size — FLAC decode is
-  also native ffmpeg, no extra dependency, and lighter than the video decode
-  the Pi already does.
-
-  **The real constraint is downstream, not technical feasibility.** FLAC
-  audio has no home on the public web at all — no streaming site's ingest or
-  browser player takes it — and that, rather than the picture, is what makes
-  high-quality mode a dead end for the simulcast relay and anything reached
-  through it. The video half of that argument has since gone: HEVC travels over
-  both protocols now, SRT as MPEG-TS and RTMP as Enhanced RTMP (§8.2). The
-  sound half has not, and is not going to — no ingest takes FLAC. So choosing
-  it is still choosing "campuses and
-  archival only", not "also simulcast this to YouTube/Facebook or watch it
-  in a browser". Only the two purpose-built players (the OBS decoder plugin,
-  the Pi appliance) decode through `CmafDecoder` and can play it; nothing
-  else in this project plays media back at all — the plugin's own web pages
-  and the relay's own web page are control/status surfaces, never an
-  in-browser player. Whatever UI this gets has to say so up front, before an
-  operator discovers it by the relay quietly refusing the event instead.
-
-  Depends on nothing else here.
-
+- **Phase 6 — Satellite appliance. Status: built** for the ARM64/HDMI tier it
+  defines: a headless Linux decoder with HDMI output and a browser operator UI
+  (§8.1) on the existing receive core, proven on a Pi 5 (2026-09-07) carrying
+  `v0.1.12-alpha`, though not through a congregation's event. One item remains
+  within the phase — hardware-decoder selection on Pi 4 (`h264_v4l2m2m`);
+  DeckLink SDI and the channel de-interleaver are out of scope (§4.3.1).
+- **Phase 7 — Extensions. Status: partial.** Built: the public simulcast relay
+  (§8.2) in `relay/` — copy-remux to RTMP or SRT, per-destination audio, a delay
+  buffer, supervised reconnection — not yet through an event. Not started:
+  re-encoding, web/mobile simulcast from the bucket, scheduling, local insertion.
+- **Phase 8 — External control API. Status: built**, both halves. Each plugin's
+  command surface is an obs-websocket vendor request over one shared command
+  layer, and a Bitfocus Companion module provides buttons, feedbacks, variables
+  and presets (§8.3). Driven against a real OBS and a real campus player, but no
+  whole event yet, and not in the Bitfocus store.
+- **Phase 9 — Redundant storage. Status: built.** Upload to two independent S3
+  targets so a provider outage, regional failure, account lockout or console
+  accident stops being a single point of failure for every campus. Two modes per
+  room: **active/active** (all media to both) and **active/passive** (manifests
+  and `live.json` to both, media to the primary until failover). The promise is
+  that an event is never lost to one provider failing. All five slices are done.
+- **Phase 10 — Tile layout and assigned outputs. Status: built.** A layout
+  (`1x1`, `2x1`, `2x2`) declared in `event.json`; each region becomes its own
+  pre-cropped source, assignable through OBS's own fullscreen projector to a
+  screen, a DeckLink or a video wall. Assigning tiles to several outputs from one
+  box needs hardware beyond the Pi and is out of scope.
+- **Phase 11 — Keeping installations current. Status: not built.** Tell the
+  operator a newer build exists (one HTTPS request, stated in the dock), and
+  decide how an update is applied; OBS offers no update entry point. The
+  packaging prerequisite — the recommended Windows layout — is done.
+- **Phase 12 — Storage credentials and pairing. Status: not built.** A
+  device-code pairing flow against a credential broker, beside the typed keys and
+  never instead of them. Designed in §8.5; depends on nothing else here.
+- **Phase 13 — Storage provider selection. Status: built.** A provider dropdown
+  (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom) that shows only the
+  fields each needs and derives the rest, read by all five settings surfaces; a
+  saved setup reads back as its matching provider, or "Custom". Phase 12's seam.
+- **Phase 14 — LAN / direct delivery. Status: built.** A satellite on the main
+  site's network or an existing VPN downloads directly from the encoder,
+  LAN-preferred with per-request cloud fallback; cloud upload stays on by default
+  but can be switched off entirely. Still not built: anything beyond manual
+  host:port discovery (no mDNS — §8.7) and the §8.5 device-code pairing flow.
+- **Phase 15 — Lossless high-quality mode. Status: not built.** Opt-in FLAC in
+  place of AAC on every track plus ~10 Mbps HEVC, per event not per track, for
+  archival rather than broadcast; researched (2026-09-14). No web ingest takes
+  FLAC, so only the two purpose-built players can play it back.
 
 ### Three things that were on this list
 
-None of the three was built, so nothing anyone has is affected. The reasoning
-is kept rather than the entries deleted: the people who read a roadmap are the
-ones who would notice things quietly disappearing from it.
+The full reasoning is archived in `docs/scope/project-scope-phases.md`; none of
+the three was built, so nothing anyone has is affected.
 
-### The ABR transcoder, "relay plus" — no longer part of this project
-
-It answers a different question from the rest of this document. Everything
-else here carries an event between sites a church runs; a rendition ladder
-exists to serve an audience on the open internet, which is a delivery
-business with its own cost curve, its own failure modes and its own
-competitors. Building it here would have quietly changed what this
-project is, and would have set an expectation of hosted delivery that a
-repository of two OBS plugins cannot honour.
-
-It is not cancelled, it has moved: it is the foundation of a hosted service
-Stage Audio Works intends to build separately, fed by the encoder plugin or
-by Stage Audio Works' own appliance hardware. The existing relay stays exactly as it is —
-free, in this repository, and not degraded to make room for anything.
-
-The engineering notes are kept below because they were dearly bought and
-the next person to attempt this should not start from nothing.
-
-The relay copies; this
-re-encodes. Decode the incoming feed once, produce a ladder of renditions
-(1080p, 720p, 480p), package it as CMAF for **both HLS and DASH**, and write
-it to a bucket that is then the origin — so a browser or a phone plays ABR
-straight from object storage with no origin server running anywhere. Encoders:
-NVENC, VAAPI and x264, behind a capability probe, the way the relay already
-probes ffmpeg for SRT. Input stays the bucket as now, but SRT and RTMP input
-as well, which is what makes the container useful outside this project.
-The hard part is not the encode. It is ladder *alignment* — closed GOPs, one
-IDR per segment, identical boundaries across renditions — or ABR switching
-glitches at every switch. That should be proven before anything else is built.
-Note that the target hardware changes with the job: a $5 VPS has no encoder,
-so this wants a small box with a usable iGPU, and the documentation should say
-so rather than inherit the relay's VPS story. Built as a library first, the way
-`relay_logic` is, so the same engine can later become an in-OBS multi-bitrate
-encoder uploading resiliently from the machine that already has the picture.
-
-### End-to-end low latency — dropped
-
-The concept was a second delivery path in fractions of a second rather than
-tens — ZeroTier to avoid port forwarding, WebRTC or SRT above it — running on
-the same plugins and appliances.
-
-It is dropped for three reasons, none of which were going to improve. It
-inverts §1: everything that makes this project worth running comes from
-being allowed to buffer, and a sub-second path gives that up on exactly the
-venue connections this project exists to survive. Timeslipping does not
-survive it — hold, resume and scrub are most of why a campus wants this, and
-they are not features you can offer on one path and withdraw on the other
-without confusing every operator who has to choose. And it would be a
-support liability out of proportion to its use: a path whose quality tracks
-the connection minute by minute generates calls that no amount of
-documentation prevents.
-
-Where a site genuinely needs conversational latency — a two-way interview, a
-campus pastor taking questions — SRT already exists in OBS, there is good
-hardware for it, and Stage Audio Works can engineer it per project on the SRT
-infrastructure it already runs. That is a better answer than a second delivery
-path in this repository, and it is available today rather than after a phase.
-
-### Appliance hardware beyond the Pi — moved, not dropped
-
-Unlike the two above, this isn't a rejected idea — it's a scope decision.
-This project's receive and encode hardware is the Raspberry Pi appliance
-(Phase 6) and nothing wider: no x86/DeckLink production tier, no RK3588
-headless encoder, no rackmount box. Both were sketched here at one point —
-an x86 satellite with SDI output and genlock, and a headless encoder on a
-Mekotronics R58 (RK3588) using its `rk_hdmirx` capture path and
-`librockchip_mpp` hardware encoder — and both are real, still being built,
-just not in this repository.
-
-Stage Audio Works builds and sells that hardware, and the software that runs
-on it, under its own name (**MultisiteOS**), as a product line planned and
-documented separately from this project. Where it reuses this project's core
-— the CMAF muxer, the durable queue, the storage protocol — that code stays
-exactly what it already is: GPLv3, in this repository, available to anyone
-who wants to build their own version of that hardware rather than buy ours.
-What moved out is the *planning and positioning* of the hardware itself, not
-the license on the software underneath it.
-
-Practically, this is why Phase 6's own text no longer defers Pi 4's
-hardware-decoder selection to a later phase, and why Phase 10's tile-to-output
-assignment stops where it does rather than promising a numbered phase to finish
-it in: what the OBS plugin can do for itself is built, and giving one appliance
-box several outputs needs the hardware described here, so that part is out of
-scope instead of scheduled. Both were waiting on a hardware tier that isn't
-part of this project's roadmap any more.
+- **The ABR transcoder ("relay plus")** has moved, not been cancelled: a
+  rendition ladder serves an open-internet audience, a different question from
+  carrying an event between a church's sites. It is now the foundation of a
+  hosted service Stage Audio Works intends to build separately; the relay stays
+  here, free and undegraded.
+- **End-to-end low latency** is dropped: it inverts §1 (this project's worth
+  comes from being allowed to buffer), timeslipping cannot survive it, and it
+  would generate support calls on exactly the connections this project exists to
+  tolerate. Where conversational latency is needed, SRT already exists in OBS.
+- **Appliance hardware beyond the Pi** has moved, not been dropped — a scope
+  decision: this project's hardware is the OBS plugin pair and the Raspberry Pi
+  appliance (Phase 6) and nothing wider. Stage Audio Works builds and sells
+  further hardware and its software under its own name (**MultisiteOS**); where
+  it reuses this project's core, that code stays GPLv3, in this repository.
 
 ---
 
