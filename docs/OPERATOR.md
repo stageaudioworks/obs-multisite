@@ -316,6 +316,36 @@ machine set to Both serves both and links them. On Windows the first start
 raises the usual firewall prompt — allow it for private networks, or the page
 will not answer from another device.
 
+## Monitoring heartbeat
+
+Both halves of the plugin can report their state to a monitoring collector —
+a small status document every 30 seconds while the role is active, every 5
+minutes while idle. It is **off by default**: switched off, nothing leaves the
+machine — no sockets, no bytes. Switch it on per role, in each dock's Storage
+settings under **Monitoring heartbeat**.
+
+**What it sends** is the same status the dock already shows — link health,
+how far behind live the campus is, queue and buffer figures, the software
+version — plus nothing else. No pictures, no sound, no credentials, no IP
+addresses. A failed post is dropped, never queued, so monitoring never
+competes with the programme for the venue's link.
+
+**Connecting it** takes a collector URL and either of two credentials:
+
+- **Connect…** (preferred) — asks the collector for a short code, which is
+  entered on the collector's own page. The ID and token fill themselves in
+  when it is approved there. Apply first, so the typed URL is what gets used.
+- **By hand** — type the collector URL, the appliance ID and the token from
+  wherever the collector keeps them.
+
+The outcome line in the same box says the last answer: `accepted (200)`,
+`disabled`, `not configured`, `not reached (dropped)`, or a named rejection
+such as a token the collector does not know. A campus player reports the same
+way from its own settings page, and additionally sends the box's health — CPU
+and memory load, free disk on the cache drive, temperature and throttle
+flags — since a stuttering box and a struggling link look identical from the
+pew and are different faults.
+
 ## Control from a Stream Deck or automation
 
 A volunteer running an event reaches for a physical button, not a window. Two

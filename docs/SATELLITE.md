@@ -347,6 +347,19 @@ locked, the fault is on the network, not on this box.
 **If the AES67 stack is not installed**, both places say so rather than offering
 a switch that would only fail. Install it with the script above and they fill in.
 
+### Reporting a heartbeat to a collector
+
+Under Settings, past the network audio, is a closed-by-default
+**Monitoring heartbeat** section. It works exactly as the OBS docks' version
+does — off by default, a status document every 30 seconds while playing or
+held, every 5 minutes otherwise, a failed post dropped rather than queued —
+with one addition the plugin has no use for: the box's own health (CPU and
+memory load, free space where the cache lives, temperature and throttle
+flags). Connect — preferable — or type the collector URL, appliance ID and
+token by hand, exactly as above; the line beside the button says the last
+answer. A token shown as dots is kept without retyping; clearing the field
+removes it.
+
 ### Hearing what is leaving the box
 
 The meters under the Play tab, and the figures beside them, are taken from the
