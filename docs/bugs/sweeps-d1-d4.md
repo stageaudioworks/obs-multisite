@@ -189,7 +189,7 @@ cannot add a third floor and drift, which is exactly how the media-vs-wall
 faults began.
 
 **D3 — DONE.** `start_buffer_s` was assigned into the dock's snapshot struct
-(`multisite_ui.h`) from `multisource_source.cpp` and read by nobody. Removed
+(`multisite_ui.h`) from `multisite_source.cpp` and read by nobody. Removed
 both. `buffered_span_s`, also write-only, was left in place — it carries a
 comment describing the buffer-fill readout it exists for, so it is a
 deliberately-kept seam rather than dead data of the kind D3 names.

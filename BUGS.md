@@ -17,6 +17,14 @@ Last updated: 2026-09-21.
 
 ## Open
 
+> **Next up (2026-09-22), in order:** entry **2** first — the delivery-stopped-
+> draining stall reproduced live on 2026-09-21, whose next measurement the entry
+> names (instrument the deliver loop's wait at `multisite_source.cpp:954`
+> before changing any arithmetic). Then Phase 12, spec'd in
+> `docs/scope/phase12-capability-map.md` and
+> `docs/scope/spec-cloud-identity.md`, gated on the map's approval and on the
+> decoder-pairing question.
+
 ### 0. Pi player: playback can stall indefinitely while downloads keep succeeding
 
 **Status: not seen for a long while, root cause NEVER found. Kept open, not
@@ -230,7 +238,7 @@ copy. Full D1–D4 record in `docs/bugs/sweeps-d1-d4.md`.
   `start_buffer_s` was written into the dock snapshot and read nowhere — the
   invitation D3 named, for the next person to build a progress readout on stale
   data. Removed from `multisite_ui.h` and its one assignment in
-  `multisource_source.cpp`. (`buffered_span_s` is also write-only but carries a
+  `multisite_source.cpp`. (`buffered_span_s` is also write-only but carries a
   comment suggesting deliberate later use; left alone, and not this entry's.)
 - **D4 — queue caps were counts, not durations.** `kMaxQueuedVideo` at 12 frames
   held 367 ms against a 400 ms gate — a permanent jam. Now `kMaxQueuedNs` with a
