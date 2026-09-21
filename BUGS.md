@@ -85,44 +85,76 @@ number would be a nicety, not a gate.
 
 ---
 
-### 2. Hold/resume: fix applied, NOT YET VERIFIED against a real hold
+### 2. Hold/resume: fix VERIFIED, and a second fault found after it
 
-**Status: root cause found and fixed 2026-09-19, unverified.** The suite does not
-reach `multisite_source.cpp` (plugin glue, not core), so only a real hold and
-resume proves it.
+**Status: the resume fix works — verified on a real hold 2026-09-21. A separate
+fault that surfaces after a resume is OPEN and reproduced live.**
 
-**What is fixed.** `resume()` clears the queue and bumps the epoch; the pending
-frame's *timestamp* was computed before that bump, but the staleness check
-compared the epoch against itself and could never fail. The stale frame tripped
-the stall resync, which overwrote the 500 ms cushion with a 400 ms lead. The
-epoch is now stamped where the timestamp is computed (beside `playout_due_ns`),
-not where the frame is built or popped.
+**The resume fix is confirmed.** On a real hold: `PAUSED ... on screen 848.067s`
+→ `RESUMED ... held from 848.067s` → `playout anchored on first video frame (pts
+848.100s)`. **33 ms** — constant, not growing with the hold. No
+`playout clock fell Ns behind` line. The old fault is gone; this entry's
+original root cause and fix are now proven, not merely reasoned.
 
-**Also fixed.** The media->wall clock origin no longer walks on resume:
-`PlayoutTimeline::adopt` takes a playout epoch *and* a media epoch, and a resume
-bumps only the playout epoch.
+**The new, separate fault (OPEN, reproduced 2026-09-21).** Seconds after that
+clean resume, delivery stops handing anything to OBS and the queue jams
+permanently:
 
-**Residual, expected and accepted:** ~370 ms lost at resume — the queue clear,
-now constant rather than growing with hold length. Removing it means keeping and
-re-timing the queue, which is what `82b4183` did and why it was reverted.
+```
+17:06:51.683  first 1s after resume — video min lead 395 ms; audio min lead 395 ms   <- healthy
+17:06:52.309  dropped an audio frame after waiting 250 ms — delivery last handed over
+              1265 ms ago, playing, this stream held 1003 ms (bound 1000 ms)
+17:06:54.327  ... delivery last handed over 3283 ms ago, held 1003 ms (bound 1000 ms)
+17:06:56.347  ... delivery last handed over 5302 ms ago, held 1003 ms (bound 1000 ms)
+```
 
-**What success looks like:** NO `playout clock fell Ns behind (stall?)` line
-after a resume, and both min leads in the `first 1s after resume` line staying
-near 400 ms instead of video collapsing to 66 ms.
+`frames_out` freezes; the gap since the last handover grows without bound. This
+is the entry's own previously-unexplained half — *"22 of 47 drops were audio,
+which should never have jammed on capacity"* — now reproduced on demand.
+
+**Two things are visible and confirmed; the cause is NOT.** Do not treat either
+as diagnosed:
+1. **The queue's structural span is over its own bound.** 48 audio frames of
+   ~20.9 ms span **1003 ms**; `kMaxQueuedNs` (the bound the accept test uses) is
+   **1000 ms**. A full audio queue is therefore *permanently* "full" — 3 ms over.
+   The comment at `kMaxQueuedNs` already warns "a queue whose capacity equals the
+   lead is full by construction"; this is the same shape one layer down, where
+   the *span* at the count backstop exceeds the *duration* bound.
+2. **Delivery stopped draining.** `delivery last handed over` climbing to 5+ s
+   is the delivery loop doing nothing, not slow. Whether (1) is what stops it,
+   or delivery stops for its own reason and (1) merely prevents recovery, is the
+   open question — they are not separable from this log.
+
+**Fixed while capturing this (safe, isolated):** the resume diagnostic had a
+format string with a fifth `%.0f` and no fifth argument, so `the bound is`
+printed junk (`0`). The very number this investigation rests on was UB. Fixed at
+`multisite_source.cpp` (now passes `kMaxQueuedNs`). Worth knowing: `mlog_*` goes
+through `plugin_log_line`, which *is* marked `format(printf,…)`, yet neither
+clang nor GCC flagged the missing argument on the concatenated literal — the
+class-level fix (a compile-time check that actually fires) is not done.
+
+**Next step, in order — read `docs/bugs/02-hold-resume-skips.md` first:**
+1. Determine whether `queued_span_ns()`'s count backstop (`n >= hard cap`
+   returns `kMaxQueuedNs` *unconditionally*) is the jam: audio hits 48 frames
+   long before its span reaches 1000 ms, so the count path can declare full
+   while the queue is only ~1003 ms and cannot drain. That is a two-line
+   comparison to check, not an arithmetic rewrite.
+2. Only then ask why delivery stopped. Instrument the deliver loop's wait
+   (line 954) — how long it is parked at each stage — before changing it.
 
 **DO NOT:**
 - **Re-apply option (a)** (`resume()` seeking back to `last_out_pts_ns`). Tried,
-  measured, reverted the same day. Do not try it again.
-- **Re-derive the anchor.** There is ONE anchor, correctly placed. This has been
-  the fourth variant of the same misreading. Read `playout_clock.h` before
-  touching any of this arithmetic.
+  measured, reverted. Do not try it again.
+- **Re-derive the anchor.** There is ONE anchor, correctly placed. Read
+  `playout_clock.h` before touching any of this arithmetic.
 
-**Files:** `src/obs/multisite_source.cpp` (`deliver_video`, `deliver_audio`,
-`enqueue_frame`), `src/core/playout_timeline.h`, `src/core/playout_clock.h`.
+**Files:** `src/obs/multisite_source.cpp` (`enqueue_frame`, `deliver_loop`,
+`queued_span_ns`, `resume`), `src/core/playout_timeline.h`,
+`src/core/playout_clock.h`.
 
 **Archive:** `docs/bugs/02-hold-resume-skips.md` — **read this before changing
 timing code.** It carries the measurements, the four rejected fixes, and the
-end-to-end account of the root cause.
+end-to-end account of the original root cause.
 
 ---
 

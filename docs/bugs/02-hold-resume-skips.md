@@ -476,3 +476,102 @@ frame handed to OBS and the queue depth, and `RESUMED` prints what it continued
 from.
 Without that figure the two candidate causes were indistinguishable and cost
 three rounds of guessing — keep it, and keep it honest.
+
+---
+
+## 2026-09-21 — resume VERIFIED, and the old unexplained half reproduced
+
+### The resume fix is confirmed
+
+First real hold since the epoch-stamp fix. Verbatim log, trimmed to the markers:
+
+```
+17:06:45.300  PAUSED at segment 143 — on screen 848.067s, 70 frame(s) queued
+17:06:45.531  dropped a audio frame after waiting 250 ms — ... PAUSED,
+              this stream held 1003 ms of programme (bound 1000 ms)
+17:06:46.939  queue at resume held video 22 frame(s)/700 ms, audio 48 frame(s)/1003 ms
+17:06:46.939  RESUMED ... 70 queued frame(s) discarded, clock re-anchoring) — held from 848.067s
+17:06:46.939  playout anchored on first video frame (pts 848.100s)
+17:06:46.939  interleave gap this anchor: audio leads by 351 ms (cushion 500 ms, within the cushion)
+17:06:51.683  first 1s after resume — video 27 frame(s), 867 ms of programme, min lead 395 ms;
+                                      audio 26 frame(s), 533 ms of programme, min lead 395 ms
+```
+
+Read against what the entry predicted:
+
+- **held 848.067 s → anchored 848.100 s = 33 ms.** Constant, not growing with
+  the hold. The ~370 ms residual expected from the queue clear is *not present
+  here* — 33 ms, because the queue was cleared and re-anchored cleanly.
+- **NO `playout clock fell Ns behind (stall?)` line.** The failure that
+  contaminated every earlier run is gone.
+- **Both min leads 395 ms**, video and audio equal. The old signature was video
+  collapsing to 66 ms while audio held 377 ms.
+
+The 2026-09-19 epoch-stamp fix is therefore **verified on real content**, not
+merely reasoned. `PlayoutTimeline`'s playout-vs-media epoch split holds too: the
+origin did not walk.
+
+### The new fault, immediately after
+
+Seconds later, delivery stops handing frames to OBS and the queue jams:
+
+```
+17:06:51.683  head=145 live=608 behind=2778s buffered=279s ... frames_out=7845
+17:06:51.683  lead video mean=+398ms min=+395ms (591) | audio mean=+398ms min=+395ms (908) | dropped 0 v / 8 a
+17:06:52.309  dropped a audio frame ... delivery last handed over 1265 ms ago, playing, held 1003 ms (bound 1000 ms)
+17:06:54.327  dropped a audio frame ... delivery last handed over 3283 ms ago, playing, held 1003 ms (bound 1000 ms)
+17:06:56.347  dropped a audio frame ... delivery last handed over 5302 ms ago, playing, held 1003 ms (bound 1000 ms)
+```
+
+`frames_out` frozen at 7845 from 17:06:51 onward. `delivery last handed over`
+climbs 1265 → 3283 → 5302 ms with no bound. Audio sits at 1003 ms and drops a
+frame every ~2 s (the log rate-limit). This is the entry's previously
+unexplained observation — *"22 of the 47 drops were audio... the delivery loop
+itself must have stopped draining for ≥250 ms at a stretch"* — reproduced and
+open-ended here.
+
+### What is confirmed about the mechanism
+
+`queued_span_ns()` (`multisite_source.cpp:715`) returns the pts span of one
+stream's queue, and `enqueue_frame` accepts a frame only while that span is
+below `kMaxQueuedNs = 1000 ms` (`:780`). Two separate facts, both read from the
+log:
+
+1. **48 audio frames span 1003 ms** (audio ≈ 20.9 ms/frame). So a full audio
+   queue is **3 ms over the 1000 ms bound** — permanently "full" by the span
+   test. That number is structural, not a draining artefact.
+2. **`queued_span_ns` has a count backstop** (`:726`): at
+   `n >= kQueueHardCapAudio` (480) it returns `kMaxQueuedNs` regardless of span.
+   Audio reached only 48 frames here, so the backstop did *not* fire — the
+   *span* test alone declared full.
+
+The `kMaxQueuedNs` comment already states the principle: *"A queue whose
+capacity equals the lead the delivery loop is trying to hold is full by
+construction."* This is the same fault expressed in span rather than count, at a
+bound 3 ms too tight for the stream it bounds.
+
+### What is NOT established
+
+Whether the too-tight span bound *causes* delivery to stop, or delivery stops
+for its own reason and the bound prevents recovery. Both fit the log. They are
+not separable from these four lines, and no arithmetic should be changed until
+they are — this is the fifth time this area has been "fixed" from a plausible
+reading.
+
+Next measurement: instrument the deliver loop's wait at `:954` — how long it is
+parked, at each stage — and log whether `enqueue_frame` is dropping while the
+delivery loop is awake or asleep. That separates the two.
+
+### Diagnostic repaired while capturing this
+
+The `queue at resume` line had a format string with a fifth `%.0f` and only four
+arguments, so `the bound is` printed whatever was in the register — `0`. The
+number this whole investigation depends on was undefined behaviour. Fixed:
+`kMaxQueuedNs / 1e6` is now passed. Note `plugin_log_line` is marked
+`format(printf, 2, 3)` and the attribute **does** fire on the macro pattern when
+`-Wformat` is on — verified with a standalone repro. The reason nothing caught
+it is that **the plugin build compiles with no warning flags at all**:
+`build-obs` reports `CMAKE_CXX_FLAGS:STRING=` (empty), so `-Wformat` is never
+enabled for `src/obs/`. The core build has its flags; the plugin target does
+not. That is the class-level hole, and it is why a format bug could sit in the
+diagnostic the investigation rests on.

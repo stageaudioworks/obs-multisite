@@ -2314,7 +2314,7 @@ void SourceCtx::resume() {
     mlog_info("source: queue at resume held video %zu frame(s)/%.0f ms, "
               "audio %zu frame(s)/%.0f ms (the bound is %.0f ms of programme "
               "per stream)",
-              v_n, v_span_ms, a_n, a_span_ms);
+              v_n, v_span_ms, a_n, a_span_ms, (double)kMaxQueuedNs / 1e6);
 
     mlog_info("source: RESUMED at %.0fs behind live (state=%d, %zu queued "
               "frame(s) discarded, clock re-anchoring) — held from %.3fs",
