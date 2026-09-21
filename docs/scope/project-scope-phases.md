@@ -96,7 +96,8 @@ module also against a real campus player, though nothing has yet run a whole
 event. Phase 10 is built, and its own entry below says what is not: assigning
 tiles to several outputs from one box needs hardware beyond the Pi, which is out
 of this project's scope. Phase 13 is built. Phase 14 is built.
-Phases 9, 12 and 15 have not been started.
+Phases 12 and 15 have not been started. Phase 9 has been (all five slices —
+see the Phase 9 entry below, whose ⬜ predates its own commits).
 
 **Phases 11, 12 and 13 carry weight together.** Between them they are most
 of the distance between a project a technician can deploy and one an
