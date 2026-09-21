@@ -588,6 +588,15 @@ bool reporter_pair_begin(const std::string& kind) {
     s.claimed_token.clear();
     s.claimed_url.clear();
     s.pair_note.clear();
+    // Reset the change-detection guards too. Without this, EVERY attempt after
+    // the first is silent: log_pair_phase only prints when the note or phase
+    // DIFFERS from last time, so a second attempt that fails the same way as
+    // the first produced no line at all — which is how "pairing started" was
+    // seen twice with nothing after it, and the actual reason (unreachable,
+    // 404, no code in the body) was unknowable from the log. Found 2026-09-21
+    // on a real encoder whose pairing looked like it did nothing.
+    s.pair_note_logged.clear();
+    s.pair_phase_logged = 0;
     return true;
 }
 
