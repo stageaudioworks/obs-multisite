@@ -376,11 +376,22 @@ void Player::adopt_saved_pairing(const Config& cfg) {
 }
 
 bool Player::paired_for_storage(const Config& cfg) const {
+    // The operator has to have CHOSEN Multisite Cloud as this box's storage
+    // provider. A pairing alone is not that choice: a box pairs so it can be
+    // monitored, and it is entirely normal for it to pair while still reading
+    // storage with typed keys (PROJECT-SCOPE §8.5: brokered credentials are
+    // added BESIDE the typed keys, never instead of them).
+    //
+    // This is not a nicety. Without it, a box with typed keys that also
+    // heartbeats was switched onto brokered storage the moment its first
+    // credential fetch landed — mid-event — which is not what its operator
+    // asked for and is what crashed a bench Pi on 2026-09-22.
+    if (cfg.storage_provider != "multisite_cloud") return false;
     if (!cfg.paired_configured()) return false;
     if (!m_identity) return false;
-    // Pairing alone is not enough: the credential set is what a transport needs,
-    // and until one has been fetched there is nothing to read with. A box in
-    // that window falls through to the typed leg if it has one.
+    // Pairing alone is still not enough: the credential set is what a transport
+    // needs, and until one has been fetched there is nothing to read with. A
+    // box in that window falls through to the typed leg if it has one.
     return m_identity->credentials().present();
 }
 
@@ -526,9 +537,19 @@ void Player::rebuild_session() {
     else if (m_lan_transport)
         plog_info("receiving room '%s' — LAN only (%s:%d), no cloud storage configured",
                   cfg.room_id.c_str(), cfg.lan_host.c_str(), cfg.lan_port);
-    else
+    else if (m_cloud_transport)
+        // PAIRED: the endpoint and bucket came from the collector, so there is
+        // no typed base URL to print — name the bucket the broker chose, which
+        // is the useful fact for an operator and the one they cannot see
+        // anywhere else.
+        plog_info("receiving room '%s' from Multisite Cloud — bucket '%s'",
+                  cfg.room_id.c_str(), m_cloud_transport->bucket().c_str());
+    else if (m_transport)
         plog_info("receiving room '%s' from %s", cfg.room_id.c_str(),
                   m_transport->base_url().c_str());
+    // No else: a paired box with no credentials yet already returned above with
+    // its own "waiting" line. Reaching here with no leg at all is the
+    // !configured() case, handled at the top.
     note_error("");
 }
 

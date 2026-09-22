@@ -208,13 +208,21 @@ struct Config {
                (!endpoint_host.empty() || !r2_account_id.empty());
     }
     // PAIRED (Phase 12): the box has a collector connection and an appliance
-    // token, so its bucket and credentials come from the collector rather than
-    // from typed fields. Deliberately NOT the same test as cloud_configured():
-    // a paired box has no bucket, endpoint or keys typed, so cloud_configured()
-    // is false for it and a gate built on that alone would refuse to build a
-    // session on exactly the boxes this feature exists for.
+    // token, so it can be monitored — and, if the operator has chosen Multisite
+    // Cloud as the storage provider, it reads storage through brokered
+    // credentials too.
+    //
+    // Deliberately NOT the same test as cloud_configured(): a paired box has no
+    // bucket, endpoint or keys typed, so cloud_configured() is false for it and
+    // a gate built on that alone would refuse to build a session on exactly the
+    // boxes this feature exists for.
+    //
+    // Note the pairing is REQUIRED for reporting but the provider choice is
+    // required for STORAGE. A box with typed keys and a pairing is monitored
+    // and reads with its typed keys; it does not silently switch.
     bool paired_configured() const {
-        return !reporter_url.empty() && !reporter_appliance_id.empty() &&
+        return storage_provider == "multisite_cloud" &&
+               !reporter_url.empty() && !reporter_appliance_id.empty() &&
                !reporter_token.empty();
     }
     bool lan_configured() const { return !lan_host.empty(); }
