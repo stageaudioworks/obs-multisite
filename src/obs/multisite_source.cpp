@@ -2286,12 +2286,18 @@ static void src_update(void* data, obs_data_t* s) {
 static void* src_create(obs_data_t* settings, obs_source_t* source) {
     auto* ctx = new SourceCtx();
     ctx->source = source;
+    // BEFORE the first update, and for good: if that update refuses (not
+    // paired yet, not configured yet) this is the only thing that lets the
+    // change that fixes it reach the source. See g_decoder_sources.
+    register_decoder_source(ctx);
     src_update(ctx, settings);
     return ctx;
 }
 
 static void src_destroy(void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
+    // First, so nothing can ask a source that is being torn down to reconfigure.
+    unregister_decoder_source(ctx);
     unregister_owner(ctx);
     {
         std::lock_guard<std::mutex> life(ctx->lifecycle_mtx);

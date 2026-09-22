@@ -179,6 +179,11 @@ void register_encoder_controls(EncoderControls* e);
 void unregister_encoder_controls(EncoderControls* e);
 void register_decoder_controls(DecoderControls* d);
 void unregister_decoder_controls(DecoderControls* d);
+// For the source's whole lifetime, running or not, so that a settings or
+// credential change can reach a source whose last update refused. See
+// g_decoder_sources in multisite_ui.cpp.
+void register_decoder_source(DecoderControls* d);
+void unregister_decoder_source(DecoderControls* d);
 
 void register_ui();
 void unregister_ui();

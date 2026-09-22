@@ -42,6 +42,27 @@ namespace {
 std::mutex g_mtx;
 EncoderControls* g_encoder = nullptr;
 std::vector<DecoderControls*> g_decoders;
+// Every decoder source that EXISTS, whether or not it is running.
+//
+// A different set from g_decoders, and the difference is the whole point.
+// g_decoders is "sources the controls act on" — play, hold, jog, the dock's
+// snapshot — and a source leaves it at the top of every src_update, rejoining
+// only if that update gets as far as starting its workers. That is right for
+// the controls: a source with no session has nothing to hold or seek.
+//
+// It was wrong for reconfigure, which went through the same list. A source
+// whose update REFUSED — "set to Multisite Cloud but not paired yet", or "not
+// configured yet" — returned before rejoining, so it was unreachable by the
+// very call that would have un-refused it. On every OBS start with Multisite
+// Cloud selected the source loads before the first credential fetch, refuses,
+// drops out, and the reporter's "asking live decoder sources to read through
+// it" 400 ms later goes to a list it is not in. The decoder stayed dead for
+// the life of the process. Same trap for a source added before storage was
+// set up and then configured in the dock: Apply could not reach it either.
+//
+// So reconfigure has its own reach, for the source's whole lifetime: joined in
+// src_create before the first update, left in src_destroy before teardown.
+std::vector<DecoderControls*> g_decoder_sources;
 
 // Hotkey ids, so they can be unregistered on unload.
 std::vector<obs_hotkey_id> g_hotkeys;
@@ -70,6 +91,18 @@ void unregister_decoder_controls(DecoderControls* d) {
     // otherwise survive and keep acting on a source that had gone.
     g_decoders.erase(std::remove(g_decoders.begin(), g_decoders.end(), d),
                      g_decoders.end());
+}
+
+void register_decoder_source(DecoderControls* d) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* e : g_decoder_sources) if (e == d) return;
+    g_decoder_sources.push_back(d);
+}
+void unregister_decoder_source(DecoderControls* d) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_decoder_sources.erase(
+        std::remove(g_decoder_sources.begin(), g_decoder_sources.end(), d),
+        g_decoder_sources.end());
 }
 
 bool encoder_stats(EncoderStats& out) {
@@ -109,8 +142,16 @@ void decoder_jump_live_all() {
 }
 
 void decoder_reconfigure_all() {
+    // Every source that EXISTS, not just the running ones — see
+    // g_decoder_sources. The one that most needs reconfiguring is precisely one
+    // whose last update refused and so is not running.
+    //
+    // Held across the calls on purpose: the lock is what stops src_destroy
+    // freeing a source mid-loop, and reconfigure() only asks libobs to re-run
+    // the update on its next tick (an atomic increment for a video source), so
+    // it neither blocks nor re-enters this lock.
     std::lock_guard<std::mutex> lk(g_mtx);
-    for (auto* d : g_decoders) d->reconfigure();
+    for (auto* d : g_decoder_sources) d->reconfigure();
 }
 
 void decoder_play_all() {
