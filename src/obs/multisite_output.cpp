@@ -949,8 +949,26 @@ static bool out_start(void* data) {
     obs_data_release(s);
 
     if (cloud_enabled) {
-        if (s3.bucket.empty() ||
-            (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
+        // PAIRED (Phase 12): the bucket, endpoint and keys come from the
+        // collector, so none of them are typed and this check would refuse a
+        // correctly configured machine. What it needs instead is a pairing with
+        // credentials — checked here so the failure names the real problem
+        // rather than reporting an empty bucket.
+        const std::string provider =
+            BroadcastController::instance().settings_copy().storage_provider;
+        auto identity = reporter_cloud_identity();
+        const bool paired_ok =
+            provider == "multisite_cloud" && identity && identity->paired() &&
+            identity->credentials().present();
+        if (provider == "multisite_cloud" && !paired_ok) {
+            mlog_error("storage is set to Multisite Cloud but this machine is "
+                       "not paired yet (or has no credentials) — pair it in "
+                       "the Cloud section, or choose a different provider");
+            return false;
+        }
+        if (!paired_ok &&
+            (s3.bucket.empty() ||
+             (s3.endpoint_host.empty() && s3.r2_account_id.empty()))) {
             mlog_error("storage not configured (need bucket + endpoint or account id)");
             return false;
         }

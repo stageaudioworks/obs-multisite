@@ -8,6 +8,7 @@
 #include "../core/model.h"
 #include "../core/s3_transport.h"
 #include "../core/session.h"   // peek_resumable(), SessionConfig defaults
+#include "reporter.h"          // the plugin's shared CloudIdentity (Phase 12)
 
 #include <util/platform.h>
 
@@ -289,7 +290,27 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     // Storage credentials only matter if cloud delivery is actually going to
     // use them — a LAN-only operator (cloud_enabled off, LAN on) should never
     // be forced to fill in a bucket they've deliberately chosen not to use.
-    if (m_cfg.cloud_enabled) {
+    //
+    // PAIRED (Phase 12) is the third case, and it needs a different check
+    // entirely: the bucket, endpoint and keys all come from the collector, so
+    // there are none typed to require. What it needs is a PAIRING — and this
+    // gate used to make pairing impossible to use, because every typed field it
+    // demands is empty by design on exactly the machines this feature is for.
+    if (m_cfg.cloud_enabled && m_cfg.storage_provider == "multisite_cloud") {
+        auto id = reporter_cloud_identity();
+        if (!id || !id->paired()) {
+            error = "This machine is set to store through Multisite Cloud but "
+                    "is not paired yet. Open the Cloud section above and press "
+                    "Connect, or choose a different storage provider.";
+            return false;
+        }
+        if (!id->credentials().present()) {
+            error = "Paired to Multisite Cloud, but the bucket and credentials "
+                    "have not arrived yet. If this persists, check that the "
+                    "machine can reach the Cloud service.";
+            return false;
+        }
+    } else if (m_cfg.cloud_enabled) {
         if (m_cfg.bucket.empty()) {
             error = "Bucket is required";
             return false;

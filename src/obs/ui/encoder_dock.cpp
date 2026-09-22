@@ -357,6 +357,22 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_testConnectionResult->setWordWrap(true);
     storePageLayout->addWidget(m_testConnectionResult);
     connect(m_testConnection, &QPushButton::clicked, this, [this] {
+        // Multisite Cloud has no typed host to probe — the bucket, endpoint and
+        // keys all come from the collector. Testing "the connection" would mean
+        // probing an empty endpoint, which fails with "could not resolve host
+        // name" and says nothing true. What CAN be reported is the pairing,
+        // which is the real connection this provider uses.
+        if (m_provider->currentData().toString() == "multisite_cloud") {
+            auto id = reporter_cloud_identity();
+            if (!id || !id->paired())
+                m_testConnectionResult->setText(tr_("Dock.TestCloudNotPaired"));
+            else if (!id->credentials().present())
+                m_testConnectionResult->setText(tr_("Dock.TestCloudNoCreds"));
+            else
+                m_testConnectionResult->setText(tr_("Dock.TestCloudOk")
+                    .arg(QString::fromStdString(id->credentials().bucket)));
+            return;
+        }
         const std::string bucket = m_bucket->text().trimmed().toStdString();
         if (bucket.empty()) {
             m_testConnectionResult->setText(tr_("Dock.TestConnectionNoBucket"));

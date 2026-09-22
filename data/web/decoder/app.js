@@ -552,11 +552,43 @@ async function loadStorageProviderChoices() {
 }
 
 function updateProviderFields() {
-  const info = storageProviders[$('#s-provider').value];
+  const key = $('#s-provider').value;
+  const info = storageProviders[key];
   if (!info) return;
-  $('#field-account').hidden  = !info.needs_account_id;
-  $('#field-endpoint').hidden = !info.needs_endpoint;
-  $('#field-region').hidden   = !info.needs_region;
+  // Multisite Cloud needs NO storage field — the collector supplies bucket,
+  // endpoint and credentials. Bucket, key id and secret have no needs_* flag,
+  // so they were never hidden until this.
+  const cloud = key === 'multisite_cloud';
+  const hide = (sel, h) => { const el = $(sel); if (el) el.hidden = h; };
+  hide('#field-bucket',     cloud);
+  hide('#field-keyid',      cloud);
+  hide('#field-secret',     cloud);
+  hide('#field-account',    cloud || !info.needs_account_id);
+  hide('#field-endpoint',   cloud || !info.needs_endpoint);
+  hide('#field-region',     cloud || !info.needs_region);
+  hide('#field-cloud-storage', !cloud);
+  if (cloud) refreshCloudStorageFacts();
+}
+
+// What this machine is actually reading through, when Multisite Cloud is the
+// provider — from the same status the page polls, so panel and machine cannot
+// describe different things.
+function refreshCloudStorageFacts() {
+  const el = $('#cloud-storage-facts');
+  if (!el) return;
+  const rows = [];
+  const add = (k, v) => rows.push('<dt>' + k + '</dt><dd>' + escapeHtml(String(v)) + '</dd>');
+  const s = status || {};
+  if (s.paired && s.paired_bucket) {
+    add('Bucket', s.paired_bucket);
+    add('Credentials', s.paired_stale ? 'last known \u2014 cannot be refreshed'
+                                      : 'current');
+  } else if (s.paired) {
+    add('Status', 'paired \u2014 waiting for credentials');
+  } else {
+    add('Status', 'not paired yet \u2014 press Connect in the Cloud section');
+  }
+  el.innerHTML = rows.join('');
 }
 $('#s-provider').addEventListener('change', updateProviderFields);
 

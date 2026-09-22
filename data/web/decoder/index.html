@@ -120,15 +120,26 @@
       <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false"
              placeholder="s3.eu-west-2.amazonaws.com">
     </div>
-    <div class="field">
+    <!-- Multisite Cloud supplies the bucket, endpoint and credentials from the
+         collector, so none of the fields below apply. Hidden as a group when it
+         is selected, with this read-only summary in their place. -->
+    <div class="field" id="field-cloud-storage" hidden>
+      <dl class="facts" id="cloud-storage-facts"></dl>
+      <p class="hint">
+        Storage for this machine comes from Multisite Cloud. There is nothing to
+        type — the bucket and its credentials are supplied when the machine is
+        paired, in the Cloud section.
+      </p>
+    </div>
+    <div class="field" id="field-bucket">
       <label for="s-bucket">Bucket</label>
       <input id="s-bucket" name="bucket" type="text" spellcheck="false">
     </div>
-    <div class="field">
+    <div class="field" id="field-keyid">
       <label for="s-keyid">Access key id</label>
       <input id="s-keyid" name="access_key_id" type="text" spellcheck="false">
     </div>
-    <div class="field">
+    <div class="field" id="field-secret">
       <label for="s-secret">Secret access key</label>
       <input id="s-secret" name="secret_access_key" type="password" spellcheck="false">
       <p class="hint">Left as the dots, it is not changed.</p>

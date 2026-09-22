@@ -8,6 +8,7 @@
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
 #include "../plugin_role.h"
+#include "../reporter.h"   // the plugin's shared CloudIdentity (Phase 12)
 #include "core/storage_providers.h"
 
 #include <obs-module.h>
@@ -242,6 +243,21 @@ std::string encoder_status_json() {
     j["bucket"]     = cfg.bucket;
     j["configured"] = !cfg.bucket.empty() &&
                       (!cfg.endpoint_host.empty() || !cfg.r2_account_id.empty());
+
+    // Paired storage (Phase 12), so the page can say what this machine is
+    // really storing through — and so a Multisite Cloud selection shows the
+    // broker's bucket rather than the (absent) typed one. Read from the shared
+    // identity, the same seam the transport uses, so the two cannot disagree.
+    j["storage_provider"] = cfg.storage_provider;
+    {
+        auto id = reporter_cloud_identity();
+        const bool paired = id && id->paired();
+        j["paired"] = paired;
+        if (paired && id->credentials().present()) {
+            j["paired_bucket"] = id->credentials().bucket;
+            j["paired_stale"]  = id->credentials().from_last_good;
+        }
+    }
     j["video_encoder_id"]   = cfg.video_encoder_id;
     j["default_event_name"] = default_event_name();
     // The other half of the plugin, when this machine has one. A page linking to

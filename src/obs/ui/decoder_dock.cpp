@@ -1105,10 +1105,18 @@ void DecoderDock::updateProviderFields() {
     auto provider = multisite::provider_from_key(
         m_provider->currentData().toString().toStdString());
     const auto& info = multisite::provider_info(provider);
+    // Multisite Cloud needs NO storage field — the collector supplies bucket,
+    // endpoint and credentials — so every typed field is hidden. Bucket, key
+    // and secret have no needs_* flag (every typed-key provider wants them), so
+    // they were never hidden at all until this, exactly as on the encoder side.
+    const bool cloud = (provider == multisite::StorageProvider::MultisiteCloud);
     if (auto* form = qobject_cast<QFormLayout*>(m_accountId->parentWidget()->layout())) {
-        form->setRowVisible(m_accountId, info.needs_account_id);
-        form->setRowVisible(m_endpoint,  info.needs_endpoint);
-        form->setRowVisible(m_region,    info.needs_region);
+        form->setRowVisible(m_accountId, !cloud && info.needs_account_id);
+        form->setRowVisible(m_endpoint,  !cloud && info.needs_endpoint);
+        form->setRowVisible(m_region,    !cloud && info.needs_region);
+        form->setRowVisible(m_bucket,    !cloud);
+        form->setRowVisible(m_keyId,     !cloud);
+        form->setRowVisible(m_secret,    !cloud);
     }
 }
 

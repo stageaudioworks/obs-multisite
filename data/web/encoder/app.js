@@ -274,12 +274,49 @@ async function loadStorageProviderChoices() {
 // for R2, a region for AWS/Backblaze/Wasabi, both endpoint and region for
 // Custom \u2014 the same rule the Qt docks, the appliance and the relay apply to
 // the identical dropdown.
+//
+// Multisite Cloud needs NO field: the collector supplies bucket, endpoint and
+// credentials. Bucket, key id and secret have no needs_* flag (every typed-key
+// provider wants them), so they were never hidden until this \u2014 which is why
+// selecting Multisite Cloud still showed three editable boxes for values the
+// machine would never read.
 function updateProviderFields() {
-  const info = storageProviders[$('#s-provider').value];
+  const key = $('#s-provider').value;
+  const info = storageProviders[key];
   if (!info) return;
-  $('#field-account').hidden  = !info.needs_account_id;
-  $('#field-endpoint').hidden = !info.needs_endpoint;
-  $('#field-region').hidden   = !info.needs_region;
+  const cloud = key === 'multisite_cloud';
+  const hide = (sel, h) => { const el = $(sel); if (el) el.hidden = h; };
+  hide('#field-bucket',     cloud);
+  hide('#field-keyid',      cloud);
+  hide('#field-secret',     cloud);
+  hide('#field-account',    cloud || !info.needs_account_id);
+  hide('#field-endpoint',   cloud || !info.needs_endpoint);
+  hide('#field-region',     cloud || !info.needs_region);
+  hide('#field-cloud-storage', !cloud);
+  if (cloud) refreshCloudStorageFacts();
+}
+
+// What this machine is actually storing through, when Multisite Cloud is the
+// provider. Read from the same status the page already polls, so the panel and
+// the machine cannot describe different things.
+function refreshCloudStorageFacts() {
+  const el = $('#cloud-storage-facts');
+  if (!el) return;
+  const rows = [];
+  const add = (k, v) => rows.push(
+    '<dt>' + k + '</dt><dd>' + String(v).replace(/[&<>"]/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])) + '</dd>');
+  const s = status || {};
+  if (s.paired && s.paired_bucket) {
+    add('Bucket', s.paired_bucket);
+    add('Credentials', s.paired_stale ? 'last known \u2014 cannot be refreshed'
+                                      : 'current');
+  } else if (s.paired) {
+    add('Status', 'paired \u2014 waiting for credentials');
+  } else {
+    add('Status', 'not paired yet \u2014 press Connect in the Cloud section');
+  }
+  el.innerHTML = rows.join('');
 }
 $('#s-provider').addEventListener('change', updateProviderFields);
 
