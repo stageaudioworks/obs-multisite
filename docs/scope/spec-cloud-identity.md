@@ -203,10 +203,19 @@ survives a colourblind operator and a photograph of the screen.
    and storage both read it.
 6. Disconnect is a real button that offers the underlying bucket details.
 
-## Open questions (must be answered before implementation)
+## Open questions — ANSWERED 2026-09-22
 
-1. **Lapsed subscription** — what the collector owes a device, given the
-   answer must not be "the event stops". This shapes the 403 and expiry paths.
-2. **Decoder pairing: independent or inherited from the encoder?** This
-   decides whether identity is per-device or per-room and therefore the
-   module's whole shape. It is the first thing to settle.
+1. **Lapsed subscription — decided.** The last-good credentials **run to their
+   expiry and any live event continues to the end** on them. After expiry, a
+   **new** event refuses to go live, with the reason stated, rather than
+   starting on expired keys. Nothing ever cuts an event that is already on air.
+   This fixes the shape of the 403 path: 403 stops the *device* from fetching
+   again (no retry) but does **not** tear down a running event — the last-good
+   set covers it until expiry, exactly as an unreachable collector does.
+2. **Decoder pairing: independent, per-device — decided.** A campus pairs its
+   own device with its own code, using the same `Pairing` flow the encoder
+   uses. Identity is a property of the device, not of a room. Consequence:
+   `cloud-identity` needs no per-room indirection, and the room a device writes
+   under stays `room-identity`'s separate concern (the capability map's fourth
+   module). Inheriting a pairing from the encoder across sites is explicitly
+   **not** built and is not a goal of this module.
