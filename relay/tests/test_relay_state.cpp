@@ -6,7 +6,7 @@
 // particular exists because of a measured fact — ffmpeg blocks silently on a
 // stalled pipe and will never tell us — so the machine has to notice on its
 // own, and that noticing is what these tests pin down.
-#include "../src/destination.h"
+#include "relay_send.h"
 #include "../src/relay_state.h"
 
 #include <cstdio>

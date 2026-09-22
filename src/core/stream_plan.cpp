@@ -3,7 +3,7 @@
 
 #include <algorithm>
 
-namespace multisite_relay {
+namespace multisite {
 
 using multisite::AudioTrack;
 using multisite::Manifest;
@@ -406,4 +406,4 @@ StreamPlan plan_stream(const Manifest& manifest,
     return p;
 }
 
-} // namespace multisite_relay
+} // namespace multisite

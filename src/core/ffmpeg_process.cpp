@@ -14,7 +14,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace multisite_relay {
+namespace multisite {
 
 bool ffmpeg_supports_srt() {
     // Computed on first use and then never again. `-protocols` lists what the
@@ -215,4 +215,4 @@ std::string FfmpegProcess::last_error_line() const {
     return m_last_error_line;
 }
 
-} // namespace multisite_relay
+} // namespace multisite

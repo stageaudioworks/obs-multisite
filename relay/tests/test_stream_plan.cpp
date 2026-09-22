@@ -5,7 +5,7 @@
 // healthy while putting a mic ISO, a click track, or a codec the destination
 // cannot decode out to the public. Every refusal here is a stream that would
 // otherwise have gone out wrong with no error anywhere.
-#include "../src/stream_plan.h"
+#include "relay_send.h"
 
 #include <cstdio>
 #include <string>

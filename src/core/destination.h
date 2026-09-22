@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <string>
 
-namespace multisite_relay {
+namespace multisite {
 
 // How the operator picked the audio. Selecting by LABEL is what the UI does —
 // "Main mix", "Sermon ISO" — because a volunteer must never be asked for a
@@ -123,4 +123,4 @@ std::string validate(const Destination& d);
 // must not be interrupted because something unrelated to it was edited.
 bool affects_stream(const Destination& a, const Destination& b);
 
-} // namespace multisite_relay
+} // namespace multisite

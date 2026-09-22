@@ -13,8 +13,7 @@
 // FfmpegProcess. This is the loop that connects them to the bucket, plus the
 // bookkeeping the operator's screen needs.
 //
-#include "destination.h"
-#include "ffmpeg_process.h"
+#include "relay_send.h"
 #include "relay_state.h"
 #include "room_feeder.h"
 

@@ -52,7 +52,7 @@
 #include <string>
 #include <vector>
 
-namespace multisite_relay {
+namespace multisite {
 
 struct StreamPlan {
     bool ok = false;
@@ -127,4 +127,4 @@ std::vector<std::string> redact(const std::vector<std::string>& args,
 // and that line is what reaches the operator's screen and the container log.
 std::string redact(const std::string& text, const Destination& d);
 
-} // namespace multisite_relay
+} // namespace multisite

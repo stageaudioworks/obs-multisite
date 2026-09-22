@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace multisite_relay {
+namespace multisite {
 
 namespace {
 
@@ -231,4 +231,4 @@ std::string validate(const Destination& d) {
     return {};
 }
 
-} // namespace multisite_relay
+} // namespace multisite

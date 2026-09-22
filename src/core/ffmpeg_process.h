@@ -21,7 +21,7 @@
 #include <thread>
 #include <vector>
 
-namespace multisite_relay {
+namespace multisite {
 
 // Whether the ffmpeg on this machine was built with SRT support.
 //
@@ -91,4 +91,4 @@ private:
     static constexpr size_t kKeepLines = 40;
 };
 
-} // namespace multisite_relay
+} // namespace multisite

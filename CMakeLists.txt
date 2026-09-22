@@ -96,11 +96,26 @@ add_library(multisite_core STATIC
     # whether the second copy is a copy.
     src/core/mirror_verify.cpp
     src/core/lan_object_server.cpp
+    # The straight-copy send path — the destination model and the ffmpeg plan —
+    # lifted out of the relay so the appliance encoder can reuse it rather than
+    # keep a second copy. The relay is a consumer of the core, never the other
+    # way round, which its own CMake has always said. (The ffmpeg child itself
+    # is added below, guarded: it is POSIX-only.)
+    src/core/destination.cpp
+    src/core/stream_plan.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
     # remote-control pages. Portable rather than POSIX-only, because a plugin
     # has to build on Windows.
     src/core/http_server.cpp)
+# The ffmpeg child is a POSIX child-process wrapper (fork, poll, wait) with no
+# Windows branch, and nothing on Windows uses it: the relay and the headless
+# encoder are both non-Windows, and the plugin has its own OBS-side send path.
+# So it compiles only where it can be used, which keeps the rest of the core —
+# the part the plugin does link on Windows — portable.
+if(NOT WIN32)
+    target_sources(multisite_core PRIVATE src/core/ffmpeg_process.cpp)
+endif()
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
 # OBS plugin module.

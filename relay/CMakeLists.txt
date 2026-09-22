@@ -16,9 +16,9 @@ endif()
 # The pure decision-making, with no I/O in it at all: what may be sent onward,
 # and one destination's lifecycle. Split out so the tests link against this
 # alone and cannot accidentally reach a bucket or spawn a process.
+# The send path (stream_plan, destination) moved to the core so the appliance
+# encoder can reuse it; relay_logic is now just the relay's own decision-making.
 add_library(relay_logic STATIC
-    src/stream_plan.cpp
-    src/destination.cpp
     src/relay_state.cpp)
 target_include_directories(relay_logic PUBLIC src)
 target_link_libraries(relay_logic PUBLIC multisite_core)
@@ -31,7 +31,6 @@ add_executable(multisite-relay
     src/auth.cpp
     src/relay_session.cpp
     src/room_feeder.cpp
-    src/ffmpeg_process.cpp
     src/log.cpp
     # The shared HTTP server, from the core: dependency-free, with a
     # static-file root, which is exactly what this needs.

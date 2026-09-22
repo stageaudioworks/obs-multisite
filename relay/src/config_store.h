@@ -16,7 +16,7 @@
 // different matter and is encrypted, because there the secret outlives the
 // session and grants far more than one broadcast.
 //
-#include "destination.h"
+#include "relay_send.h"
 #include "s3_transport.h"
 
 #include <cstdint>
