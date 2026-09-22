@@ -120,70 +120,85 @@ permanently:
 is the entry's own previously-unexplained half — *"22 of 47 drops were audio,
 which should never have jammed on capacity"* — now reproduced on demand.
 
-**Cause of the stall: the deliver loop STOPS RUNNING. Confirmed by measurement
-2026-09-22, and it is not the queue bound.**
+**Cause: NOT the deliver loop stopping. A thread dump on 2026-09-22 refutes
+that; the real anomaly is a 6677 ms queued span.**
 
-The measurement (commit `0e160c9`, measurement-only) reproduced the stall on a
-Mac and answered the question. Verbatim, the decisive pair:
+An earlier reading of these logs concluded the deliver loop thread was
+descheduled for ~5.9 s. **That conclusion is withdrawn** — it was inference
+from the wait duration alone, and the thread dump below contradicts it. The
+sequence is kept because it shows why the inference was wrong.
+
+What the logs first showed:
 
 ```
 07:21:41.468  parked 5324 ms into a due-wait for a audio frame timestamped 984 ms in the future
 07:21:42.057  deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now, audio)
 ```
 
-The second line is logged **by the deliver loop after the wait completed**, and
-it is the one to trust. What it says: the loop entered its due-wait with a frame
-**395 ms** away, and **5913 ms later** the wait ended. The wait is a `while` loop
-sleeping in ≤50 ms slices, re-reading the clock each time — for a fixed
-`item.timestamp`. Nothing in it can legitimately take 5.9 s for a 395 ms target.
+The second line is logged by the loop itself after the wait returned: it
+entered with the frame 395 ms away and the wait took 5913 ms. That is longer
+than the ≤50 ms-slice wait can account for, so "the thread must not be running"
+was the inference.
 
-**So the deliver loop thread was not scheduled for ~5.9 s.** It did not sleep
-toward a target; it did not run. While it did not run it popped nothing, so the
-queue sat at its cap, `enqueue_frame` dropped every audio frame after its 250 ms
-bound, and `frames_out` froze. Everything the earlier logs showed follows from
-that one fact.
+**`sample OBS 3` during a stall shows the opposite.** 1126 of 1135 samples of
+`deliver_loop` are inside `std::this_thread::sleep_for` — the due-wait, where
+it should be — and it appears in `obs_source_output_video` in the rest:
 
-**This retires two suspicions, both recorded in the older text below:**
-- the queue bound is **not** the cause. The `1003 ms against a 1000 ms bound`
-  reading is a *symptom*: the span is pinned at the cap only because the loop
-  that would drain it is not running. The count-backstop theory was wrong.
-- "a timestamp computed far in the future" is **not** the cause. The waited-for
-  timestamp was 395 ms out. That hypothesis, which the older text below proposes,
-  is refuted by this reading.
+```
+1135 multisite_obs::deliver_loop(...)
+ 1126   std::this_thread::sleep_for(...)
+  1126     nanosleep / __semwait_signal
+    6   obs_source_output_video(...)
+    1   obs_source_output_audio(...)
+```
 
-**A diagnostic that lied, again, and must be read with care:** the `parked N ms
-into a due-wait` line is emitted from `enqueue_frame` on *another thread*, which
-samples `dl_in_wait` and `dl_wait_start_ns` non-atomically. It reported
-`timestamped 984 ms` / `3009 ms` / `5039 ms in the future` on successive lines —
-values that *disagree with each other and with the +395 ms the loop itself
-measured*. Treat the loop's own `deliver loop waited …` line as authoritative;
-the cross-thread one is indicative only. (Same lesson as the `bound is 0` bug.)
+The loop is alive, sleeping correctly, and delivering. It is **not** frozen and
+**not** descheduled. The Mac is simply busy — 11 `av:h264:df0..df10` decode
+threads and a graphics thread alongside — so a 50 ms sleep is overshot, but not
+by 5.9 s.
 
-**What is NOT yet known: why the thread is descheduled.** Candidates, none
-tested: CPU contention on the Mac (OBS running encoders/muxers alongside);
-the thread blocked inside `sleep_for` beyond its slice; a priority inversion;
-or contention on a lock the loop takes elsewhere. This is the *same shape* as
-BUGS #0 (a thread parked, its worker never progressing) and should be read
-alongside it.
+**The anomaly to chase is the queued span, not the loop.** At
+`07:27:58.808` the drop line reads *"this stream held 6677 ms of programme"* for
+**audio** — where it had read 1003 ms in every other line. A 6.7 s audio span is
+11× a normal frame's worth and cannot come from a queue of ~48 frames at
+20.9 ms. **Frames are entering the queue with mutually inconsistent timestamps**,
+or the span scan is seeing frames it should not. That is a timestamp/queue
+question, upstream of delivery, and it is the first thing to measure next.
 
-**Next step:** on the next repro, capture the thread's state while it is stalled
-— `sample <obs pid> 10` on macOS, or `lldb -p <pid>` and `thread backtrace all`
-— and look at whether the deliver thread is running or parked inside
-`sleep_for`, and what else is on the CPU at that moment. Do not change any
-arithmetic until that is seen.
+**Two suspicions retired on the way:**
+- the queue bound is not the cause, though not for the reason first given;
+- "a far-future awaited timestamp" is not the cause — the loop's own line read
+  +395 ms.
+
+**Diagnostics that lie, twice over — read with care.** Two lines were added to
+settle this and both misled:
+1. `parked N ms into a due-wait … timestamped M ms in the future`, emitted from
+   `enqueue_frame` on another thread, samples `dl_in_wait` / `dl_wait_start_ns`
+   non-atomically; its `M` values (421/400/5039/3009/984 ms) disagree with the
+   loop's own +395 ms.
+2. The loop's own `deliver loop waited …` line is real but was read as proof the
+   thread stopped; the dump shows it did not.
+
+The earlier `bound is 0` bug is the third. A measurement is code and earns no
+more trust than the thing it measures.
+
+**Next step:** instrument the *timestamp* side, not the loop — log, at enqueue,
+each frame's pts and its computed `timestamp` for a few hundred frames around a
+resume, and find the ones that disagree by seconds. Do not touch the loop's
+wait, the queue bound, or the anchor.
 
 **DO NOT:**
 - **Re-apply option (a)** (`resume()` seeking back to `last_out_pts_ns`). Tried,
   measured, reverted. Do not try it again.
 - **Re-derive the anchor.** There is ONE anchor, correctly placed. Read
   `playout_clock.h` before touching any of this arithmetic.
-- **Touch the queue bound.** The reading above exonerates it. The older text
-  below points at it; that text predates the measurement and is wrong on this
-  point.
+- **Touch the queue bound.** Retired as a cause, twice argued.
+- **Conclude "the loop stopped" without a thread dump.** It did not, and the
+  inference cost a commit.
 
-**Files:** `src/obs/multisite_source.cpp` (`enqueue_frame`, `deliver_loop`,
-`queued_span_ns`, `resume`), `src/core/playout_timeline.h`,
-`src/core/playout_clock.h`.
+**Files:** `src/obs/multisite_source.cpp` (`enqueue_frame`, `deliver_video`,
+`deliver_audio`, `deliver_loop`, `queued_span_ns`, `resume`),
+`src/core/playout_timeline.h`, `src/core/playout_clock.h`.
 
 **Archive:** `docs/bugs/02-hold-resume-skips.md` — **read this before changing
 timing code.** It carries the measurements, the four rejected fixes, and the

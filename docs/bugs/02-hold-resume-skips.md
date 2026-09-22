@@ -682,3 +682,73 @@ lldb -p <obs pid> -o "thread backtrace all" -o detach -o quit
 
 Look for: is the deliver thread running or parked inside `sleep_for`, and what
 else is on the CPU at that moment. **No arithmetic changes until that is seen.**
+
+---
+
+## 2026-09-22 (later) — the thread dump REFUTES "the loop stops running"
+
+The entry above concluded the deliver loop was descheduled for ~5.9 s. A
+`sample OBS 3` taken during a stall (pid 40288, macOS 27.0, OBS 32.2.2)
+contradicts that, and the conclusion is withdrawn.
+
+### What the sample shows
+
+```
+1135 Thread_3064850
+  + 1135 multisite_obs::deliver_loop(...)
+  +   1126 std::this_thread::sleep_for(...)          <- 1126 of 1135 samples
+  +      1126 nanosleep / __semwait_signal
+  +      6 obs_source_output_video(...)
+  +      2 multisite_obs::deliver_loop(...) + 600,644
+  +      1 obs_source_output_audio(...)
+```
+
+**1126/1135 samples are inside `sleep_for`** — the due-wait, which is where a
+healthy deliver loop spends its time — and it appears in
+`obs_source_output_video` in the remainder. The loop is alive, sleeping
+correctly and handing frames over. It is not frozen and not descheduled.
+
+The machine is simply busy: the same sample lists **11 `av:h264:df0..df10`
+software-decode threads**, a graphics thread, and a Qt main thread doing
+`_platform_memmove` in paint. A 50 ms `sleep_for` gets overshot under that load
+— but not by 5.9 s, and the overshoot theory was never needed to explain the
+numbers once the span is looked at instead.
+
+### The anomaly that is actually there
+
+```
+07:27:58.808  dropped a audio frame ... this stream held 6656 ms of programme (bound 1000 ms)
+```
+
+Audio's queued span is **6656 ms** where every other line reads 1003 ms. A
+6.7 s span over a ~48-frame audio queue cannot come from real frame times
+(≈20.9 ms each). Either frames are entering the queue with mutually
+inconsistent `timestamp` values, or `queued_span_ns` is including frames it
+should not — a seek's stale entries, a second media epoch's frames.
+
+That is upstream of delivery and is the thing to measure. The deliver loop, the
+queue bound and the anchor are all exonerated by this sample.
+
+### Why the wrong inference was made, kept because it is the lesson
+
+The `deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from
+now)` line is real. It was read as "the wait cannot take 5913 ms for a 395 ms
+target, therefore the thread did not run". The first half is true; the second
+does not follow — a busy scheduler plus a span anomaly the reading did not look
+at produce it without any descheduling. **A thread dump was available the whole
+time and was asked for twice in the entry; taking it changed the answer.** Do
+that first next time, not after the inference is written into a commit.
+
+### Diagnostics that misled, three in total
+
+1. `bound is 0` — a missing printf argument (fixed).
+2. `parked N ms into a due-wait … timestamped M ms in the future` — a
+   cross-thread non-atomic sample; its M values disagree with each other and
+   with the loop's own +395 ms.
+3. `deliver loop waited …` — correct, but read as proof of a stopped thread.
+
+### Next measurement
+
+At `enqueue_frame`, log each frame's pts and its computed `timestamp` for a few
+hundred frames spanning a resume, and find the ones that disagree by seconds.
+No change to the wait, the bound, or the anchor until those are seen.
