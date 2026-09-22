@@ -437,9 +437,14 @@ if(CURL_FOUND)
     # POSIX only, like the appliance and test_s3_cancel: it asks the OS for a
     # hostname and a pid, and there is no Windows machine this project runs a
     # collector probe on. Gated rather than ported, and gated HERE rather than
-    # behind an #ifdef, so the Windows plugin build never sees the file — which
-    # it did, and failed on, the first time this was committed.
-    if(NOT WIN32)
+    # behind an #ifdef, so the Windows plugin build never sees the file.
+    #
+    # NOT when only the relay is being built. The relay's container context is
+    # trimmed (see .dockerignore) and does not carry scripts/, so asking CMake
+    # for this source there fails the configure outright — which is how it
+    # broke the relay image the first time this was committed. The probe is for
+    # a developer at a console, and that is not what the relay image is.
+    if(NOT WIN32 AND (BUILD_PLAYER OR BUILD_OBS_PLUGIN))
         add_executable(probe_credentials scripts/probe_credentials.cpp)
         target_link_libraries(probe_credentials PRIVATE multisite_s3)
     endif()
