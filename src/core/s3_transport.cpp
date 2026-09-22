@@ -101,6 +101,20 @@ static std::string clean_segment(std::string v) {
 struct S3Transport::Impl {
     S3Config cfg;
 
+    // Add the session token to a request's signed headers, when this transport
+    // holds temporary credentials. Called at EVERY signing site, which is why it
+    // is a function rather than a line copied five times: a token missing from
+    // one of them is a request that fails only when a brokered device happens
+    // to use that verb, and that is the kind of gap nothing catches by reading.
+    //
+    // Signed rather than merely sent: X-Amz-Security-Token is part of the
+    // credential, so SigV4 must cover it — the signer signs whatever it is
+    // given and lists it in SignedHeaders.
+    void add_session_token(std::map<std::string, std::string>& extra) const {
+        if (!cfg.session_token.empty())
+            extra["X-Amz-Security-Token"] = cfg.session_token;
+    }
+
     // Set by cancel_pending(), read by curl_abort_cb on whichever thread is
     // mid-request. One instance, one direction: never cleared, because the
     // transport that gets cancelled is the one about to be discarded, not
@@ -191,6 +205,7 @@ struct S3Transport::Impl {
         std::string tg = tag_header(tags);
         if (!tg.empty()) extra["x-amz-tagging"] = tg;
         extra["Cache-Control"] = "max-age=604800";
+        add_session_token(extra);
 
         SigV4Signer signer(cfg.access_key_id, cfg.secret_access_key,
                            cfg.region, "s3");
@@ -269,7 +284,9 @@ struct S3Transport::Impl {
         if (!curl) { res.error = "curl init"; return res; }
         std::string url = url_for(key);
         SigV4Signer signer(cfg.access_key_id, cfg.secret_access_key, cfg.region, "s3");
-        auto sr = signer.sign("GET", url, {}, {});
+        std::map<std::string, std::string> extra;
+        add_session_token(extra);
+        auto sr = signer.sign("GET", url, {}, extra);
         struct curl_slist* h = nullptr;
         for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
         HeaderCtx hc;
@@ -323,7 +340,9 @@ struct S3Transport::Impl {
         std::string url = url_for(key);
         SigV4Signer signer(cfg.access_key_id, cfg.secret_access_key,
                            cfg.region, "s3");
-        auto sr = signer.sign("DELETE", url, {}, {});
+        std::map<std::string, std::string> extra;
+        add_session_token(extra);
+        auto sr = signer.sign("DELETE", url, {}, extra);
         struct curl_slist* h = nullptr;
         for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
 
@@ -498,7 +517,9 @@ ListResult S3Transport::list(const std::string& prefix,
 
     SigV4Signer signer(d->cfg.access_key_id, d->cfg.secret_access_key,
                        d->cfg.region, "s3");
-    auto sr = signer.sign("GET", url, {}, {});
+    std::map<std::string, std::string> extra;
+    d->add_session_token(extra);
+    auto sr = signer.sign("GET", url, {}, extra);
 
     struct curl_slist* h = nullptr;
     for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
@@ -565,7 +586,9 @@ int64_t S3Transport::object_size(const std::string& key) {
     std::string url = d->url_for(key);
     SigV4Signer signer(d->cfg.access_key_id, d->cfg.secret_access_key,
                        d->cfg.region, "s3");
-    auto sr = signer.sign("HEAD", url, {}, {});
+    std::map<std::string, std::string> extra;
+    d->add_session_token(extra);
+    auto sr = signer.sign("HEAD", url, {}, extra);
     struct curl_slist* h = nullptr;
     for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
 

@@ -395,7 +395,12 @@ if(CURL_FOUND)
         # paths in one place, so the hosts cannot drift apart on them, and one
         # POST/GET bounded the way a monitor must be. Grouped here for the same
         # libcurl reason as the two above.
-        src/core/collector_client.cpp)
+        src/core/collector_client.cpp
+        # The Transport a PAIRED device reads and writes through (Phase 12):
+        # bucket/endpoint/credentials come from CloudIdentity, the session token
+        # rides as X-Amz-Security-Token, and the device's role is honoured.
+        # Grouped here because it wraps S3Transport, which needs libcurl.
+        src/core/cloud_storage.cpp)
     target_include_directories(multisite_s3 PUBLIC src src/core)
     target_link_libraries(multisite_s3 PUBLIC multisite_core CURL::libcurl)
     set_target_properties(multisite_s3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -416,6 +421,13 @@ if(CURL_FOUND)
     add_executable(test_collector_client tests/test_collector_client.cpp)
     target_link_libraries(test_collector_client PRIVATE multisite_s3)
     add_test(NAME collector_client COMMAND test_collector_client)
+
+    # The paired device's Transport: the role is honoured, there is no fallback
+    # to a key, and a device with no credentials says so. The parts testable
+    # without a bucket are exactly the parts that encode the rules.
+    add_executable(test_cloud_storage tests/test_cloud_storage.cpp)
+    target_link_libraries(test_cloud_storage PRIVATE multisite_s3)
+    add_test(NAME cloud_storage COMMAND test_cloud_storage)
 
     # Proves cancel_pending() actually aborts a stalled request quickly rather
     # than trusting that wiring curl's progress callback was enough. POSIX

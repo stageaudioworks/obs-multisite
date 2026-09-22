@@ -40,6 +40,16 @@ struct S3Config {
     bool        use_https = true;
     int         connect_timeout_ms = 5000;
     int         request_timeout_ms = 30000;  // segments can be large
+    // Temporary credentials (STS / a broker) carry a session token that must be
+    // sent as X-Amz-Security-Token AND included in SigV4's SignedHeaders — it is
+    // part of the credential, not a stray header. Empty for a long-lived key
+    // pair, which is the ordinary case and sends nothing.
+    //
+    // The token travels through this struct rather than as a constructor
+    // argument because it changes with every credential refresh while the
+    // endpoint and bucket do not; a caller holding an S3Transport open across a
+    // refresh sets it before the next request.
+    std::string session_token;
 };
 
 class S3Transport : public Transport {
