@@ -575,3 +575,110 @@ it is that **the plugin build compiles with no warning flags at all**:
 enabled for `src/obs/`. The core build has its flags; the plugin target does
 not. That is the class-level hole, and it is why a format bug could sit in the
 diagnostic the investigation rests on.
+
+---
+
+## 2026-09-22 — the cause: the deliver loop STOPS RUNNING (measured)
+
+The instrumented build (commit `0e160c9`, measurement-only) reproduced the stall
+on a Mac. The reading is decisive and it refutes the hypothesis this archive
+previously recorded.
+
+### What was measured
+
+```
+07:21:31.539  queue at resume held video 22 frame(s)/700 ms, audio 48 frame(s)/1003 ms (bound 1000 ms)
+07:21:31.539  RESUMED ... held from 529.567s
+07:21:31.539  playout anchored on first video frame (pts 529.600s)
+07:21:31.818  dropped a audio frame ... loop parked in due-wait, last popped 8 ms ago
+07:21:31.818    — parked 8 ms into a due-wait for a audio frame timestamped 421 ms in the future
+07:21:32.790  first 1s after resume — video 27 frame(s) ... min lead 395 ms; audio 26 frame(s) ... min lead 395 ms
+07:21:35.372  dropped a audio frame ... loop parked in due-wait, last popped 17 ms ago
+07:21:35.373    — parked 17 ms into a due-wait for a audio frame timestamped 400 ms in the future
+07:21:37.414  dropped a audio frame ... loop parked in due-wait, last popped 1270 ms ago
+07:21:37.414    — parked 1270 ms into a due-wait for a audio frame timestamped 5039 ms in the future
+07:21:39.443    — parked 3299 ms into a due-wait for a audio frame timestamped 3009 ms in the future
+07:21:41.468    — parked 5324 ms into a due-wait for a audio frame timestamped 984 ms in the future
+07:21:42.057  deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now, audio)
+```
+
+### The decisive line, and why
+
+`deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now,
+audio)` is logged **by the deliver loop itself, immediately after the wait
+returns**. It says the loop entered the wait with the frame **395 ms** away and
+the wait took **5913 ms**.
+
+The wait is:
+
+```c
+while (ctx->running.load()) {
+    const uint64_t now = os_gettime_ns();
+    if (item.timestamp <= now + kMaxDeliveryLeadNs) break;
+    uint64_t wait_ns = item.timestamp - now - kMaxDeliveryLeadNs;
+    if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;   // ≤ 50 ms slices
+    std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
+}
+```
+
+`item.timestamp` is a fixed value — it is computed once at enqueue and never
+rewritten. A loop that re-reads the clock and sleeps ≤50 ms at a time cannot
+take 5.9 s for a target 395 ms away. **The only explanation is that the thread
+did not run.** It was descheduled (or blocked inside `sleep_for`) for the whole
+interval.
+
+While it did not run it popped nothing, so the queue stayed at its cap,
+`enqueue_frame` timed out after 250 ms and dropped every audio frame, and
+`frames_out` froze. Every earlier observation follows from this one fact.
+
+### Two hypotheses this refutes
+
+1. **The queue bound.** The `1003 ms against a 1000 ms bound` reading is a
+   *symptom*: the span sits at the cap because the loop that would drain it is
+   not running, not because the bound is 3 ms too small. The count-backstop
+   theory (audio hits 48 frames before its span reaches 1000 ms) is wrong — the
+   span reached 1003 ms precisely because nothing was draining it.
+2. **A far-future timestamp.** The waited-for timestamp was 395 ms out. The
+   `parked N ms into a due-wait ... timestamped M ms in the future` lines
+   suggested otherwise, and are misleading: see below.
+
+### A diagnostic that lies, and must be read with care
+
+The `parked N ms into a due-wait ... timestamped M ms in the future` line is
+emitted from `enqueue_frame`, on a *different thread*, which reads `dl_in_wait`
+and `dl_wait_start_ns` non-atomically. Its `M` values on successive lines
+(`421`, `400`, `5039`, `3009`, `984` ms) disagree with each other and with the
+`+395 ms` the loop itself measured. The cross-thread sample is indicative only;
+**the loop's own `deliver loop waited …` line is authoritative.**
+
+This is the second time in two days a self-authored diagnostic was the thing
+that misled: the earlier one printed `bound 0` from a missing printf argument.
+Both were caught, but the pattern is worth stating — a measurement added to
+settle a question is itself code, and gets no more trust than the thing it
+measures.
+
+### What is NOT known
+
+**Why the thread is descheduled.** Candidates, none tested:
+- CPU contention on the Mac (OBS running encoders and muxers alongside the
+  decoder, on this machine, at this moment);
+- the thread blocked inside `sleep_for` for far longer than its slice;
+- a priority inversion against a busy thread;
+- contention on a lock the loop takes elsewhere in its iteration.
+
+This is the **same shape as BUGS #0** — a worker thread parked, its producer
+never progressing — and the two should be read together. That entry's remedy is
+a thread dump while stalled; the same applies here.
+
+### Next step
+
+On the next repro, capture thread state **while it is stalled**:
+
+```
+sample <obs pid> 10                       # macOS, 10 s of samples
+# or
+lldb -p <obs pid> -o "thread backtrace all" -o detach -o quit
+```
+
+Look for: is the deliver thread running or parked inside `sleep_for`, and what
+else is on the CPU at that moment. **No arithmetic changes until that is seen.**

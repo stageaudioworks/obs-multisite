@@ -120,48 +120,66 @@ permanently:
 is the entry's own previously-unexplained half — *"22 of 47 drops were audio,
 which should never have jammed on capacity"* — now reproduced on demand.
 
-**Two things are visible and confirmed; the cause is NOT.** Do not treat either
-as diagnosed:
-1. **The queue's structural span is over its own bound.** 48 audio frames of
-   ~20.9 ms span **1003 ms**; `kMaxQueuedNs` (the bound the accept test uses) is
-   **1000 ms**. A full audio queue is therefore *permanently* "full" — 3 ms over.
-   The comment at `kMaxQueuedNs` already warns "a queue whose capacity equals the
-   lead is full by construction"; this is the same shape one layer down, where
-   the *span* at the count backstop exceeds the *duration* bound.
-2. **Delivery stopped draining.** `delivery last handed over` climbing to 5+ s
-   is the delivery loop doing nothing, not slow. Whether (1) is what stops it,
-   or delivery stops for its own reason and (1) merely prevents recovery, is the
-   open question — they are not separable from this log.
+**Cause of the stall: the deliver loop STOPS RUNNING. Confirmed by measurement
+2026-09-22, and it is not the queue bound.**
 
-**Fixed while capturing this (safe, isolated):** the resume diagnostic had a
-format string with a fifth `%.0f` and no fifth argument, so `the bound is`
-printed junk (`0`). The very number this investigation rests on was UB. Fixed at
-`multisite_source.cpp` (now passes `kMaxQueuedNs`). Worth knowing: `mlog_*` goes
-through `plugin_log_line`, which *is* marked `format(printf,…)`, yet neither
-clang nor GCC flagged the missing argument on the concatenated literal — the
-class-level fix (a compile-time check that actually fires) is not done.
+The measurement (commit `0e160c9`, measurement-only) reproduced the stall on a
+Mac and answered the question. Verbatim, the decisive pair:
 
-**Next step, in order — read `docs/bugs/02-hold-resume-skips.md` first:**
-1. **The measurement is now in place (commit `0e160c9`, 2026-09-22), and it is
-   measurement-only** — the deliver loop's four decision statements are
-   byte-identical, so nothing already fixed can have changed. It answers the
-   question the entry could not: whether the loop is *parked* in a due-wait for
-   a far-future frame (which would explain the queue stuck at its cap) or
-   *awake* and popping. Reproduce the stall and read:
-   - `dropped a … frame … loop parked in due-wait` / `loop awake`
-   - `— parked N ms into a due-wait for a … frame timestamped M ms in the future`
-   - `deliver loop waited N ms for one frame`
-   **Parked with a timestamp seconds ahead ⇒ a timestamp is being computed far
-   in the future**, and the fix is wherever that timestamp comes from — not the
-   queue bound.
-2. Only then ask why delivery stopped. Do not change arithmetic before the
-   reading says which of the two it is.
+```
+07:21:41.468  parked 5324 ms into a due-wait for a audio frame timestamped 984 ms in the future
+07:21:42.057  deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now, audio)
+```
+
+The second line is logged **by the deliver loop after the wait completed**, and
+it is the one to trust. What it says: the loop entered its due-wait with a frame
+**395 ms** away, and **5913 ms later** the wait ended. The wait is a `while` loop
+sleeping in ≤50 ms slices, re-reading the clock each time — for a fixed
+`item.timestamp`. Nothing in it can legitimately take 5.9 s for a 395 ms target.
+
+**So the deliver loop thread was not scheduled for ~5.9 s.** It did not sleep
+toward a target; it did not run. While it did not run it popped nothing, so the
+queue sat at its cap, `enqueue_frame` dropped every audio frame after its 250 ms
+bound, and `frames_out` froze. Everything the earlier logs showed follows from
+that one fact.
+
+**This retires two suspicions, both recorded in the older text below:**
+- the queue bound is **not** the cause. The `1003 ms against a 1000 ms bound`
+  reading is a *symptom*: the span is pinned at the cap only because the loop
+  that would drain it is not running. The count-backstop theory was wrong.
+- "a timestamp computed far in the future" is **not** the cause. The waited-for
+  timestamp was 395 ms out. That hypothesis, which the older text below proposes,
+  is refuted by this reading.
+
+**A diagnostic that lied, again, and must be read with care:** the `parked N ms
+into a due-wait` line is emitted from `enqueue_frame` on *another thread*, which
+samples `dl_in_wait` and `dl_wait_start_ns` non-atomically. It reported
+`timestamped 984 ms` / `3009 ms` / `5039 ms in the future` on successive lines —
+values that *disagree with each other and with the +395 ms the loop itself
+measured*. Treat the loop's own `deliver loop waited …` line as authoritative;
+the cross-thread one is indicative only. (Same lesson as the `bound is 0` bug.)
+
+**What is NOT yet known: why the thread is descheduled.** Candidates, none
+tested: CPU contention on the Mac (OBS running encoders/muxers alongside);
+the thread blocked inside `sleep_for` beyond its slice; a priority inversion;
+or contention on a lock the loop takes elsewhere. This is the *same shape* as
+BUGS #0 (a thread parked, its worker never progressing) and should be read
+alongside it.
+
+**Next step:** on the next repro, capture the thread's state while it is stalled
+— `sample <obs pid> 10` on macOS, or `lldb -p <pid>` and `thread backtrace all`
+— and look at whether the deliver thread is running or parked inside
+`sleep_for`, and what else is on the CPU at that moment. Do not change any
+arithmetic until that is seen.
 
 **DO NOT:**
 - **Re-apply option (a)** (`resume()` seeking back to `last_out_pts_ns`). Tried,
   measured, reverted. Do not try it again.
 - **Re-derive the anchor.** There is ONE anchor, correctly placed. Read
   `playout_clock.h` before touching any of this arithmetic.
+- **Touch the queue bound.** The reading above exonerates it. The older text
+  below points at it; that text predates the measurement and is wrong on this
+  point.
 
 **Files:** `src/obs/multisite_source.cpp` (`enqueue_frame`, `deliver_loop`,
 `queued_span_ns`, `resume`), `src/core/playout_timeline.h`,
