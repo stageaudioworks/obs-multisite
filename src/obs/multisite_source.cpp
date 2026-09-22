@@ -493,6 +493,28 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> last_drop_log_ns{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
+    // ── Where the deliver loop is parked, MEASUREMENT ONLY (2026-09-22) ──────
+    // The dropped-audio-frame line says delivery handed nothing over for 5+ s
+    // and cannot say WHY. The deliver loop's only long wait is the due-time
+    // wait below, so if that is where it sits, a frame entered the queue with
+    // a timestamp far enough in the future to park the loop for that whole
+    // time — and while it is parked it pops nothing, so the queue never drains
+    // and enqueue_frame keeps dropping. These record enough to tell that apart
+    // from the loop being awake and merely doing nothing useful.
+    //
+    // Written only by the deliver loop (plain atomics, no lock), read by the
+    // drop diagnostic. No behaviour depends on any of it.
+    std::atomic<uint64_t> dl_wait_start_ns{0};   // when the due-wait began
+    std::atomic<uint64_t> dl_wait_frame_ts{0};   // the timestamp it is waiting for
+    std::atomic<uint64_t> dl_wait_log_ns{0};     // rate-limit for the wait log
+    std::atomic<uint64_t> dl_last_pop_ns{0};     // when the loop last popped a frame
+    std::atomic<uint64_t> dl_max_wait_ns{0};     // longest single due-wait seen
+    // True only BETWEEN the start and end of a due-wait. Without this the
+    // "is it parked?" test is "did it start a wait after its last pop", which
+    // is true for every frame ever delivered — a discriminator that always
+    // answers yes is not one. This says "a wait is in progress right now".
+    std::atomic<bool>     dl_in_wait{false};
+
     // ── Immediate feedback ───────────────────────────────────────────────────
     // Every operator action here is answered by the network, not by the click:
     // a pin takes effect on the next poll, and a seek shows nothing until a
@@ -798,14 +820,41 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
         const uint64_t lastlog = ctx->last_drop_log_ns.load();
         if (now - lastlog > 2000000000ULL) {
             ctx->last_drop_log_ns = now;
+            // Where the loop actually is (MEASUREMENT, 2026-09-22). Two very
+            // different faults produce this same drop line, and until now the
+            // log could not tell them apart:
+            //   - loop PARKED in the due-wait for one far-future frame
+            //     (`parked in due-wait`, with the timestamp's distance), or
+            //   - loop AWAKE but popping nothing (`no recent pop`).
+            // The parked case is the one that explains a queue stuck at its cap:
+            // it pops nothing while parked, so the span never falls.
+            const uint64_t pop = ctx->dl_last_pop_ns.load();
+            const uint64_t wait_ts = ctx->dl_wait_frame_ts.load();
+            // Parked means a due-wait is in progress at this instant — not
+            // merely that one started since the last pop, which is every frame.
+            const bool waiting = ctx->dl_in_wait.load();
             mlog_warn("source: dropped a %s frame after waiting 250 ms — "
                       "delivery last handed over %llu ms ago, %s, this stream "
-                      "held %.0f ms of programme (bound %.0f ms)",
+                      "held %.0f ms of programme (bound %.0f ms); loop %s, "
+                      "last popped %llu ms ago",
                       item.is_video ? "video" : "audio",
                       (unsigned long long)(last ? (now - last) / 1000000ULL : 0),
                       ctx->paused.load() ? "PAUSED" : "playing",
                       (double)queued_span_ns(ctx, item.is_video) / 1e6,
-                      (double)kMaxQueuedNs / 1e6);
+                      (double)kMaxQueuedNs / 1e6,
+                      waiting ? "parked in due-wait" : "awake",
+                      (unsigned long long)(pop ? (now - pop) / 1000000ULL : 0));
+            if (waiting) {
+                const uint64_t ws = ctx->dl_wait_start_ns.load();
+                mlog_warn("source:   — parked %.0f ms into a due-wait for a %s "
+                          "frame timestamped %lld ms in the future (max due-wait "
+                          "seen %llu ms)",
+                          (double)(ws ? (now - ws) / 1000000ULL : 0),
+                          item.is_video ? "video" : "audio",
+                          (long long)((int64_t)wait_ts - (int64_t)now) / 1000000LL,
+                          (unsigned long long)(ctx->dl_max_wait_ns.load() /
+                                               1000000ULL));
+            }
         }
         return;
     }
@@ -855,6 +904,10 @@ static void deliver_loop(SourceCtx* ctx) {
             item_epoch = item.epoch;      // the frame's own, not today's
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
+        // MEASUREMENT (2026-09-22): the loop got a frame. A growing gap here
+        // while the drop line reports delivery idle means the loop is parked
+        // below (in the due-wait), not starved of work.
+        ctx->dl_last_pop_ns = os_gettime_ns();
 
         // Checked here as well as after the wait below. The stall resync sits
         // between the two and re-bases the playout clock from this frame's
@@ -951,6 +1004,19 @@ static void deliver_loop(SourceCtx* ctx) {
         // discard.
         //
         // Only a frame that is going to air needs to wait for its moment.
+        //
+        // MEASUREMENT (2026-09-22): time this wait and report a long one. This
+        // is the only long wait in the loop, so if delivery "stopped" for
+        // seconds this is either where it was parked or it was not here at all
+        // — which is the fact the drop diagnostic could not supply. A frame
+        // whose timestamp is far in the future parks the loop here for that
+        // whole time, and while parked it pops nothing, so the queue cannot
+        // drain and enqueue_frame drops every frame at the cap. Logged once
+        // per second at most, and only when the wait is long enough to matter.
+        const uint64_t wait_start = os_gettime_ns();
+        ctx->dl_wait_start_ns = wait_start;
+        ctx->dl_wait_frame_ts = item.timestamp;
+        ctx->dl_in_wait = true;
         while (ctx->running.load()) {
             const uint64_t now = os_gettime_ns();
             if (item.timestamp <= now + kMaxDeliveryLeadNs) break;
@@ -958,7 +1024,25 @@ static void deliver_loop(SourceCtx* ctx) {
             if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;
             std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
         }
+        ctx->dl_in_wait = false;
         if (!ctx->running.load()) break;
+        {
+            const uint64_t waited = os_gettime_ns() - wait_start;
+            if (waited > ctx->dl_max_wait_ns.load())
+                ctx->dl_max_wait_ns = waited;
+            const uint64_t lastlog = ctx->dl_wait_log_ns.load();
+            if (waited > 300000000ULL &&      // 300 ms: far beyond a frame interval
+                os_gettime_ns() - lastlog > 1000000000ULL) {
+                ctx->dl_wait_log_ns = os_gettime_ns();
+                mlog_warn("source: deliver loop waited %llu ms for one frame "
+                          "(its timestamp was %+lld ms from now, %s) — while "
+                          "parked it pops nothing, so the queue cannot drain",
+                          (unsigned long long)(waited / 1000000ULL),
+                          (long long)((int64_t)item.timestamp -
+                                      (int64_t)os_gettime_ns()) / 1000000LL,
+                          item.is_video ? "video" : "audio");
+            }
+        }
 
         // Publish for the dock and the web remote. The position IS the frame's
         // own pts — how far into the programme it sits — so there is no clock
