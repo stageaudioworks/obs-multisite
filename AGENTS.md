@@ -55,8 +55,9 @@ were reverted.
 Issues live in GitHub Issues for `stageaudioworks/obs-multisite`, via the `gh`
 CLI. See `docs/agents/issue-tracker.md`.
 
-Note that the project's real fault record is `BUGS.md`, not the tracker, which
-has never held an issue. Reports arrive directly from the operator.
+`BUGS.md` is the fault record; the tracker holds work that has been scoped into
+a ticket, labelled `ready-for-agent` when it can be picked up unattended. Most
+faults still arrive directly from the operator and go to `BUGS.md` first.
 
 ### Triage labels
 

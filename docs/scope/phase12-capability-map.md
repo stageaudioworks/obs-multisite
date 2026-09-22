@@ -1,6 +1,6 @@
 # Capability Map: Phase 12 — Multisite Cloud
 
-**Status: proposed, awaiting review. No code until this map is agreed.**
+**Status: agreed and largely built.** The review gate this map carried was passed; most modules below have shipped. What remains is under "Progress".
 
 Phase 12 as originally written is *credential pairing* (`PROJECT-SCOPE §8.5`).
 The operator's brief widens it into one subsystem: **storage access and
@@ -41,7 +41,7 @@ identity and do not depend on each other).
 dependency on the collector at all, it is the one capability that pays out
 immediately, and it is small enough to land and verify on its own.
 
-## Progress (2026-09-22)
+## Progress (2026-09-22, evening)
 
 | Module | State |
 |---|---|
@@ -52,20 +52,47 @@ immediately, and it is small enough to land and verify on its own.
 | `room-identity` | Not started. The `room_id` mismatch is still unconfirmed in the code — settle it from a running box first (see the note below) |
 | Appliance wiring | [#12](https://github.com/stageaudioworks/obs-multisite/issues/12) — the first host where the whole path runs on a box |
 
+**The OBS plugin runs paired, both halves, verified on a Mac (2026-09-22).**
+Built in `02998e8`, outside the tickets. The encoder wrote 44 segments to the
+broker's bucket (`storage: Multisite Cloud — bucket 'multisite-demo-org'`), and
+after `3fdf9f1` the decoder read it back and played:
+
+```
+22:32:19.941 source: … not paired yet            first update refuses, as it must
+22:32:20.548 cloud credentials: fetched multisite-demo-org
+22:32:20.552 source: storage is Multisite Cloud — bucket 'multisite-demo-org'
+22:32:27.060 source: decoder started      …  frames_out=292, dropped 0 v / 0 a
+```
+
+Before `3fdf9f1` the decoder never started on any launch. A source always loads
+before the first credential fetch, refuses, and in doing so left the list that
+`decoder_reconfigure_all()` walks, so the "credentials arrived" call could never
+reach it. It took five faults across five surfaces to get the plugin here —
+the source refusing forever, a use-after-free on Apply, Manage storage listing
+the wrong bucket, a blank idle monitor, and this one — see their commits.
+
 **#12 is built and deployed.** Verified on `rpi5-nathan`: crash-free,
 `NRestarts 0`, reading from its typed R2 bucket with `mode: "direct"`, heartbeat
 accepted. The deployment found three faults the core tests could not — a
 segfault, a gate that switched a typed-key box onto brokered storage, and a
 needless rebuild — all fixed. See BUGS.md's "Recently landed" and the commits.
 
-The **paired** path on a box is still untested: that unit is a monitoring-only
+The **paired** path on the **Pi** is still untested: that unit is a monitoring-only
 pairing, so `mode` is `direct`. Exercising it means switching a box's provider
 to Multisite Cloud, which needs [#13](https://github.com/stageaudioworks/obs-multisite/issues/13)
 to give the dropdown somewhere to pair from.
 
-The frontier is **#12** (appliance) or **#11** (OBS plugin): both are wiring and
-neither gates the other. The appliance is the smaller surface and already owns
-both its transport and its reporter, so it goes first.
+What remains, with nothing gating it now that the plugin is proven:
+
+- **#12 — run the Pi paired.** Built; the only unchecked box is the one that
+  matters, a paired appliance playing from the broker's bucket. Switching the
+  bench Pi's provider to Multisite Cloud is the whole test.
+- **#13 — check the Pi page's Cloud section.** The docks' half is proven by use
+  (pairing was done from one). The appliance page landed in `2cb63d7`, unseen.
+- **#11 — re-home the heartbeat onto `CloudIdentity`.** The one substantial
+  piece of work left: twelve files, expand → migrate → contract.
+- **`room-identity`** — not started, and still waiting on a reading from a
+  running box before it is specified.
 
 ## Interfaces at the boundary
 
