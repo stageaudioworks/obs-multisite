@@ -433,8 +433,16 @@ if(CURL_FOUND)
     # against a live collector and prints what comes back, so a host is wired
     # against the measured contract rather than the spec's guess at it. Not in
     # ctest — it needs a live collector and an operator to approve the code.
-    add_executable(probe_credentials scripts/probe_credentials.cpp)
-    target_link_libraries(probe_credentials PRIVATE multisite_s3)
+    #
+    # POSIX only, like the appliance and test_s3_cancel: it asks the OS for a
+    # hostname and a pid, and there is no Windows machine this project runs a
+    # collector probe on. Gated rather than ported, and gated HERE rather than
+    # behind an #ifdef, so the Windows plugin build never sees the file — which
+    # it did, and failed on, the first time this was committed.
+    if(NOT WIN32)
+        add_executable(probe_credentials scripts/probe_credentials.cpp)
+        target_link_libraries(probe_credentials PRIVATE multisite_s3)
+    endif()
 
     # Proves cancel_pending() actually aborts a stalled request quickly rather
     # than trusting that wiring curl's progress callback was enough. POSIX
