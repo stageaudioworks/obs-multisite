@@ -41,6 +41,21 @@ identity and do not depend on each other).
 dependency on the collector at all, it is the one capability that pays out
 immediately, and it is small enough to land and verify on its own.
 
+## Progress (2026-09-22)
+
+| Module | State |
+|---|---|
+| `cloud-identity` | **Built** — `src/core/cloud_identity.{h,cpp}`, `tests/test_cloud_identity.cpp` |
+| `collector_client` (support, not in the map) | **Built** — one authority for the endpoint paths and the HTTP call, so the hosts cannot drift apart on them |
+| `cloud-storage` | **Built** — `src/core/cloud_storage.{h,cpp}`, `tests/test_cloud_storage.cpp` |
+| `cloud-heartbeat` | Core done via the two above; the **host re-home** is [#11](https://github.com/stageaudioworks/obs-multisite/issues/11) |
+| `room-identity` | Not started. The `room_id` mismatch is still unconfirmed in the code — settle it from a running box first (see the note below) |
+| Appliance wiring | [#12](https://github.com/stageaudioworks/obs-multisite/issues/12) — the first host where the whole path runs on a box |
+
+The frontier is **#12** (appliance) or **#11** (OBS plugin): both are wiring and
+neither gates the other. The appliance is the smaller surface and already owns
+both its transport and its reporter, so it goes first.
+
 ## Interfaces at the boundary
 
 The map records *that* `cloud-storage` and `cloud-heartbeat` depend on
