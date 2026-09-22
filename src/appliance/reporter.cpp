@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "reporter.h"
+#include "../core/collector_client.h"
 
 #include "api.h"
 #include "log.h"
@@ -8,7 +9,6 @@
 #include "../core/heartbeat_reporter.h"
 #include "../vendor/nlohmann/json.hpp"
 
-#include <curl/curl.h>
 
 #include <atomic>
 #include <chrono>
@@ -25,88 +25,10 @@ namespace multisite_player {
 
 namespace {
 
-// Same bounds as the OBS host: a monitor must not hold anything hostage, and
-// the only thing read from a response is interval_s.
-constexpr long kConnectTimeoutMs = 5000;
-constexpr long kRequestTimeoutMs = 15000;
-constexpr size_t kMaxBodyBytes = 65536;
-
-size_t append_capped(char* data, size_t size, size_t nmemb, void* user) {
-    auto* body = static_cast<std::string*>(user);
-    const size_t n = size * nmemb;
-    const size_t room = n > kMaxBodyBytes ? 0
-        : kMaxBodyBytes > body->size() ? kMaxBodyBytes - body->size() : 0;
-    body->append(data, room < n ? room : n);
-    return n;
-}
-
-size_t capture_retry_after(char* data, size_t size, size_t nmemb, void* user) {
-    const size_t n = size * nmemb;
-    static const char kPrefix[] = "retry-after:";
-    if (n > sizeof(kPrefix) - 1) {
-        bool match = true;
-        for (size_t i = 0; i < sizeof(kPrefix) - 1; ++i) {
-            const char a = data[i] >= 'A' && data[i] <= 'Z'
-                ? static_cast<char>(data[i] + ('a' - 'A')) : data[i];
-            if (a != kPrefix[i]) { match = false; break; }
-        }
-        if (match)
-            *static_cast<int*>(user) = atoi(data + sizeof(kPrefix) - 1);
-    }
-    return n;
-}
-
-struct PostResult {
-    bool        reached = false;
-    long        code = 0;
-    std::string body;
-    int         retry_after_s = 0;
-};
-
-PostResult post_json(const std::string& url, const std::string& token,
-                     const std::string& payload) {
-    PostResult r;
-    CURL* curl = curl_easy_init();
-    if (!curl) return r;
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    const std::string auth = "Authorization: Bearer " + token;
-    headers = curl_slist_append(headers, auth.c_str());
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)payload.size());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_capped);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r.body);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, capture_retry_after);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &r.retry_after_s);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, kConnectTimeoutMs);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, kRequestTimeoutMs);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    const CURLcode cc = curl_easy_perform(curl);
-    if (cc == CURLE_OK &&
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.code) == CURLE_OK)
-        r.reached = true;
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    return r;
-}
-
-std::string join_url(const std::string& base) {
-    std::string u = base;
-    while (!u.empty() && u.back() == '/') u.pop_back();
-    return u + "/v1/heartbeat";
-}
-
-std::string join_path(const std::string& base, const char* path) {
-    std::string u = base;
-    while (!u.empty() && u.back() == '/') u.pop_back();
-    return u + path;
-}
+// The HTTP call and the collector's paths live in core/collector_client. This
+// file carried a copy of both — its own comment said "same bounds as the OBS
+// host", which is the duplication named out loud — and so did the plugin (#11).
+// Both hosts now call the one copy.
 
 long long wall_now_s() { return (long long)std::time(nullptr); }
 
@@ -230,9 +152,13 @@ void Reporter::serve_once() {
     player.status(s);
     const bool active = s.playing || s.paused || s.buffering;
 
-    const bool configured =
-        !cfg.reporter_url.empty() && !cfg.reporter_appliance_id.empty() &&
-        !cfg.reporter_token.empty();
+    // WHO this heartbeat is comes from the player's identity — the object its
+    // storage reads through — as one snapshot, so the two cannot name
+    // different appliances and the three strings cannot come from different
+    // pairings (#11). Whether to heartbeat at all stays a setting.
+    multisite::Enrolment en;
+    if (auto ident = player.cloud_identity()) en = ident->enrolment();
+    const bool configured = en.paired();
     std::string outcome;
     int wait_s = multisite::kHeartbeatIdleIntervalS;
     if (!cfg.reporter_enabled) {
@@ -243,7 +169,7 @@ void Reporter::serve_once() {
         wait_s = 5;
     } else {
         const SystemInfo sys = system_info();
-        multisite::HeartbeatIdentity ident{cfg.reporter_appliance_id,
+        multisite::HeartbeatIdentity ident{en.id,
                                            "pi-player", player_version(),
                                            sys.uptime_s};
         const multisite::HeartbeatHost host = host_block(cfg);
@@ -252,8 +178,9 @@ void Reporter::serve_once() {
             multisite::heartbeat_filter_status("decoder",
                                                enriched_status(player)),
             sent_at_iso());
-        const PostResult r =
-            post_json(join_url(cfg.reporter_url), cfg.reporter_token, body);
+        const multisite::HttpResult r = multisite::http_post_json(
+            multisite::collector_url(en.url, multisite::kHeartbeatPath),
+            en.token, body);
         const int central = m_worker->central_s;
         if (!r.reached) {
             // Fire-and-forget (brief): dropped, never queued. NOT
@@ -307,8 +234,7 @@ void Reporter::serve_once() {
 }
 
 void Reporter::loop() {
-    static std::once_flag curl_once;
-    std::call_once(curl_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    multisite::collector_http_init();
     while (m_worker->running.load()) {
         serve_pairing();
         // The credential lifecycle (Phase 12) rides this thread: storage and
@@ -370,8 +296,9 @@ void Reporter::serve_pairing() {
                 plog_warn("pairing: could not save the device id: %s",
                           err.c_str());
         }
-        const PostResult r = post_json(
-            join_path(cfg.reporter_url, "/v1/pair/start"), std::string(),
+        const multisite::HttpResult r = multisite::http_post_json(
+            multisite::collector_url(cfg.reporter_url, multisite::kPairStartPath),
+            std::string(),
             multisite::heartbeat_pair_start_body(dev, "pi-player",
                                                  hostname()));
         std::lock_guard<std::mutex> lk(m_worker->mtx);
@@ -392,8 +319,9 @@ void Reporter::serve_pairing() {
             std::lock_guard<std::mutex> lk(m_worker->mtx);
             token = m_worker->pairing.poll_token();
         }
-        const PostResult r = post_json(
-            join_path(cfg.reporter_url, "/v1/pair/poll"), std::string(),
+        const multisite::HttpResult r = multisite::http_post_json(
+            multisite::collector_url(cfg.reporter_url, multisite::kPairPollPath),
+            std::string(),
             multisite::heartbeat_pair_poll_body(token));
         std::lock_guard<std::mutex> lk(m_worker->mtx);
         if (!r.reached) {
