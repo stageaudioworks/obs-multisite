@@ -390,7 +390,12 @@ if(CURL_FOUND)
         # The decoder's LAN client (§8.7) — grouped with S3Transport rather
         # than multisite_core because it needs libcurl too, and multisite_core
         # has to build with no network dependency at all.
-        src/core/lan_transport.cpp)
+        src/core/lan_transport.cpp
+        # The collector's endpoint authority and HTTP call (Phase 12): the
+        # paths in one place, so the hosts cannot drift apart on them, and one
+        # POST/GET bounded the way a monitor must be. Grouped here for the same
+        # libcurl reason as the two above.
+        src/core/collector_client.cpp)
     target_include_directories(multisite_s3 PUBLIC src src/core)
     target_link_libraries(multisite_s3 PUBLIC multisite_core CURL::libcurl)
     set_target_properties(multisite_s3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -405,6 +410,12 @@ if(CURL_FOUND)
     add_executable(test_s3_url tests/test_s3_url.cpp)
     target_link_libraries(test_s3_url PRIVATE multisite_s3)
     add_test(NAME s3_url COMMAND test_s3_url)
+
+    # The collector's endpoint authority: one URL builder for every endpoint,
+    # so the hosts cannot drift apart on them.
+    add_executable(test_collector_client tests/test_collector_client.cpp)
+    target_link_libraries(test_collector_client PRIVATE multisite_s3)
+    add_test(NAME collector_client COMMAND test_collector_client)
 
     # Proves cancel_pending() actually aborts a stalled request quickly rather
     # than trusting that wiring curl's progress callback was enough. POSIX
