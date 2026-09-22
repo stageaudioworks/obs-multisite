@@ -143,6 +143,66 @@
 <section id="tab-settings" class="panel">
   <form id="settings-form">
 
+    <details class="settings-section">
+    <summary>Cloud</summary>
+    <div class="field">
+      <label for="c-reporter-on">Send a status heartbeat</label>
+      <select id="c-reporter-on" name="reporter_enabled">
+        <option value="false">Off — nothing leaves this box</option>
+        <option value="true">On — pair with Cloud and report</option>
+      </select>
+      <p class="hint">
+        This is the box's connection to Cloud. It carries the status heartbeat,
+        and — when Multisite Cloud is chosen as the storage provider — the
+        credentials the box reads storage with, so storage and monitoring use
+        one identity rather than two. Off by default: switched off and unpaired,
+        nothing leaves this box.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-reporter-url">Cloud address</label>
+      <input id="c-reporter-url" name="reporter_url" autocomplete="off"
+             placeholder="https://monitor.example.org">
+      <p class="hint">
+        The Cloud service address, typed in by hand, with no default.
+        Empty means nothing is paired and no heartbeat is sent.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-reporter-id">Appliance ID</label>
+      <input id="c-reporter-id" name="reporter_appliance_id" autocomplete="off">
+      <p class="hint">
+        The ID the collector knows this box by — it must match the ID the
+        token was minted for.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-reporter-token">Token</label>
+      <input id="c-reporter-token" name="reporter_token" type="password" autocomplete="new-password">
+      <p class="hint">
+        Minted with the collector's mint tool. Dots mean the saved token is
+        kept; clearing the field removes it.
+      </p>
+    </div>
+    <div class="field">
+      <span class="muted" id="reporter-note"></span>
+    </div>
+    <div class="row">
+      <button type="button" id="btn-reporter-connect">Connect…</button>
+      <button type="button" id="btn-reporter-cancel">Cancel</button>
+      <span class="muted" id="reporter-pair"></span>
+    </div>
+    <div class="field">
+      <strong id="reporter-code"></strong>
+      <p class="hint">
+        Prefer this over typing an ID and token by hand: press Connect, enter
+        the code shown on the collector's page, and the ID and token fill
+        themselves in when it is approved.
+      </p>
+    </div>
+
+    </details>
+
     <details class="settings-section" open>
     <summary>Where the event comes from</summary>
     <div class="field">
@@ -464,65 +524,6 @@
     <div class="row">
       <button type="button" id="btn-aes67">Apply network audio</button>
       <span class="muted" id="aes67-note"></span>
-    </div>
-
-    </details>
-
-    <details class="settings-section">
-    <summary>Monitoring heartbeat</summary>
-    <div class="field">
-      <label for="c-reporter-on">Send a status heartbeat</label>
-      <select id="c-reporter-on" name="reporter_enabled">
-        <option value="false">Off — nothing leaves this box</option>
-        <option value="true">On — report to a collector</option>
-      </select>
-      <p class="hint">
-        Posts a small status document every 30 seconds while playing, held
-        or starting, every 5 minutes otherwise. Off by default — switched
-        off, nothing is sent. A failed post is dropped, never queued, so
-        monitoring never competes with the programme for the link.
-      </p>
-    </div>
-    <div class="field">
-      <label for="c-reporter-url">Collector URL</label>
-      <input id="c-reporter-url" name="reporter_url" autocomplete="off"
-             placeholder="https://monitor.example.org">
-      <p class="hint">
-        The collector's base address, typed in by hand, with no default.
-        Empty means no heartbeat is sent.
-      </p>
-    </div>
-    <div class="field">
-      <label for="c-reporter-id">Appliance ID</label>
-      <input id="c-reporter-id" name="reporter_appliance_id" autocomplete="off">
-      <p class="hint">
-        The ID the collector knows this box by — it must match the ID the
-        token was minted for.
-      </p>
-    </div>
-    <div class="field">
-      <label for="c-reporter-token">Token</label>
-      <input id="c-reporter-token" name="reporter_token" type="password" autocomplete="new-password">
-      <p class="hint">
-        Minted with the collector's mint tool. Dots mean the saved token is
-        kept; clearing the field removes it.
-      </p>
-    </div>
-    <div class="field">
-      <span class="muted" id="reporter-note"></span>
-    </div>
-    <div class="row">
-      <button type="button" id="btn-reporter-connect">Connect…</button>
-      <button type="button" id="btn-reporter-cancel">Cancel</button>
-      <span class="muted" id="reporter-pair"></span>
-    </div>
-    <div class="field">
-      <strong id="reporter-code"></strong>
-      <p class="hint">
-        Prefer this over typing an ID and token by hand: press Connect, enter
-        the code shown on the collector's page, and the ID and token fill
-        themselves in when it is approved.
-      </p>
     </div>
 
     </details>
