@@ -7,6 +7,7 @@
 #include "../core/disk_health.h"
 #include "../core/model.h"
 #include "../core/s3_transport.h"
+#include "../core/cloud_storage.h"   // CloudTransport — the paired idle probe
 #include "../core/session.h"   // peek_resumable(), SessionConfig defaults
 #include "reporter.h"          // the plugin's shared CloudIdentity (Phase 12)
 
@@ -29,6 +30,10 @@ namespace multisite_obs {
 struct IdleMonitor {
     multisite::S3Config cfg;
     std::unique_ptr<multisite::S3Transport> tx;
+    // A paired machine has no typed fields to build `tx` from, so its probe
+    // goes through the identity instead. Exactly one of the two is set; the
+    // probe and the host both come from whichever it is.
+    std::unique_ptr<multisite::CloudTransport> cloud;
     std::atomic<bool> running{false};
     std::thread thread;
 
@@ -37,6 +42,15 @@ struct IdleMonitor {
     std::string colo;
     std::string host;
     std::string error;
+
+    // One place that knows which leg is live, so a future third kind does not
+    // get forgotten at one of the two call sites.
+    multisite::StorageProbe probe(const std::string& key) {
+        return cloud ? cloud->probe(key) : tx->probe(key);
+    }
+    std::string endpoint_host() const {
+        return cloud ? cloud->host() : tx->host();
+    }
 };
 
 // ── Encoder discovery ────────────────────────────────────────────────────────
@@ -615,6 +629,7 @@ void BroadcastController::stop_idle_monitor() {
     // A probe in flight may be blocking inside libcurl for up to the request
     // timeout; cancel it rather than making Go Live wait on it.
     if (m_idle->tx) m_idle->tx->cancel_pending();
+    if (m_idle->cloud) m_idle->cloud->cancel_pending();
     if (m_idle->thread.joinable()) m_idle->thread.join();
     m_idle.reset();
 }
@@ -622,6 +637,31 @@ void BroadcastController::stop_idle_monitor() {
 void BroadcastController::start_idle_monitor() {
     stop_idle_monitor();
     if (is_live()) return;
+
+    // Which storage the link is a link TO. A paired machine keeps its bucket,
+    // endpoint and keys in the identity, so the emptiness test below would
+    // return early and the monitor would never start — no link health, no colo,
+    // nothing — on exactly the machines this reports status for. It failed
+    // silently, which is why it read as an empty indicator rather than a fault.
+    auto identity = reporter_cloud_identity();
+    const bool use_paired =
+        m_cfg.storage_provider == "multisite_cloud" && identity &&
+        identity->paired();
+
+    if (use_paired) {
+        if (!identity->credentials().present()) return;   // nothing to probe yet
+        auto m = std::make_unique<IdleMonitor>();
+        multisite::CloudStorageConfig csc;
+        csc.region = m_cfg.region;
+        m->cloud = std::make_unique<multisite::CloudTransport>(
+            *identity, multisite::CloudRole::Encoder, csc);
+        m->host = m->cloud->host();
+        m_idle = std::move(m);
+        m_idle->running = true;
+        m_idle->thread = std::thread([this] { idle_probe_loop(); });
+        return;
+    }
+
     if (m_cfg.bucket.empty() ||
         (m_cfg.endpoint_host.empty() && m_cfg.r2_account_id.empty()) ||
         m_cfg.access_key_id.empty() || m_cfg.secret_access_key.empty())
@@ -653,7 +693,7 @@ void BroadcastController::idle_probe_loop() {
         next = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         if (is_live()) break;   // the uploader is the signal once broadcasting
 
-        const multisite::StorageProbe p = m_idle->tx->probe(key);
+        const multisite::StorageProbe p = m_idle->probe(key);
         m_idle->link.observe(p.reachable);
         std::lock_guard<std::mutex> lk(m_idle->mtx);
         m_idle->colo  = p.colo;

@@ -24,6 +24,35 @@ bool CloudTransport::has_credentials() const {
     return m_identity.credentials().present();
 }
 
+StorageProbe CloudTransport::probe(const std::string& key) {
+    std::string why;
+    std::shared_ptr<S3Transport> tx;
+    {
+        // inner_for touches the identity and the inner pointer, so it is taken
+        // under the same lock the other accessors use. The probe itself is NOT
+        // run under the lock — it is a network round trip, and holding the
+        // mutex across it would block every writer for its whole duration.
+        std::lock_guard<std::mutex> lk(m_mtx);
+        tx = inner_for(why);
+    }
+    if (!tx) {
+        StorageProbe p;
+        p.reachable = false;
+        p.error = why.empty() ? "no cloud credentials" : why;
+        return p;
+    }
+    return tx->probe(key);
+}
+
+std::string CloudTransport::host() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    // The HOST IS THE COLLECTOR'S, known from the moment credentials land, and
+    // reported even before an inner exists so the dock can name the endpoint it
+    // is about to try. The typed-field equivalent returns the same thing off
+    // its config without connecting.
+    return m_identity.credentials().endpoint;
+}
+
 std::shared_ptr<S3Transport> CloudTransport::inner_for(std::string& why) const {
     // Caller holds m_mtx. Reads the identity ONCE and builds from exactly what
     // it read (standards §2): re-reading between the check and the build is how

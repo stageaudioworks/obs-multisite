@@ -80,6 +80,15 @@ public:
     bool credentials_are_stale() const;
     bool has_credentials() const;
 
+    // The idle monitor's link probe, delegated to whichever inner transport the
+    // identity's CURRENT credentials build. It exists here rather than being
+    // rebuilt in the controller because the rebuild rule — a new inner whenever
+    // the credential set changes — is inner_for's and must not have a second
+    // implementation to drift from. Returns an unreachable probe, not an
+    // exception, when the identity holds nothing.
+    StorageProbe probe(const std::string& key);
+    std::string host() const;
+
 private:
     // The inner transport for the identity's CURRENT credentials, rebuilt when
     // the credential set changes (a refresh, or a fall to last-good). Returns
