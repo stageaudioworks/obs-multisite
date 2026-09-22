@@ -228,7 +228,30 @@ int main() {
             200);
         CHECK(done.ok && !done.pending, "200 with credentials resolves");
         CHECK(done.appliance_id == "apl_1", "id carried");
+        CHECK(done.collector_url == "https://c", "a real API base is taken");
         CHECK(!heartbeat_parse_pair_poll("{}", 200).ok, "200 without credentials refused");
+
+        // The verification page is NOT an API base. Seen on a real collector
+        // 2026-09-22: the reply's collector_url came back as ".../pair", and
+        // the next pairing attempt 404'd against ".../pair/v1/pair/start".
+        // Refused at the parse, so no host can adopt it.
+        const PairPollReply vp = heartbeat_parse_pair_poll(
+            "{\"appliance_id\":\"a\",\"appliance_token\":\"t\","
+            "\"collector_url\":\"https://app.example/pair\"}", 200);
+        CHECK(vp.ok, "the credentials still resolve — only the URL is refused");
+        CHECK(vp.collector_url.empty(),
+              "the verification page is refused as a base, so the host keeps "
+              "the address the operator typed");
+        const PairPollReply vp2 = heartbeat_parse_pair_poll(
+            "{\"appliance_id\":\"a\",\"appliance_token\":\"t\","
+            "\"collector_url\":\"https://app.example/pair/\"}", 200);
+        CHECK(vp2.collector_url.empty(), "trailing slash does not evade it");
+        // A host legitimately named .../pair-anything must not be caught.
+        const PairPollReply ok2 = heartbeat_parse_pair_poll(
+            "{\"appliance_id\":\"a\",\"appliance_token\":\"t\","
+            "\"collector_url\":\"https://pair.example.com\"}", 200);
+        CHECK(ok2.collector_url == "https://pair.example.com",
+              "a host whose NAME contains pair is untouched");
     }
 
     std::printf("Device id: minted locally, stable inputs, distinct roles\n");

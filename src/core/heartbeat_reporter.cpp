@@ -232,6 +232,28 @@ PairPollReply heartbeat_parse_pair_poll(const std::string& body, int http_code) 
         r.appliance_id = str_field(j, "appliance_id");
         r.appliance_token = str_field(j, "appliance_token");
         r.collector_url = str_field(j, "collector_url");
+        // A collector_url that IS the verification page is not an API base, and
+        // adopting it breaks every later call: the host appends /v1/pair/poll
+        // and /v1/credentials, so ".../pair" becomes ".../pair/v1/pair/poll" —
+        // a 404 on every request after that.
+        //
+        // Seen on a real collector 2026-09-22: the reply's collector_url came
+        // back as the human-facing ".../pair" page, and the OBS encoder's
+        // second pairing attempt failed 404 against ".../pair/v1/pair/start"
+        // while the first had succeeded. (The saved settings were NOT
+        // corrupted — the field is used in memory before any write — which is
+        // why this is fixed where the value is PARSED rather than where it is
+        // stored: one guard covers all three hosts and every use.)
+        if (!r.collector_url.empty()) {
+            std::string u = r.collector_url;
+            while (!u.empty() && u.back() == '/') u.pop_back();
+            const size_t slash = u.find_last_of('/');
+            const std::string tail = slash == std::string::npos ? u
+                                                                : u.substr(slash + 1);
+            if (tail == "pair") {
+                r.collector_url.clear();
+            }
+        }
         if (r.appliance_id.empty() || r.appliance_token.empty()) return r;
         const int iv = int_field(j, "interval_s", 30);
         r.interval_s = iv > 0 ? iv : 30;

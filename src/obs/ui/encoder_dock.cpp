@@ -310,6 +310,13 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("AccessKeyID"), m_keyId);
     form->addRow(tr_("SecretKey"), m_secret);
     form->addRow(tr_("Region"), m_region);
+    // Replaces the hidden typed fields when Multisite Cloud is the provider.
+    // Read-only: the bucket and its credentials come from the collector, so
+    // there is nothing here to type.
+    m_pairedStorageNote = new QLabel(storeBox);
+    m_pairedStorageNote->setWordWrap(true);
+    m_pairedStorageNote->setVisible(false);
+    form->addRow(QString(), m_pairedStorageNote);
     form->addRow(tr_("RoomID"), m_room);
     form->addRow(tr_("Dock.SiteName"), m_siteName);
     m_cacheDir = new QLineEdit(storeBox);
@@ -718,10 +725,35 @@ void EncoderDock::updateProviderFields() {
     auto provider = multisite::provider_from_key(
         m_provider->currentData().toString().toStdString());
     const auto& info = multisite::provider_info(provider);
+    // Multisite Cloud needs NO storage field: the collector supplies the
+    // bucket, endpoint and credentials, so every typed field is hidden and a
+    // read-only summary takes their place. Leaving editable boxes for a value
+    // the box will never read is worse than no box — it looks like it does
+    // something, and the operator types into it and wonders.
+    const bool cloud = (provider == multisite::StorageProvider::MultisiteCloud);
     if (auto* form = qobject_cast<QFormLayout*>(m_accountId->parentWidget()->layout())) {
-        form->setRowVisible(m_accountId, info.needs_account_id);
-        form->setRowVisible(m_endpoint,  info.needs_endpoint);
-        form->setRowVisible(m_region,    info.needs_region);
+        form->setRowVisible(m_accountId, !cloud && info.needs_account_id);
+        form->setRowVisible(m_endpoint,  !cloud && info.needs_endpoint);
+        form->setRowVisible(m_region,    !cloud && info.needs_region);
+        // These three have no needs_* flag — they belong to every typed-key
+        // provider — so they were never hidden at all until now.
+        form->setRowVisible(m_bucket,    !cloud);
+        form->setRowVisible(m_keyId,     !cloud);
+        form->setRowVisible(m_secret,    !cloud);
+    }
+    if (m_pairedStorageNote) {
+        m_pairedStorageNote->setVisible(cloud);
+        if (cloud) refreshPairedStorageNote();
+    }
+    // Selecting Multisite Cloud while looking at the Storage box means the
+    // control the operator now needs — Connect — is in the Cloud box ABOVE,
+    // off the top of a scrolling page. Bring it into view rather than leaving
+    // them to find it: pressing a provider and being shown no way to use it is
+    // the dead end this whole section exists to avoid.
+    if (cloud && m_reporterEnabled) {
+        if (auto* scroll = qobject_cast<QScrollArea*>(
+                m_reporterEnabled->window()->findChild<QScrollArea*>()))
+            scroll->ensureWidgetVisible(m_reporterEnabled);
     }
 }
 
@@ -755,6 +787,26 @@ void EncoderDock::onDisableCloudToggled(bool checked) {    if (!checked) { onSav
         return;
     }
     onSaveSettings();
+}
+
+void EncoderDock::refreshPairedStorageNote() {
+    if (!m_pairedStorageNote) return;
+    // Reads the plugin's ONE cloud identity — the same one the encoder writes
+    // through — so what the panel says is what the session does, not a
+    // reconstruction from form fields.
+    auto id = reporter_cloud_identity();
+    QString t;
+    if (!id || !id->paired()) {
+        t = tr_("Dock.PairedNotYet");
+    } else if (!id->credentials().present()) {
+        t = tr_("Dock.PairedNoCreds");
+    } else {
+        const multisite::Credentials c = id->credentials();
+        t = id->credentials().from_last_good
+            ? tr_("Dock.PairedStale").arg(QString::fromStdString(c.bucket))
+            : tr_("Dock.PairedBucket").arg(QString::fromStdString(c.bucket));
+    }
+    if (m_pairedStorageNote->text() != t) m_pairedStorageNote->setText(t);
 }
 
 void EncoderDock::onPairBegin() {

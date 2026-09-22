@@ -51,6 +51,10 @@ private slots:
     // (PROJECT-SCOPE.md §8.6) — an account id for R2, a region for
     // AWS/Backblaze/Wasabi, both endpoint and region for Custom.
     void updateProviderFields();
+    // Fills m_pairedStorageNote from the plugin's live identity: the bucket in
+    // use, and whether its credentials are current. The same facts the
+    // appliance page shows, so the two cannot describe one machine differently.
+    void refreshPairedStorageNote();
     // Shows the port/token fields only while LAN delivery is turned on.
     void updateLanFields();
     // Confirms before actually turning cloud upload off — nothing else warns
@@ -89,6 +93,10 @@ private:
     QLineEdit* m_keyId = nullptr;
     QLineEdit* m_secret = nullptr;
     QLineEdit* m_region = nullptr;
+    // Shown in place of the hidden typed fields when Multisite Cloud is the
+    // provider: the bucket actually in use and whether its credentials are
+    // current. Read-only, because there is nothing here to type.
+    QLabel*    m_pairedStorageNote = nullptr;
     QLineEdit* m_room = nullptr;
     // What this machine calls itself, stamped on the cues it drops. The same
     // field the decoder has — the Cues dock is the same on either end.
