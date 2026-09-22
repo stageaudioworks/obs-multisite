@@ -41,6 +41,7 @@ int main() {
         in["role"] = "encoder";
         in["marker_labels"] = json::array({"Sermon Start"});
         // Everything the screenshot test forbids, though present in status JSON.
+        // site_name is NOT among them any more — see the assertion below.
         in["cache_dir"] = "/var/lib/obs";
         in["site_name"] = "Main";
         in["secret_access_key"] = "hunter2";
@@ -55,7 +56,14 @@ int main() {
         for (const auto& f : heartbeat_encoder_fields())
             CHECK(has(out, f.c_str()), "listed encoder field kept");
         CHECK(!has(out, "cache_dir"), "cache_dir (local path) dropped");
-        CHECK(!has(out, "site_name"), "site_name dropped");
+        // SENT, verbatim and under its existing name (2026-09-22, operator's
+        // decision). It was excluded here with no reason recorded, and it is the
+        // one thing a fleet dashboard most needs: which site this is. It is also
+        // already in the church's bucket — every cue carries it as `author`, and
+        // each site's cue file is named after it — which is what the brief's own
+        // test permits. This assertion used to be !has; flipping it is the point.
+        CHECK(has(out, "site_name") && out["site_name"] == "Main",
+              "site_name sent, verbatim");
         CHECK(!has(out, "secret_access_key"), "secret dropped");
         CHECK(!has(out, "endpoint_host"), "endpoint detail dropped");
         CHECK(!has(out, "clock_skew_ms"), "unlisted field dropped");
@@ -89,7 +97,8 @@ int main() {
         for (const auto& f : heartbeat_decoder_fields())
             CHECK(has(out, f.c_str()), "listed decoder field kept");
         CHECK(!has(out, "cache_dir"), "cache_dir dropped");
-        CHECK(!has(out, "site_name"), "site_name dropped");
+        CHECK(has(out, "site_name") && out["site_name"] == "Campus B",
+              "site_name sent, verbatim — and this is the case a dashboard needs");
         CHECK(!has(out, "lan_configured"), "LAN visibility dropped even when true");
         CHECK(!has(out, "lan_active"), "LAN visibility dropped even when false");
         CHECK(!has(out, "seek_target_ms"), "unlisted decoder field dropped");

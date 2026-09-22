@@ -15,9 +15,18 @@
 // rule from the brief is verbatim-under-existing-names: when the plugin gains
 // a field, the collector gets it for free only if the field was already
 // listed here — a rename here is a permanent translation layer later, so
-// there isn't one. The screenshot test applies: cache_dir, site_name,
-// secrets, endpoint details beyond storage_host, UI chrome and LAN
-// visibility fields are never listed.
+// there isn't one. The screenshot test applies: cache_dir, secrets, endpoint
+// details beyond storage_host, UI chrome and LAN visibility fields are never
+// listed.
+//
+// site_name WAS on that list and is not now (2026-09-22, the operator's call).
+// Unlike cache_dir it had no stated reason for being there, and it is the one
+// thing a fleet dashboard most needs — which site is this. It also passes the
+// brief's own test: it is already in the church's bucket, carried as every
+// cue's `author` and naming each site's cue file. It goes on the wire verbatim,
+// under the name the dock already uses. The brief in multisite-cloud
+// (docs/reporter-brief.md, "Explicitly excluded") still lists it and needs the
+// same change, or the two repos describe different contracts.
 //
 // Licensing: this lives under this repo's GPL. It must not import, link or
 // copy anything from the proprietary control-plane repository; the HTTP+JSON

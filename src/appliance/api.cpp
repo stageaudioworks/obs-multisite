@@ -45,6 +45,12 @@ json status_json(const Player& player) {
 
     json j;
     j["room_id"]        = s.room_id;
+    // The box's own name, in its status document under the same field the OBS
+    // decoder's uses, so the heartbeat — a filtered view of this document —
+    // carries it verbatim. It lived only in config_json before, which the
+    // heartbeat never reads, so a Pi would have been the one host that could
+    // not say which site it was.
+    j["site_name"]      = player.config().site_name;
     j["room_state"]     = s.room_state;
     j["event_id"]       = s.event_id;
     j["pinned_event_id"] = s.pinned_event_id;

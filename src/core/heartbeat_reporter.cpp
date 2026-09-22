@@ -57,6 +57,7 @@ const std::vector<std::string>& heartbeat_encoder_fields() {
         "colo", "link_health", "link_known", "last_error", "pending",
         "confirmed", "retries", "bytes", "upload_bytes_per_s",
         "upload_samples", "video_encoder_id", "marker_labels", "locked",
+        "site_name",
     };
     return k;
 }
@@ -72,6 +73,7 @@ const std::vector<std::string>& heartbeat_decoder_fields() {
         "link_health", "link_known", "last_error", "colo", "storage_host",
         "download_bytes_per_s", "download_samples", "audio_channels",
         "audio_track_label", "channel_labels", "markers", "configured",
+        "site_name",
     };
     return k;
 }
