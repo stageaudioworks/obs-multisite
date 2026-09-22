@@ -62,6 +62,59 @@ int main() {
         CHECK(!cloud_parse_credentials("", 200).ok, "empty body fails");
     }
 
+    std::printf("expires_at is an ISO-8601 STRING, not an integer\n");
+    {
+        // The spec guessed an integer; the live collector sends a string
+        // (measured 2026-09-22). Reading it as an integer yielded 0, which
+        // marked every credential set already-expired.
+        CHECK(cloud_parse_iso8601_ms("1970-01-01T00:00:00Z") == 0,
+              "the epoch");
+        CHECK(cloud_parse_iso8601_ms("1970-01-01T00:00:01Z") == 1000,
+              "one second");
+        CHECK(cloud_parse_iso8601_ms("2026-09-22T08:18:03Z") == 1790065083000LL,
+              "a real instant, to the second");
+        CHECK(cloud_parse_iso8601_ms("2026-09-22T08:18:03.586Z") ==
+                  1790065083586LL,
+              "and with milliseconds, which is the form the collector sends");
+        // Fractional digits are scaled by what was actually read, so .5 is
+        // 500 ms and not 5.
+        CHECK(cloud_parse_iso8601_ms("2026-09-22T08:18:03.5Z") ==
+                  1790065083500LL, ".5 means 500 ms");
+        CHECK(cloud_parse_iso8601_ms("2026-09-22T08:18:03.123456Z") ==
+                  1790065083123LL, "longer fractions are truncated, not scaled");
+        // Fails safe: 0 is "no expiry known", which live() never accepts.
+        CHECK(cloud_parse_iso8601_ms("") == 0, "empty is 0");
+        CHECK(cloud_parse_iso8601_ms("not a date") == 0, "garbage is 0");
+        CHECK(cloud_parse_iso8601_ms("2026-13-01T00:00:00Z") == 0,
+              "an impossible month is 0");
+        CHECK(cloud_parse_iso8601_ms("2026-09-22") == 0,
+              "a date with no time is 0");
+    }
+
+    std::printf("The reply carries the key PAIR as well as the token\n");
+    {
+        // Measured field names, from the live collector 2026-09-22.
+        json j;
+        j["endpoint"] = "https://acct.r2.cloudflarestorage.com";
+        j["bucket"] = "multisite-demo-org";
+        j["region"] = "auto";
+        j["access_key_id"] = "cdc6289bd3612745784cbd28204aead0";
+        j["secret_access_key"] = "df88a47a...";
+        j["session_token"] = "and0L2V5...";
+        j["role"] = "encoder";
+        j["expires_at"] = "2026-09-22T08:18:03.586Z";
+        const auto r = cloud_parse_credentials(j.dump(), 200);
+        CHECK(r.ok, "the real shape parses");
+        CHECK(r.creds.access_key_id == "cdc6289bd3612745784cbd28204aead0",
+              "the key id is kept — a token alone signs with nothing");
+        CHECK(r.creds.secret_access_key == "df88a47a...", "the secret is kept");
+        CHECK(r.creds.expires_at_ms == 1790065083586LL,
+              "and the string expiry became a real instant");
+        CHECK(r.creds.live(1790065083000LL),
+              "so the set is live before it expires");
+        CHECK(!r.creds.live(1790065084000LL), "and not after");
+    }
+
     std::printf("403 is its own outcome: unpaired, not a generic failure\n");
     {
         const auto r403 = cloud_parse_credentials("", 403);

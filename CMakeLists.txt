@@ -429,6 +429,13 @@ if(CURL_FOUND)
     target_link_libraries(test_cloud_storage PRIVATE multisite_s3)
     add_test(NAME cloud_storage COMMAND test_cloud_storage)
 
+    # A diagnostic, not a test: it drives the real pairing + credential flow
+    # against a live collector and prints what comes back, so a host is wired
+    # against the measured contract rather than the spec's guess at it. Not in
+    # ctest — it needs a live collector and an operator to approve the code.
+    add_executable(probe_credentials scripts/probe_credentials.cpp)
+    target_link_libraries(probe_credentials PRIVATE multisite_s3)
+
     # Proves cancel_pending() actually aborts a stalled request quickly rather
     # than trusting that wiring curl's progress callback was enough. POSIX
     # sockets only — stands up a bare TCP listener to simulate a stalled link,

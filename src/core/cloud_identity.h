@@ -35,6 +35,12 @@ namespace multisite {
 struct Credentials {
     std::string bucket;
     std::string endpoint;
+    // Temporary credentials: an access key ID and secret, plus the session
+    // token that goes with them. The collector returns ALL THREE (measured
+    // 2026-09-22), not a token alone — so a consumer needs the pair as well as
+    // the token, or the signature is made with nothing.
+    std::string access_key_id;
+    std::string secret_access_key;
     std::string session_token;   // sent onward as X-Amz-Security-Token
     long long   expires_at_ms = 0;
     bool        read_write = false;
@@ -59,6 +65,15 @@ struct CredentialsReply {
 CredentialsReply cloud_parse_credentials(const std::string& body, int http_code);
 
 // ── The lifecycle ───────────────────────────────────────────────────────────
+
+// The collector's `expires_at` is an ISO-8601 UTC instant with milliseconds —
+// "2026-09-22T08:18:03.586Z" — MEASURED from the live service 2026-09-22, not
+// assumed. (The spec first guessed an integer of milliseconds; the probe showed
+// a string, and reading it as an integer yielded 0, i.e. every credential set
+// treated as already expired.) Returns epoch milliseconds, or 0 when the string
+// is absent or unparseable — 0 is "no expiry known", which no live() call
+// accepts, so a malformed timestamp fails safe.
+long long cloud_parse_iso8601_ms(const std::string& iso);
 
 // When to fetch again: half the remaining TTL, so a refresh lands well before
 // expiry and one failed attempt still leaves room for the next. Never returns 0

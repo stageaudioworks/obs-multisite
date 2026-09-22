@@ -50,19 +50,41 @@ The exact type is this module's to design; the requirement is that a consumer
 cannot see a bucket without also seeing whether the credentials behind it are
 live or last-good, and cannot see an identity without its role.
 
-## Wire contract (new surface — restate it here as the authority)
+## Wire contract (measured against the live collector 2026-09-22)
 
 ```
 GET {collector_url}/v1/credentials
   Authorization: Bearer {appliance_token}
-  → 200 { bucket, endpoint, session_token, expires_at, role }
+  → 200 {
+          endpoint,                        // full URL, scheme included
+          bucket, region,
+          access_key_id, secret_access_key, // the key PAIR
+          session_token,                    // + the token that goes with it
+          role,                             // "encoder" / "decoder"
+          expires_at                        // ISO-8601 UTC string
+        }
   → 403 the device was unpaired   → STOP, do not retry
   → 5xx / unreachable             → keep last-good, degrade, never stop the event
 ```
 
-- `session_token` is sent onward as **`X-Amz-Security-Token`**.
-- The returned bucket and endpoint are used **exactly as received**; never
-  guessed from a typed value.
+**This section used to state the reply from the design, and the design was
+wrong in two ways.** Both were found by `scripts/probe_credentials.cpp` driving
+the real service, before any host depended on them:
+
+1. **`expires_at` is an ISO-8601 string** (`"2026-09-22T08:18:03.586Z"`), not an
+   integer of milliseconds. Read as an integer it yielded 0, so every credential
+   set was treated as already expired — the fault would have been invisible
+   against a mock that spoke our own guessed shape.
+2. **The reply carries a key PAIR plus a session token**, not a token alone. A
+   consumer must pass `access_key_id`, `secret_access_key` AND `session_token`
+   onward; a token with no key pair signs with nothing.
+
+- `access_key_id` + `secret_access_key` sign the request; `session_token` is
+  sent onward as **`X-Amz-Security-Token`** and is part of the signed headers.
+- `endpoint` arrives with its scheme; `S3Transport` strips it. The returned
+  bucket and endpoint are used **exactly as received**; never guessed from a
+  typed value.
+- `region` is `auto` for R2.
 - **Never fall back to a configured key when a fetch fails.** Degrade to the
   last good credentials. A collector outage must not stop a live event.
 - **403 means the device was unpaired**: stop, rather than retry. Retrying a

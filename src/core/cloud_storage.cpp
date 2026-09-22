@@ -49,16 +49,19 @@ std::shared_ptr<S3Transport> CloudTransport::inner_for(std::string& why) const {
     s3.bucket = c.bucket;
     // The endpoint is used EXACTLY as received. Brokered credentials name their
     // own host, and guessing one from a region would be the "never guess a
-    // bucket" rule's twin.
+    // bucket" rule's twin. S3Transport strips the scheme itself, so the
+    // "https://..." the collector sends is safe here.
     s3.endpoint_host = c.endpoint;
     s3.region = m_cfg.region;
     s3.use_https = m_cfg.use_https;
     s3.connect_timeout_ms = m_cfg.connect_timeout_ms;
     s3.request_timeout_ms = m_cfg.request_timeout_ms;
-    // Temporary credentials: the session token IS the credential's other half.
-    // S3Transport carries it as X-Amz-Security-Token on every signed request
-    // (see the class comment: SigV4 signs whatever headers it is given).
-    s3.session_token = c.session_token;
+    // Temporary credentials are a key PAIR plus a session token: the pair signs,
+    // and the token proves the pair is a temporary one. All three travel — a
+    // token with no key pair would sign with nothing.
+    s3.access_key_id     = c.access_key_id;
+    s3.secret_access_key = c.secret_access_key;
+    s3.session_token     = c.session_token;
 
     m_inner = std::make_shared<S3Transport>(s3);
     m_built_expiry = key;
