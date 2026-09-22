@@ -9,6 +9,7 @@
 #include "update_check.h"
 #include "core/playout_clock.h"
 #include "core/tile_crop.h"
+#include "core/collector_client.h"   // the endpoint paths + bounded HTTP call
 
 #include <algorithm>
 #include <chrono>
@@ -252,6 +253,99 @@ std::shared_ptr<CmafDecoder> Player::decoder_ref() const {
     return m_decoder;
 }
 
+std::shared_ptr<CloudIdentity> Player::cloud_identity() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_identity;
+}
+
+std::string Player::storage_mode() const {
+    const Config cfg = config();
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    if (m_cloud_transport) return "paired";
+    if (m_transport) return "direct";
+    if (m_lan_transport) return "LAN only";
+    if (cfg.paired_configured()) return "waiting";
+    return "none";
+}
+
+std::string Player::storage_bucket() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    if (m_cloud_transport) return m_cloud_transport->bucket();
+    if (m_transport) return config().bucket;
+    return std::string();
+}
+
+bool Player::storage_credentials_stale() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_cloud_transport ? m_cloud_transport->credentials_are_stale() : false;
+}
+
+std::string Player::storage_credentials_note() const {
+    // One sentence for the page, decided in one place so the status line and
+    // the settings panel cannot describe the same state differently.
+    if (storage_mode() != "paired") return std::string();
+    if (storage_credentials_stale())
+        return "last known credentials — the collector could not be reached";
+    return std::string();
+}
+
+void Player::serve_cloud_credentials() {
+    std::shared_ptr<CloudIdentity> id;
+    Config cfg;
+    {
+        std::lock_guard<std::mutex> lk(m_obj_mtx);
+        id = m_identity;
+        if (!id) return;
+    }
+    cfg = config();
+
+    const long long now_ms = (long long)std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+    if (id->tick(now_ms) != CloudAction::Fetch) return;
+
+    // The fetch runs OUTSIDE m_obj_mtx — it is a network call, and holding the
+    // object mutex across it would freeze the page and the poll loop for as
+    // long as the request takes. The identity's own state is written by
+    // on_credentials() after.
+    const std::string url =
+        multisite::collector_url(id->collector_url(), multisite::kCredentialsPath);
+    const multisite::HttpResult r =
+        multisite::http_get_json(url, id->appliance_token());
+    if (!r.reached) {
+        // Unreachable: hand the identity an empty reply so it keeps last-good
+        // and schedules a retry. The event goes on.
+        id->on_credentials(multisite::CredentialsReply{}, now_ms);
+        plog_info("cloud credentials: collector not reached — keeping the last "
+                  "known set");
+    } else {
+        const multisite::CredentialsReply reply =
+            multisite::cloud_parse_credentials(r.body, (int)r.code);
+        if (reply.ok) {
+            plog_info("cloud credentials: fetched %s (role %s, expires in %lld s)",
+                      reply.creds.bucket.c_str(),
+                      reply.creds.read_write ? "read-write" : "read-only",
+                      (reply.creds.expires_at_ms - now_ms) / 1000);
+        } else if (reply.unpaired) {
+            plog_warn("cloud credentials: the collector says this device is "
+                      "UNPAIRED — stopping fetches. A running event continues on "
+                      "the last known credentials until they expire.");
+        } else {
+            plog_warn("cloud credentials: HTTP %ld, keeping the last known set",
+                      r.code);
+        }
+        id->on_credentials(reply, now_ms);
+    }
+
+    // A newly-arrived credential set is what lets a paired box build a cloud
+    // transport for the first time, or swap one built on stale keys. Ask the
+    // poll loop to rebuild — it owns session lifetime — rather than rebuilding
+    // from this thread.
+    m_transport_wanted = true;
+    m_poll_now = true;
+}
+
 void Player::note_error(const std::string& what) {
     std::lock_guard<std::mutex> lk(m_err_mtx);
     m_last_error = what;
@@ -259,10 +353,42 @@ void Player::note_error(const std::string& what) {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
+void Player::adopt_saved_pairing(const Config& cfg) {
+    if (!m_identity) m_identity = std::make_shared<CloudIdentity>();
+    // Only touch the identity when the settings actually name a device. A box
+    // whose pairing was cleared (Disconnect) must not keep a stale enrolment,
+    // which is why the clearing branch is here rather than only the setting one.
+    if (cfg.reporter_url.empty() || cfg.reporter_appliance_id.empty() ||
+        cfg.reporter_token.empty()) {
+        // Nothing saved. Leave the identity alone if it already holds a claim
+        // from this run's pairing flow — those credentials are newer than the
+        // settings, which may not have been written back yet.
+        return;
+    }
+    // Idempotent: rebuilding the session is frequent, and re-enrolling would
+    // throw away credentials the fetcher has already collected.
+    if (m_identity->paired() && m_identity->collector_url() == cfg.reporter_url &&
+        m_identity->appliance_id() == cfg.reporter_appliance_id &&
+        m_identity->appliance_token() == cfg.reporter_token)
+        return;
+    m_identity->set_enrolment(cfg.reporter_url, cfg.reporter_appliance_id,
+                              cfg.reporter_token);
+}
+
+bool Player::paired_for_storage(const Config& cfg) const {
+    if (!cfg.paired_configured()) return false;
+    if (!m_identity) return false;
+    // Pairing alone is not enough: the credential set is what a transport needs,
+    // and until one has been fetched there is nothing to read with. A box in
+    // that window falls through to the typed leg if it has one.
+    return m_identity->credentials().present();
+}
+
 void Player::rebuild_session() {
     Config cfg = config();
 
     m_transport.reset();
+    m_cloud_transport.reset();
     m_lan_transport.reset();
     m_fallback_transport.reset();
     m_session.reset();
@@ -275,7 +401,29 @@ void Player::rebuild_session() {
         return;
     }
 
-    if (cfg.cloud_configured()) {
+    // Pick up a saved pairing before deciding which leg to build: an
+    // already-paired box must work on upgrade with no operator action.
+    adopt_saved_pairing(cfg);
+
+    // Two producers of the cloud leg, and nothing downstream learns which it
+    // got (docs/scope/phase12-capability-map.md):
+    //
+    //   PAIRED  — the collector minted credentials, so the bucket, endpoint and
+    //             keys all come from the identity. No typed key is consulted,
+    //             which is the whole point: a paired box cannot read storage
+    //             with a pasted key because it has none.
+    //   DIRECT  — the operator typed keys, unchanged from before.
+    //
+    // The identity is made once and kept, so the reporter and the transport
+    // share it — one identity for storage and monitoring both.
+    if (!m_identity) m_identity = std::make_shared<CloudIdentity>();
+    const CloudRole role = CloudRole::Decoder;   // a campus reads
+    if (paired_for_storage(cfg)) {
+        CloudStorageConfig csc;
+        csc.region = cfg.region;
+        m_cloud_transport =
+            std::make_shared<CloudTransport>(*m_identity, role, csc);
+    } else if (cfg.cloud_configured()) {
         S3Config s3;
         s3.endpoint_host     = cfg.endpoint_host;
         s3.r2_account_id     = cfg.r2_account_id;
@@ -293,18 +441,25 @@ void Player::rebuild_session() {
         m_lan_transport = std::make_shared<LanTransport>(lcfg);
     }
 
+    // The cloud leg, whichever producer supplied it. A null here with LAN
+    // configured is the LAN-only case; a null with neither is caught by
+    // cfg.configured() above.
+    Transport* cloud = m_cloud_transport
+        ? static_cast<Transport*>(m_cloud_transport.get())
+        : static_cast<Transport*>(m_transport.get());
+
     // Preference and fallback (§8.7): LAN answers when it can, cloud
     // otherwise, decided per request — see fallback_transport.h. Exactly one
     // of the three is real when only one leg is configured; cfg.configured()
     // above already guarantees at least one is.
     Transport* active = nullptr;
-    if (m_lan_transport && m_transport) {
-        m_fallback_transport = std::make_shared<FallbackTransport>(*m_lan_transport, *m_transport);
+    if (m_lan_transport && cloud) {
+        m_fallback_transport = std::make_shared<FallbackTransport>(*m_lan_transport, *cloud);
         active = m_fallback_transport.get();
     } else if (m_lan_transport) {
         active = m_lan_transport.get();
     } else {
-        active = m_transport.get();
+        active = cloud;
     }
 
     DecoderConfig dc;
@@ -337,6 +492,19 @@ void Player::rebuild_session() {
             return lan->publish_cue(author, label, merged, error);
         };
     }
+    // A PAIRED box that has not fetched credentials yet reaches here with no
+    // cloud leg and no LAN leg: it is configured (the pairing names a
+    // collector) but has nothing to read through until the first fetch lands.
+    // That is a waiting state, not an error — say so and let the poll loop
+    // rebuild once credentials arrive, rather than falling through to a null
+    // dereference.
+    if (!active) {
+        plog_info("paired but no cloud credentials yet — waiting for the "
+                  "collector before reading storage");
+        note_error("waiting for cloud credentials");
+        return;
+    }
+
     m_session = std::make_shared<DecoderSession>(dc, *active);
 
     // Event browsing (§7.5) is inherently cloud-only — there is no such
@@ -1410,6 +1578,23 @@ void Player::poll_loop() {
 
         if (now >= next_poll || m_poll_now.exchange(false)) {
             next_poll = now + interval;
+
+            // A new credential set arrived (the reporter fetched it): rebuild
+            // so the session reads through it. This is the paired box's first
+            // transport, or a swap from stale keys to fresh ones. Done here
+            // rather than on the reporter's thread because the poll loop owns
+            // session lifetime.
+            if (m_transport_wanted.exchange(false)) {
+                plog_info("cloud credentials available — rebuilding the session");
+                teardown_decoder();
+                flush_delivery();
+                {
+                    std::lock_guard<std::mutex> lk(m_obj_mtx);
+                    rebuild_session();
+                }
+                m_events_wanted = true;
+            }
+
             auto sess = session_ref();
             if (sess) {
                 // poll() does network I/O and can take seconds; never under a

@@ -38,6 +38,8 @@
 #include "../core/s3_transport.h"
 #include "../core/lan_transport.h"
 #include "../core/fallback_transport.h"
+#include "../core/cloud_identity.h"   // the paired device's identity (Phase 12)
+#include "../core/cloud_storage.h"    // the Transport it reads through when paired
 
 #include <atomic>
 #include <condition_variable>
@@ -320,6 +322,26 @@ public:
     void reporter_pair_cancel();
     PairView reporter_pair_view() const;
 
+    // ── The paired identity (Phase 12), reporter-facing ─────────────────────
+    // The reporter owns the credential lifecycle because it already owns the
+    // collector connection, the clock and the network. It calls this each tick;
+    // the method fetches only when the identity says one is due.
+    void serve_cloud_credentials();
+
+    // The box's cloud identity, under the object mutex. The reporter and the
+    // transport share it — which is the point: one identity for storage and
+    // monitoring both. Null before the first rebuild_session().
+    std::shared_ptr<multisite::CloudIdentity> cloud_identity() const;
+
+    // What the box is reading through, for the page: "paired", "direct",
+    // "LAN only", "waiting" or "none".
+    std::string storage_mode() const;
+    // The bucket in use, from whichever producer supplied it.
+    std::string storage_bucket() const;
+    bool storage_credentials_stale() const;
+    // One sentence for the page when the credentials are not fresh, else "".
+    std::string storage_credentials_note() const;
+
     // The most recent decoded picture, for the preview. Deliberately separate
     // from the output path: the preview may be one frame a second, may lag,
     // and may be looked at while the output is held — lining up a cue is
@@ -375,6 +397,21 @@ private:
     void flush_delivery();
     void note_error(const std::string& what);
 
+    // Adopt the box's saved collector url/id/token into m_identity, so an
+    // already-paired install keeps working with no operator action. Called
+    // before a session is built and by the reporter before it fetches. The
+    // fields stay in Config — this reads them, it does not move them; the
+    // contract step that removes them is ticket #11's, after both hosts are
+    // migrated.
+    void adopt_saved_pairing(const Config& cfg);
+
+    // True when this box should read through a CloudTransport: paired in
+    // settings AND the identity actually holds credentials. Being configured
+    // to pair is not the same as having a usable credential set yet — a box
+    // that has just booted, or whose first fetch failed, falls back to the
+    // typed leg (or to LAN) until credentials arrive.
+    bool paired_for_storage(const Config& cfg) const;
+
     std::shared_ptr<multisite::DecoderSession> session_ref() const;
     std::shared_ptr<multisite::CmafDecoder>    decoder_ref() const;
 
@@ -403,7 +440,23 @@ private:
     // Cloud, null unless cfg.cloud_configured(). Kept independently of
     // whichever transport DecoderSession actually holds (see rebuild_session)
     // because storage_health() reports on this one specifically.
+    //
+    // When the box is PAIRED this is a CloudStorage, so its bucket and its
+    // credentials come from the collector rather than from typed keys. When it
+    // is not, it is an S3Transport fed from the typed fields. storage_health()
+    // needs the concrete S3Transport for its colo/probe figures, so the paired
+    // case keeps a separate pointer below — see rebuild_session().
     std::shared_ptr<multisite::S3Transport>    m_transport;
+    // The paired device's identity (Phase 12): the collector connection and
+    // the credential lifecycle. One per box, shared by the reporter and the
+    // transport, which is the point — a paired box reads storage and reports
+    // health under ONE identity. Guarded by m_obj_mtx with the transports.
+    std::shared_ptr<multisite::CloudIdentity>  m_identity;
+    // The paired transport, when there is one. Held alongside m_transport
+    // (which stays the concrete S3 leg for storage_health) rather than instead
+    // of it, because the two answer different questions: what to read through,
+    // and what to report about the cloud leg.
+    std::shared_ptr<multisite::CloudTransport> m_cloud_transport;
     // LAN (PROJECT-SCOPE.md §8.7), null unless cfg.lan_configured().
     std::shared_ptr<multisite::LanTransport>       m_lan_transport;
     // Only constructed when BOTH of the above exist; DecoderSession and
@@ -449,6 +502,13 @@ private:
     // whenever the interval comes round: waiting out three seconds before even
     // looking is what makes Load feel like a dropped click.
     std::atomic<bool> m_poll_now{false};
+
+    // The reporter's thread fetched a new credential set and the session should
+    // be rebuilt to read through it. A FLAG rather than a direct rebuild: the
+    // reporter has no business rebuilding a session, and doing it there would
+    // race the poll loop that owns session lifetime. The poll loop takes this
+    // under m_obj_mtx, the same place every other rebuild happens.
+    std::atomic<bool> m_transport_wanted{false};
     int      m_last_room = -1;
     uint64_t m_feed_start_ns = 0;      // monotonic time this decoder started
     uint64_t m_pushed_media_ns = 0;    // media duration handed over so far

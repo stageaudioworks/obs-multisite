@@ -207,12 +207,25 @@ struct Config {
         return !bucket.empty() &&
                (!endpoint_host.empty() || !r2_account_id.empty());
     }
+    // PAIRED (Phase 12): the box has a collector connection and an appliance
+    // token, so its bucket and credentials come from the collector rather than
+    // from typed fields. Deliberately NOT the same test as cloud_configured():
+    // a paired box has no bucket, endpoint or keys typed, so cloud_configured()
+    // is false for it and a gate built on that alone would refuse to build a
+    // session on exactly the boxes this feature exists for.
+    bool paired_configured() const {
+        return !reporter_url.empty() && !reporter_appliance_id.empty() &&
+               !reporter_token.empty();
+    }
     bool lan_configured() const { return !lan_host.empty(); }
     // Whether there is any way to reach a room at all — the gate the player
     // checks before it will try to build a session. cloud_configured() alone
     // used to BE this gate; a LAN-only box (no cloud credentials at all) is
-    // exactly why it no longer is.
-    bool configured() const { return cloud_configured() || lan_configured(); }
+    // exactly why it no longer is. A PAIRED box is the second reason: it
+    // reaches storage with credentials it has not been typed.
+    bool configured() const {
+        return cloud_configured() || lan_configured() || paired_configured();
+    }
 
     // Read from `path`. Missing file is not an error: a freshly installed box
     // has no config and must still boot far enough to show its IP address so

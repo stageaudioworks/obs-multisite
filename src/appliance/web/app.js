@@ -1241,6 +1241,14 @@ async function loadRemote() {
 
 function storageLine(d) {
   if (!d.configured) return ['Not set up yet', false];
+  // Paired (Phase 12) FIRST: a paired box has no typed bucket or endpoint —
+  // the collector supplied them — so the LAN-only test below would misreport
+  // it. Its state is the credentials', not the typed fields'.
+  if (d.mode === 'paired') {
+    if (d.credentials_stale) return [d.credentials_note || 'Credentials cannot be refreshed', true];
+    return ['Paired to Multisite Cloud — ' + (d.bucket_in_use || 'ready'), false];
+  }
+  if (d.mode === 'waiting') return ['Paired — waiting for credentials', false];
   // LAN-only (PROJECT-SCOPE.md §8.7): no cloud endpoint at all, so none of
   // reachable/readable/probed below mean anything — they describe the
   // bucket specifically, and there isn't one.
@@ -1269,6 +1277,10 @@ async function loadStorage(probe) {
   const [state, bad] = storageLine(d);
   rows.push(`<dt>Storage</dt><dd${bad ? ' class="bad"' : ''}>${escapeHtml(state)}</dd>`);
   if (d.endpoint) add('Endpoint', d.endpoint + (d.bucket ? ' / ' + d.bucket : ''));
+  // A paired box's bucket came from the collector, not from the typed field
+  // above — so name it, and say where it came from, in one row.
+  if (d.mode === 'paired' && d.bucket_in_use && !d.bucket)
+    add('Bucket', d.bucket_in_use + ' (from Multisite Cloud)');
   // The most useful figure for a site a long way from its bucket: a box in
   // Johannesburg served from Amsterdam explains a latency nothing local can.
   if (d.colo) add('Served from', d.colo);

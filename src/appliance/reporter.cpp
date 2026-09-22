@@ -311,6 +311,11 @@ void Reporter::loop() {
     std::call_once(curl_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
     while (m_worker->running.load()) {
         serve_pairing();
+        // The credential lifecycle (Phase 12) rides this thread: storage and
+        // monitoring are the same subsystem, and this worker already owns the
+        // collector connection, the clock and the network. It fetches only when
+        // the identity says one is due, so a steady state costs nothing.
+        if (m_worker->player) m_worker->player->serve_cloud_credentials();
         serve_once();
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

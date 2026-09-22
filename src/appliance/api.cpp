@@ -798,6 +798,24 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         // LAN host — the "via LAN"/"via cloud" distinction is meaningless if
         // there is no LAN leg to distinguish it from at all.
         if (h.lan_configured) j["lan_active"] = h.lan_active;
+
+        // ── Paired or direct (Phase 12) ──────────────────────────────────────
+        // "brokered must not come to mean opaque": the page has to be able to
+        // say which producer supplied the bucket AND whether the credentials
+        // behind it are fresh. The mode is a word ("paired", "direct",
+        // "LAN only", "waiting", "none") rather than a pair of booleans, so
+        // the page does not have to re-derive it.
+        j["mode"] = player.storage_mode();
+        // The bucket from whichever producer supplied it — for a paired box
+        // that is the collector's, not the (empty) typed one, which is why
+        // this can differ from the `bucket` above.
+        const std::string paired_bucket = player.storage_bucket();
+        if (!paired_bucket.empty()) j["bucket_in_use"] = paired_bucket;
+        if (player.storage_mode() == "paired") {
+            j["credentials_stale"] = player.storage_credentials_stale();
+            const std::string note = player.storage_credentials_note();
+            if (!note.empty()) j["credentials_note"] = note;
+        }
         res.json(j.dump());
     });
 
