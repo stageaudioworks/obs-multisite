@@ -1277,9 +1277,12 @@ async function loadStorage(probe) {
   const [state, bad] = storageLine(d);
   rows.push(`<dt>Storage</dt><dd${bad ? ' class="bad"' : ''}>${escapeHtml(state)}</dd>`);
   if (d.endpoint) add('Endpoint', d.endpoint + (d.bucket ? ' / ' + d.bucket : ''));
-  // A paired box's bucket came from the collector, not from the typed field
-  // above — so name it, and say where it came from, in one row.
-  if (d.mode === 'paired' && d.bucket_in_use && !d.bucket)
+  // A paired box's bucket came from the collector, not from the typed field —
+  // so name it, and say where it came from. Shown whenever the box is PAIRED,
+  // not only when the typed bucket is empty: a box that was switched to
+  // Multisite Cloud keeps whatever bucket it used to have typed, and hiding the
+  // real one because a stale one lingers is the opposite of the point.
+  if (d.mode === 'paired' && d.bucket_in_use)
     add('Bucket', d.bucket_in_use + ' (from Multisite Cloud)');
   // The most useful figure for a site a long way from its bucket: a box in
   // Johannesburg served from Amsterdam explains a latency nothing local can.

@@ -806,11 +806,17 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         // "LAN only", "waiting", "none") rather than a pair of booleans, so
         // the page does not have to re-derive it.
         j["mode"] = player.storage_mode();
-        // The bucket from whichever producer supplied it — for a paired box
-        // that is the collector's, not the (empty) typed one, which is why
-        // this can differ from the `bucket` above.
-        const std::string paired_bucket = player.storage_bucket();
-        if (!paired_bucket.empty()) j["bucket_in_use"] = paired_bucket;
+        // The bucket from whichever producer supplied it. On a PAIRED box this
+        // OVERWRITES the typed value, because a box switched to Multisite Cloud
+        // keeps whatever bucket it used to have typed and reporting that as
+        // "the bucket" is simply false. One bucket in the report, and it is the
+        // one in use (standards §2: a consumer must not have to choose between
+        // two answers).
+        const std::string bucket_in_use = player.storage_bucket();
+        if (!bucket_in_use.empty()) {
+            j["bucket"] = bucket_in_use;
+            j["bucket_in_use"] = bucket_in_use;
+        }
         if (player.storage_mode() == "paired") {
             j["credentials_stale"] = player.storage_credentials_stale();
             const std::string note = player.storage_credentials_note();

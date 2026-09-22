@@ -526,7 +526,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_pairStatus = new QLabel(repBox);
     m_pairStatus->setWordWrap(true);
     rform->addRow(QString(), m_pairStatus);
-    storePageLayout->addWidget(repBox);
+    // The Cloud section goes FIRST: the collector connection is the origin of
+    // both the heartbeat and (when Multisite Cloud is chosen) the storage,
+    // so it is the first thing an operator configures, not the last thing
+    // on the page. It used to sit at the bottom, named after only one of
+    // its two jobs.
+    storePageLayout->insertWidget(0, repBox);
 
     storePageLayout->addStretch(1);
     add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
