@@ -89,8 +89,16 @@ What remains, with nothing gating it now that the plugin is proven:
   bench Pi's provider to Multisite Cloud is the whole test.
 - **#13 — check the Pi page's Cloud section.** The docks' half is proven by use
   (pairing was done from one). The appliance page landed in `2cb63d7`, unseen.
-- **#11 — re-home the heartbeat onto `CloudIdentity`.** The one substantial
-  piece of work left: twelve files, expand → migrate → contract.
+- **#11 — re-home the heartbeat onto `CloudIdentity`.** Migrated on both hosts
+  (`2796a6e` OBS, `75030f2` Pi): each heartbeat reports as its role's identity,
+  through `collector_client`, and the hosts' private HTTP copies are gone. On
+  the way it split the plugin's one identity into one per role (`faac8ab`,
+  ADR-0001), and gave `CloudIdentity` the lock it never had (`f855469`) —
+  without it a writer and a reader crashed under TSan. **Still open:** the
+  contract step, and a live run showing each role fetching under its own
+  appliance. The contract step is not "delete the `reporter_*` fields" any
+  more: with an identity per role those fields ARE where each identity is
+  saved, so what goes is every *other* reader of them.
 - **`room-identity`** — not started, and still waiting on a reading from a
   running box before it is specified.
 
@@ -108,7 +116,9 @@ Both are design questions, not details, and the archive already flags them
 
 1. **What does a broker owe a device when a subscription lapses?** The answer
    must not be "the event stops". This shapes `cloud-identity`'s failure modes.
-2. **Does a decoder pair independently, or inherit from the encoder that
+2. **ANSWERED (2026-09-22): a decoder pairs independently — one identity per
+   role.** See `docs/adr/0001-one-cloud-identity-per-role.md`. Kept below as it
+   was asked. **Does a decoder pair independently, or inherit from the encoder that
    already knows the room?** This decides whether `cloud-identity` is
    per-device or per-room, which changes the module's shape.
 
