@@ -142,13 +142,20 @@ clang nor GCC flagged the missing argument on the concatenated literal — the
 class-level fix (a compile-time check that actually fires) is not done.
 
 **Next step, in order — read `docs/bugs/02-hold-resume-skips.md` first:**
-1. Determine whether `queued_span_ns()`'s count backstop (`n >= hard cap`
-   returns `kMaxQueuedNs` *unconditionally*) is the jam: audio hits 48 frames
-   long before its span reaches 1000 ms, so the count path can declare full
-   while the queue is only ~1003 ms and cannot drain. That is a two-line
-   comparison to check, not an arithmetic rewrite.
-2. Only then ask why delivery stopped. Instrument the deliver loop's wait
-   (line 954) — how long it is parked at each stage — before changing it.
+1. **The measurement is now in place (commit `0e160c9`, 2026-09-22), and it is
+   measurement-only** — the deliver loop's four decision statements are
+   byte-identical, so nothing already fixed can have changed. It answers the
+   question the entry could not: whether the loop is *parked* in a due-wait for
+   a far-future frame (which would explain the queue stuck at its cap) or
+   *awake* and popping. Reproduce the stall and read:
+   - `dropped a … frame … loop parked in due-wait` / `loop awake`
+   - `— parked N ms into a due-wait for a … frame timestamped M ms in the future`
+   - `deliver loop waited N ms for one frame`
+   **Parked with a timestamp seconds ahead ⇒ a timestamp is being computed far
+   in the future**, and the fix is wherever that timestamp comes from — not the
+   queue bound.
+2. Only then ask why delivery stopped. Do not change arithmetic before the
+   reading says which of the two it is.
 
 **DO NOT:**
 - **Re-apply option (a)** (`resume()` seeking back to `last_out_pts_ns`). Tried,
