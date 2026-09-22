@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <obs-module.h>
 #include "plugin_log.h"
+#include "broadcast_controller.h"   // unload() — see obs_module_unload
 #include "../core/log.h"
 
 OBS_DECLARE_MODULE()
@@ -74,6 +75,12 @@ void obs_module_unload(void) {
     // Stopped first: while it is running, a request can arrive at any moment,
     // and it must not arrive after the things it controls have gone.
     multisite_obs::reporter_stop();
+    // The controller's captions bridge holds a libobs signal handler and an
+    // output pointer. Stopping it HERE, while libobs is whole, is what keeps a
+    // clean shutdown clean: left to its destructor it runs during
+    // __cxa_finalize instead, after libobs's own statics are gone, and
+    // disconnects from a signal handler that no longer exists.
+    multisite_obs::BroadcastController::instance().unload();
     multisite_obs::unregister_vendor_api();
     multisite_obs::shut_down_web_ui();
     multisite_obs::unregister_ui();

@@ -218,6 +218,17 @@ public:
     bool go_live(std::string& error, bool force_new_event = false);
     void end_broadcast();
 
+    // Releases anything this controller holds from libobs, called from
+    // obs_module_unload — which runs BEFORE libobs tears its own statics down.
+    //
+    // Without it the captions bridge is stopped by its destructor instead,
+    // during __cxa_finalize at process exit, when this controller's
+    // function-local static is destroyed. By then obs_get_signal_handler()
+    // refers to a torn-down libobs, and disconnecting from it is a segfault on
+    // the way out of a clean shutdown — which is what a real OBS produced
+    // (2026-09-22).
+    void unload();
+
     // Whether there is an interrupted event to resume, checked from disk
     // alone — no output, no Session, no network — so the dock can decide
     // whether to ask the operator BEFORE Go Live creates anything. A

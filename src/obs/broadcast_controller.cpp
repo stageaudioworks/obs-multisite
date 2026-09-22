@@ -471,6 +471,16 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     return true;
 }
 
+void BroadcastController::unload() {
+    // The bridge holds a libobs signal handler and a libobs output pointer.
+    // Both are gone by the time this object's destructor would run — it is a
+    // function-local static, destroyed during __cxa_finalize at process exit —
+    // so the stop has to happen here, while libobs is still whole. Without
+    // this the destructor calls obs_get_signal_handler() on a torn-down libobs
+    // and the process segfaults on its way out of an otherwise clean shutdown.
+    m_captions.stop();
+}
+
 void BroadcastController::end_broadcast() {
     if (!m_output) return;
     mlog_info("ending broadcast (draining the upload queue)");

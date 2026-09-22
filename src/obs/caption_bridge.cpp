@@ -114,7 +114,14 @@ void CaptionBridge::stop() {
     // and finds null rather than an output that unsubscribe_all() is about to
     // outlive. Order matters more than the atomicity does.
     m_output = nullptr;
-    if (m_automatic.load())
+    // libobs must still be up to touch its signal handler. Normally it is —
+    // obs_module_unload stops this bridge while libobs is whole — but the
+    // destructor can also run during __cxa_finalize, after libobs's own
+    // statics are gone, and obs_get_signal_handler() then refers to freed
+    // state. Guarded rather than assumed: the handler dies with libobs anyway,
+    // so skipping the disconnect in that case leaks nothing that outlives the
+    // process.
+    if (m_automatic.load() && obs_get_signal_handler() != nullptr)
         signal_handler_disconnect(obs_get_signal_handler(), "source_create",
                                   &CaptionBridge::on_source_created, this);
     unsubscribe_all();
