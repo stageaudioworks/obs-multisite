@@ -17,13 +17,12 @@ Last updated: 2026-09-21.
 
 ## Open
 
-> **Next up (2026-09-22), in order:** entry **2** first — the delivery-stopped-
-> draining stall reproduced live on 2026-09-21, whose next measurement the entry
-> names (instrument the deliver loop's wait at `multisite_source.cpp:954`
-> before changing any arithmetic). Then Phase 12, spec'd in
+> **Next up (2026-09-22):** **Phase 12** — the Multisite Cloud module, spec'd in
 > `docs/scope/phase12-capability-map.md` and
 > `docs/scope/spec-cloud-identity.md`, gated on the map's approval and on the
-> decoder-pairing question.
+> decoder-pairing question. Entry **2**'s stall is parked as ticket
+> [#10](https://github.com/stageaudioworks/obs-multisite/issues/10); pick it up
+> there, not here.
 
 ### 0. Pi player: playback can stall indefinitely while downloads keep succeeding
 
@@ -203,6 +202,9 @@ wait, the queue bound, or the anchor.
 **Archive:** `docs/bugs/02-hold-resume-skips.md` — **read this before changing
 timing code.** It carries the measurements, the four rejected fixes, and the
 end-to-end account of the original root cause.
+
+**Ticket:** [#10](https://github.com/stageaudioworks/obs-multisite/issues/10) —
+parked here on 2026-09-22 to start Phase 12; everything above is in the ticket.
 
 ---
 
