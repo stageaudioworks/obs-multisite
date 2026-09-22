@@ -309,10 +309,12 @@ void Player::serve_cloud_credentials() {
     // object mutex across it would freeze the page and the poll loop for as
     // long as the request takes. The identity's own state is written by
     // on_credentials() after.
+    // One snapshot: rebuild_session can rewrite the enrolment on another thread,
+    // and a url from one pairing with the token from another is refused.
+    const multisite::Enrolment en = id->enrolment();
     const std::string url =
-        multisite::collector_url(id->collector_url(), multisite::kCredentialsPath);
-    const multisite::HttpResult r =
-        multisite::http_get_json(url, id->appliance_token());
+        multisite::collector_url(en.url, multisite::kCredentialsPath);
+    const multisite::HttpResult r = multisite::http_get_json(url, en.token);
     if (!r.reached) {
         // Unreachable: hand the identity an empty reply so it keeps last-good
         // and schedules a retry. The event goes on.
@@ -358,21 +360,32 @@ void Player::note_error(const std::string& what) {
 
 void Player::adopt_saved_pairing(const Config& cfg) {
     if (!m_identity) m_identity = std::make_shared<CloudIdentity>();
-    // Only touch the identity when the settings actually name a device. A box
-    // whose pairing was cleared (Disconnect) must not keep a stale enrolment,
-    // which is why the clearing branch is here rather than only the setting one.
+    // The identity FOLLOWS the saved pairing, clearing included.
+    //
+    // This comment used to promise a clearing branch — "a box whose pairing was
+    // cleared must not keep a stale enrolment" — and the code under it returned
+    // without clearing anything, on the grounds that the identity might hold a
+    // claim newer than the settings. It cannot: set_enrolment() is called here
+    // and nowhere else in the appliance, so the identity only ever holds what
+    // the settings held. Keeping the old enrolment meant a cleared box went on
+    // reading storage as its old appliance until it restarted — and now that
+    // the heartbeat reads the identity too, it would have gone on reporting as
+    // one.
     if (cfg.reporter_url.empty() || cfg.reporter_appliance_id.empty() ||
         cfg.reporter_token.empty()) {
-        // Nothing saved. Leave the identity alone if it already holds a claim
-        // from this run's pairing flow — those credentials are newer than the
-        // settings, which may not have been written back yet.
+        if (m_identity->paired()) {
+            plog_info("cloud identity: pairing cleared — no longer reading or "
+                      "reporting as %s", m_identity->appliance_id().c_str());
+            m_identity->reset();
+        }
         return;
     }
     // Idempotent: rebuilding the session is frequent, and re-enrolling would
-    // throw away credentials the fetcher has already collected.
-    if (m_identity->paired() && m_identity->collector_url() == cfg.reporter_url &&
-        m_identity->appliance_id() == cfg.reporter_appliance_id &&
-        m_identity->appliance_token() == cfg.reporter_token)
+    // throw away credentials the fetcher has already collected. Compared as one
+    // snapshot — the enrolment's three strings only mean anything together.
+    const multisite::Enrolment cur = m_identity->enrolment();
+    if (cur.paired() && cur.url == cfg.reporter_url &&
+        cur.id == cfg.reporter_appliance_id && cur.token == cfg.reporter_token)
         return;
     m_identity->set_enrolment(cfg.reporter_url, cfg.reporter_appliance_id,
                               cfg.reporter_token);

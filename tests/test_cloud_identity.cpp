@@ -11,6 +11,8 @@
 #include "../src/core/s3_transport.h"   // the S3Config the converter returns
 #include "../src/vendor/nlohmann/json.hpp"
 
+#include <atomic>
+#include <thread>
 #include <cstdio>
 #include <string>
 
@@ -293,6 +295,67 @@ int main() {
         CHECK(!stale.live(500),
               "the SAME values marked stale are not live — the flag is what "
               "tells a consumer to say so");
+    }
+
+    std::printf("== the identity is read and written from different threads ==\n");
+    {
+        // #11. A host's worker writes the credentials and the enrolment while
+        // the storage path reads them from its own threads — and on the Pi the
+        // enrolment is written from rebuild_session, which runs on several.
+        // There was no lock. This is the shape of that use, compressed: one
+        // thread rewriting, others reading, for long enough that the sanitizer
+        // job sees any unsynchronised access. It fails under TSan against the
+        // lock-free version and passes against the locked one; in an ordinary
+        // build it simply has to finish with every read coherent.
+        CloudIdentity id;
+        id.set_enrolment("https://a.example", "apl_a", "tok_a");
+        std::atomic<bool> stop{false};
+        std::atomic<int>  torn_creds{0};
+        std::atomic<int>  torn_enrol{0};
+
+        std::thread writer([&] {
+            for (int i = 0; i < 4000; ++i) {
+                const bool even = (i % 2) == 0;
+                id.set_enrolment(even ? "https://a.example" : "https://b.example",
+                                 even ? "apl_a" : "apl_b",
+                                 even ? "tok_a" : "tok_b");
+                CredentialsReply r;
+                r.ok = true;
+                r.creds.bucket        = even ? "bucket-a" : "bucket-b";
+                r.creds.endpoint      = even ? "https://a.r2" : "https://b.r2";
+                r.creds.session_token = std::string(64, even ? 'a' : 'b');
+                r.creds.expires_at_ms = 1000000 + i;
+                id.on_credentials(r, 1000 + i);
+            }
+            stop = true;
+        });
+        auto reader = [&] {
+            while (!stop.load()) {
+                (void)id.paired();
+                (void)id.tick(2000);
+                const Enrolment e = id.enrolment();   // ONE snapshot
+                const std::string& u = e.url;
+                const std::string& a = e.id;
+                const Credentials c = id.credentials();
+                // A copy taken mid-write would mix the two sets. Each field is
+                // written as a pair, so any mixture is a tear.
+                if (!c.bucket.empty() && !c.session_token.empty() &&
+                    (c.bucket == "bucket-a") != (c.session_token[0] == 'a'))
+                    ++torn_creds;
+                if (!u.empty() && !a.empty() &&
+                    (u == "https://a.example") != (a == "apl_a"))
+                    ++torn_enrol;
+            }
+        };
+        std::thread r1(reader), r2(reader);
+        writer.join(); r1.join(); r2.join();
+        std::printf("         tears: credentials %d, enrolment %d\n",
+                    torn_creds.load(), torn_enrol.load());
+        CHECK(torn_creds.load() == 0,
+              "one credentials() call is never half of one set and half of another");
+        CHECK(torn_enrol.load() == 0,
+              "the enrolment read as one snapshot is never two pairings mixed");
+        CHECK(id.paired(), "and the identity is still coherent afterwards");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "ALL CLOUD IDENTITY TESTS PASSED"

@@ -23,6 +23,7 @@
 // the time; the arithmetic and the state transitions are covered by
 // tests/test_cloud_identity.cpp.
 
+#include <mutex>
 #include <string>
 
 #include "heartbeat_reporter.h"
@@ -109,6 +110,33 @@ enum class CloudAction {
     Fetch,         // GET /v1/credentials with the appliance bearer
 };
 
+// Who this device is to the collector, taken as ONE snapshot.
+//
+// The three strings only mean anything together: a url from one pairing with
+// the token from another is a device the collector has never heard of, and the
+// request is refused. Read them one call at a time and a pairing change landing
+// between the calls mixes two appliances — the concurrency test measured 38
+// such mixtures in a few thousand rewrites. So anything that USES the
+// enrolment takes it through enrolment(), under one lock.
+struct Enrolment {
+    std::string url, id, token;
+    bool paired() const { return !url.empty() && !id.empty() && !token.empty(); }
+};
+
+// THREAD-SAFE, and every accessor returns by value.
+//
+// It was written as though one thread owned it, and was not used that way: a
+// host's worker writes the credentials, the storage path reads them from its
+// own poll and upload threads, and on the Pi the enrolment is written from
+// rebuild_session, which runs on several. With no lock, credentials() copied a
+// Credentials whose strings another thread could be reassigning. Nothing
+// caught it because the core tests never drive the hosts' threads, and a
+// sanitizer only sees a race that some test actually runs.
+//
+// So the lock is here, once, rather than in each host that reaches in — and
+// the strings come back as copies, because a reference into a string another
+// thread may reassign is a race with a pointer attached (the same fix
+// Session::last_error needed).
 class CloudIdentity {
 public:
     // The pairing this device completed, or an earlier one loaded from
@@ -116,11 +144,30 @@ public:
     void set_enrolment(const std::string& collector_url,
                        const std::string& appliance_id,
                        const std::string& appliance_token);
-    bool paired() const { return !m_id.empty() && !m_token.empty() &&
-                                 !m_url.empty(); }
-    const std::string& collector_url() const { return m_url; }
-    const std::string& appliance_id() const { return m_id; }
-    const std::string& appliance_token() const { return m_token; }
+    bool paired() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return paired_locked();
+    }
+    // The pairing as one coherent value — use this rather than the three
+    // accessors below whenever more than one of them is needed together.
+    Enrolment enrolment() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return Enrolment{m_url, m_id, m_token};
+    }
+    // Single fields, for a caller that needs exactly one (a log line naming the
+    // appliance). Two of these in a row are two snapshots, not one.
+    std::string collector_url() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_url;
+    }
+    std::string appliance_id() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_id;
+    }
+    std::string appliance_token() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_token;
+    }
 
     // What to do at `now_ms`. Fetch on boot, then again at the refresh time.
     CloudAction tick(long long now_ms) const;
@@ -136,17 +183,33 @@ public:
     void on_credentials(const CredentialsReply& r, long long now_ms);
 
     // The current set. from_last_good tells the caller whether it is fresh.
-    Credentials credentials() const { return m_creds; }
+    Credentials credentials() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_creds;
+    }
 
     // True once a 403 has been seen: fetching has stopped and the device needs
     // an operator to pair again.
-    bool unpaired() const { return m_unpaired; }
-    const std::string& error() const { return m_error; }
+    bool unpaired() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_unpaired;
+    }
+    std::string error() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_error;
+    }
 
     // Clear everything — Disconnect. Typed keys are not this class's concern.
     void reset();
 
 private:
+    // Callers already holding m_mtx. tick() needs "is it paired?" and taking
+    // the lock twice would deadlock a std::mutex.
+    bool paired_locked() const {
+        return !m_id.empty() && !m_token.empty() && !m_url.empty();
+    }
+
+    mutable std::mutex m_mtx;
     std::string m_url, m_id, m_token;
     Credentials m_creds;
     bool        m_unpaired = false;

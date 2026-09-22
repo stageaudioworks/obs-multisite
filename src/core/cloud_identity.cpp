@@ -166,6 +166,7 @@ long long cloud_next_refresh_ms(const Credentials& c, long long now_ms) {
 void CloudIdentity::set_enrolment(const std::string& collector_url,
                                   const std::string& appliance_id,
                                   const std::string& appliance_token) {
+    std::lock_guard<std::mutex> lk(m_mtx);
     m_url   = collector_url;
     m_id    = appliance_id;
     m_token = appliance_token;
@@ -179,7 +180,8 @@ void CloudIdentity::set_enrolment(const std::string& collector_url,
 }
 
 CloudAction CloudIdentity::tick(long long now_ms) const {
-    if (!paired()) return CloudAction::Idle;
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (!paired_locked()) return CloudAction::Idle;
     // A 403 stopped this device deliberately. Fetching again would be retrying
     // a revocation, which is how a device becomes a stuck one.
     if (m_unpaired) return CloudAction::Idle;
@@ -189,6 +191,7 @@ CloudAction CloudIdentity::tick(long long now_ms) const {
 }
 
 void CloudIdentity::on_credentials(const CredentialsReply& r, long long now_ms) {
+    std::lock_guard<std::mutex> lk(m_mtx);
     if (r.unpaired) {
         // STOP, and do not clear the last-good set: a running event is covered
         // by it until expiry (the decided lapse behaviour). What stops is
@@ -226,6 +229,7 @@ void CloudIdentity::on_credentials(const CredentialsReply& r, long long now_ms) 
 }
 
 void CloudIdentity::reset() {
+    std::lock_guard<std::mutex> lk(m_mtx);
     m_url.clear();
     m_id.clear();
     m_token.clear();

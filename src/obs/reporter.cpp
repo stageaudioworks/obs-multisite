@@ -420,15 +420,14 @@ void serve(Slot& s) {    const auto now = std::chrono::steady_clock::now();
     // separate choice from pairing, and a paired box may run with it off.
     const multisite::CloudRole role = s.role == "encoder"
         ? multisite::CloudRole::Encoder : multisite::CloudRole::Decoder;
-    std::string url, id, token;
-    if (auto ident = role_identity(role).id; ident && ident->paired()) {
-        // Same thread as the identity's writer (this worker), so the
-        // references are read with nothing racing them.
-        url = ident->collector_url();
-        id = ident->appliance_id();
-        token = ident->appliance_token();
-    }
-    const bool configured = !url.empty() && !id.empty() && !token.empty();
+    // ONE snapshot, not three reads: a url from one pairing and a token from
+    // another is an appliance the collector has never heard of.
+    multisite::Enrolment en;
+    if (auto ident = role_identity(role).id) en = ident->enrolment();
+    const std::string& url = en.url;
+    const std::string& id = en.id;
+    const std::string& token = en.token;
+    const bool configured = en.paired();
 
     bool enabled = false, active = false;
     std::string status;
@@ -519,10 +518,11 @@ void serve_cloud_credentials(multisite::CloudRole role) {
 
     if (id->tick(now_ms) != multisite::CloudAction::Fetch) return;
 
-    const std::string url = multisite::collector_url(
-        id->collector_url(), multisite::kCredentialsPath);
-    const multisite::HttpResult r =
-        multisite::http_get_json(url, id->appliance_token());
+    // One snapshot: the url and the bearer must be the same pairing's.
+    const multisite::Enrolment en = id->enrolment();
+    const std::string url =
+        multisite::collector_url(en.url, multisite::kCredentialsPath);
+    const multisite::HttpResult r = multisite::http_get_json(url, en.token);
     if (!r.reached) {
         // Unreachable: an empty reply keeps last-good and schedules a retry.
         id->on_credentials(multisite::CredentialsReply{}, now_ms);
@@ -706,8 +706,10 @@ void adopt_role(multisite::CloudRole role, const Slot& slot) {
     // written back yet. Re-enrolling would throw those credentials away.
     const std::string src = cfg.url + "\n" + cfg.id + "\n" + cfg.token;
     if (ri.src == src) return;
-    if (id->paired() && id->collector_url() == cfg.url &&
-        id->appliance_id() == cfg.id && id->appliance_token() == cfg.token) {
+    // Compared as one snapshot, for the reason given on Enrolment.
+    const multisite::Enrolment cur = id->enrolment();
+    if (cur.paired() && cur.url == cfg.url && cur.id == cfg.id &&
+        cur.token == cfg.token) {
         ri.src = src;
         return;
     }
