@@ -186,6 +186,13 @@ struct SourceCtx : DecoderControls {
     // reference under `obj_mtx` and release it before doing any work — the
     // session and decoder are internally thread-safe.
     std::shared_ptr<S3Transport>    transport;
+    // PAIRED (Phase 12): the cloud leg when the collector supplies it. Held
+    // here for the same reason `transport` is — DecoderSession and
+    // FallbackTransport hold REFERENCES, so whoever builds them must outlive
+    // them. This member was missing at first and the decoder crashed on Apply:
+    // the CloudTransport was built in a local shared_ptr, referenced by
+    // FallbackTransport, and destroyed when the builder returned.
+    std::shared_ptr<multisite::CloudTransport> cloud_transport;
     // Null unless a LAN host is configured (PROJECT-SCOPE.md §8.7). Kept
     // alongside `transport` (never in place of it) so stop_playback()'s
     // "cancel whatever is in flight" and play()'s re-arm reach BOTH legs —
@@ -2243,12 +2250,13 @@ static void src_update(void* data, obs_data_t* s) {
             cat = std::make_shared<EventCatalog>(cc, *cloud);
         }
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
-        ctx->transport     = tx;
-        ctx->lan_transport = lan_tx;
-        ctx->fallback      = fb;
-        ctx->mirror_read   = mirror_tx;
-        ctx->session       = ses;
-        ctx->catalog       = cat;
+        ctx->transport       = tx;
+        ctx->cloud_transport = cloud_tx;   // keeps the paired leg alive
+        ctx->lan_transport   = lan_tx;
+        ctx->fallback        = fb;
+        ctx->mirror_read     = mirror_tx;
+        ctx->session         = ses;
+        ctx->catalog         = cat;
     }
     {
         // Start with a clean list: this may be a different room entirely.
@@ -2294,11 +2302,14 @@ static void src_destroy(void* data) {
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         // session first: it holds a Transport& into whichever of these it
         // was actually built against (see the construction site above), so
-        // nothing may be freed before it is.
+        // nothing may be freed before it is. FallbackTransport holds
+        // references too, so it goes before every transport it wraps —
+        // cloud_transport included, which is the paired leg (Phase 12).
         ctx->session.reset();
         ctx->fallback.reset();
         ctx->lan_transport.reset();
         ctx->transport.reset();
+        ctx->cloud_transport.reset();
     }
     delete ctx;
 }
