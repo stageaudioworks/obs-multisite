@@ -76,14 +76,40 @@ int main() {
               "an unrecognised key falls back to Custom rather than refusing to load");
     }
 
-    std::printf("== Multisite Cloud is listed but not selectable yet ==\n");
+    std::printf("== Multisite Cloud is selectable, first, and needs no field ==\n");
     {
         const auto& info = provider_info(StorageProvider::MultisiteCloud);
-        CHECK(!info.available, "greyed out until the brokered flow (§8.5) actually exists");
-        bool found = false;
-        for (const auto& p : all_providers())
-            if (p.id == StorageProvider::MultisiteCloud) found = true;
-        CHECK(found, "but still present in the list, so a dock can show it greyed out");
+        // Was greyed out while the brokered flow did not exist. Phase 12 built
+        // it, so it is selectable — and this assertion is deliberately the
+        // opposite of the one it replaces, because the behaviour changed by
+        // design.
+        CHECK(info.available, "selectable now the brokered flow exists");
+        CHECK(!info.needs_account_id && !info.needs_region &&
+              !info.needs_endpoint,
+              "and it needs NO typed field — the collector supplies bucket, "
+              "endpoint and credentials");
+        CHECK(!info.display_name.empty() &&
+              info.display_name.find("coming soon") == std::string::npos,
+              "the name no longer says it is coming");
+
+        // FIRST in the list: it is the pairing-first route, and the dropdown
+        // used to end with it greyed out at the bottom.
+        const auto& all = all_providers();
+        CHECK(!all.empty() &&
+              all.front().id == StorageProvider::MultisiteCloud,
+              "listed first, not last");
+
+        // Every provider is listed exactly once — reordering must not drop one.
+        for (const auto& id : { StorageProvider::MultisiteCloud,
+                                StorageProvider::CloudflareR2,
+                                StorageProvider::AwsS3,
+                                StorageProvider::BackblazeB2,
+                                StorageProvider::Wasabi,
+                                StorageProvider::Custom }) {
+            int seen = 0;
+            for (const auto& p : all) if (p.id == id) ++seen;
+            CHECK(seen == 1, "each provider appears exactly once");
+        }
     }
 
     if (g_fail) {

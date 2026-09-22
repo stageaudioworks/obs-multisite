@@ -42,7 +42,14 @@ StorageProvider provider_from_key(const std::string& key) {
 }
 
 const std::vector<ProviderInfo>& all_providers() {
+    // Multisite Cloud FIRST: it is the pairing-first route (Phase 12), and
+    // putting it at the end greyed out is what the dropdown looked like while
+    // it was unbuilt. It needs NO typed field — the collector supplies the
+    // bucket, endpoint and keys — so every needs_* is false and the dock shows
+    // the pairing state in place of the fields.
     static const std::vector<ProviderInfo> table = {
+        { StorageProvider::MultisiteCloud, "multisite_cloud", "Multisite Cloud",
+          false, false, false, /*available*/ true },
         { StorageProvider::CloudflareR2, "r2", "Cloudflare R2",
           /*account_id*/ true,  /*region*/ false, /*endpoint*/ false, /*available*/ true },
         { StorageProvider::AwsS3, "aws", "AWS S3",
@@ -53,8 +60,6 @@ const std::vector<ProviderInfo>& all_providers() {
           false, true, false, true },
         { StorageProvider::Custom, "custom", "Custom / other S3-compatible",
           false, true, true, true },
-        { StorageProvider::MultisiteCloud, "multisite_cloud", "Multisite Cloud (coming soon)",
-          false, false, false, /*available*/ false },
     };
     return table;
 }
@@ -87,8 +92,10 @@ DerivedFields derive(StorageProvider provider, const std::string& input) {
         case StorageProvider::Custom:
         case StorageProvider::MultisiteCloud:
         default:
-            // Nothing to derive: Custom's fields already are what goes into
-            // S3Config, and MultisiteCloud isn't real yet.
+            // Nothing to derive. Custom's fields already are what goes into
+            // S3Config, and MultisiteCloud HAS no storage field to derive from
+            // — the collector supplies the bucket, endpoint and credentials, so
+            // there is nothing here for an operator to type.
             break;
     }
     return d;

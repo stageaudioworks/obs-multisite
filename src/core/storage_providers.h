@@ -28,8 +28,9 @@ enum class StorageProvider {
     BackblazeB2,
     Wasabi,
     Custom,           // today's full form: a raw endpoint, unchanged
-    MultisiteCloud,   // not yet real — see PROJECT-SCOPE.md §8.5. Listed so a
-                      // dock can grey it out now rather than add it in later.
+    MultisiteCloud,   // paired storage (Phase 12): the collector supplies the
+                      // bucket, endpoint and credentials, so the operator types
+                      // no storage field at all — only the pairing.
 };
 
 // Persisted as a plain string, the same way every other setting in this
@@ -49,13 +50,14 @@ struct ProviderInfo {
     bool needs_account_id = false; // R2 only
     bool needs_region     = false; // AWS / Backblaze / Wasabi
     bool needs_endpoint   = false; // Custom only — the raw hostname field
-    // False only for MultisiteCloud today: listed for the dropdown, not yet
-    // selectable.
+    // True for MultisiteCloud: its bucket, endpoint and credentials come from
+    // the collector, so no storage field is typed and the dock shows the
+    // pairing state instead.
     bool available = true;
 };
 
-// In display order — Custom second-to-last, MultisiteCloud last and marked
-// unavailable until it exists.
+// In display order — Multisite Cloud first (the pairing-first route), then the
+// typed-key providers, Custom second-to-last.
 const std::vector<ProviderInfo>& all_providers();
 const ProviderInfo& provider_info(StorageProvider p);
 
