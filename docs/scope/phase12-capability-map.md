@@ -52,6 +52,17 @@ immediately, and it is small enough to land and verify on its own.
 | `room-identity` | Not started. The `room_id` mismatch is still unconfirmed in the code — settle it from a running box first (see the note below) |
 | Appliance wiring | [#12](https://github.com/stageaudioworks/obs-multisite/issues/12) — the first host where the whole path runs on a box |
 
+**#12 is built and deployed.** Verified on `rpi5-nathan`: crash-free,
+`NRestarts 0`, reading from its typed R2 bucket with `mode: "direct"`, heartbeat
+accepted. The deployment found three faults the core tests could not — a
+segfault, a gate that switched a typed-key box onto brokered storage, and a
+needless rebuild — all fixed. See BUGS.md's "Recently landed" and the commits.
+
+The **paired** path on a box is still untested: that unit is a monitoring-only
+pairing, so `mode` is `direct`. Exercising it means switching a box's provider
+to Multisite Cloud, which needs [#13](https://github.com/stageaudioworks/obs-multisite/issues/13)
+to give the dropdown somewhere to pair from.
+
 The frontier is **#12** (appliance) or **#11** (OBS plugin): both are wiring and
 neither gates the other. The appliance is the smaller surface and already owns
 both its transport and its reporter, so it goes first.
