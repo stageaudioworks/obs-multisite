@@ -233,6 +233,10 @@ std::shared_ptr<multisite::CloudIdentity> g_identity;
 // Which pairing the identity currently holds, so adoption is idempotent
 // without re-enrolling (which would throw away fetched credentials).
 std::string g_identity_src;
+// The bucket the last credential fetch named. A decoder source is asked to
+// rebuild when this CHANGES, not on every refresh: the session token rotates
+// each time, and rebuilding for that would interrupt a campus once per TTL.
+std::string g_last_storage_bucket;
 
 // Pairing phase transitions, logged once each (defined below, called from
 // serve_pairing with g_mtx held).
@@ -587,6 +591,29 @@ void serve_cloud_credentials() {
                   r.code);
     }
     id->on_credentials(reply, now_ms);
+
+    // A decoder source builds its transports at load, so one that loaded before
+    // this fetch saw no credentials and refused. Ask every live source to
+    // re-apply its settings, which rebuilds them now the identity is populated.
+    // This is the OBS twin of the appliance's m_transport_wanted: a session
+    // reads through the credentials it was built with, so either the session is
+    // rebuilt or the credentials are not there.
+    //
+    // Only for a fetch that produced the bucket for the FIRST time, or moved it
+    // to a different one. The session token rotates on every refresh, so keying
+    // on it would tear every decoder down once per TTL — the same needless
+    // rebuild the appliance had, and the reason its gate keys on the provider
+    // rather than on the credentials. A refreshed token signs just as well
+    // through a transport that already exists.
+    if (reply.ok && reply.creds.bucket != g_last_storage_bucket) {
+        const bool first = g_last_storage_bucket.empty();
+        g_last_storage_bucket = reply.creds.bucket;
+        mlog_info("cloud credentials: bucket %s '%s' — asking live decoder "
+                  "sources to read through it",
+                  first ? "is" : "moved to",
+                  reply.creds.bucket.c_str());
+        decoder_reconfigure_all();
+    }
 }
 
 void loop() {
