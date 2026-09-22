@@ -420,6 +420,17 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_testUplinkResult->setWordWrap(true);
     storePageLayout->addWidget(m_testUplinkResult);
     connect(m_testUplink, &QPushButton::clicked, this, [this] {
+        // Multisite Cloud has no typed host, so the burst would be sent to an
+        // empty endpoint — which is why this reported "Couldn't resolve host
+        // name" on a machine that was working. The speed figure this button
+        // exists for is the UPLINK, and on a paired machine that is measured
+        // from real uploads as they happen; a burst here would spend real
+        // bandwidth on the paired path to learn something already known.
+        if (m_provider->currentData().toString() == "multisite_cloud") {
+            m_testUplinkResult->setStyleSheet(QString());
+            m_testUplinkResult->setText(tr_("Dock.TestUplinkCloud"));
+            return;
+        }
         const std::string bucket = m_bucket->text().trimmed().toStdString();
         if (bucket.empty()) {
             m_testUplinkResult->setStyleSheet(QString());
