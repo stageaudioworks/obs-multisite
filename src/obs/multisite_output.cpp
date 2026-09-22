@@ -12,12 +12,15 @@
 #include "plugin_log.h"
 #include "multisite_ui.h"
 #include "storage_secondary.h"
+#include "broadcast_controller.h"   // the provider choice lives in its settings
+#include "reporter.h"               // the plugin's shared CloudIdentity
 
 #include "../core/session.h"
 #include "../core/cmaf_muxer.h"
 #include "../core/s3_transport.h"
 #include "../core/null_transport.h"
 #include "../core/lan_object_server.h"
+#include "../core/cloud_storage.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -658,11 +661,42 @@ static bool complete_start(OutputCtx* ctx) {
                    "missing, so decoders will reject the stream");
 
     if (ctx->pending_cloud_enabled) {
-        auto s3 = std::make_unique<S3Transport>(ctx->pending_s3);
-        // Report the URL actually in use: a mistyped endpoint is otherwise
-        // only visible as curl's opaque "bad/illegal format" error.
-        mlog_info("storage: %s", s3->base_url().c_str());
-        ctx->transport = std::move(s3);
+        // Two producers of the cloud leg, and nothing downstream learns which
+        // (Phase 12). PAIRED: the collector minted credentials, so the bucket,
+        // endpoint and keys all come from the shared identity — an encoder
+        // writes, which the role says. DIRECT: the operator typed keys, exactly
+        // as before. The operator's choice of provider decides, so a box with
+        // typed keys that also heartbeats is NOT switched onto brokered storage.
+        const BroadcastSettings bcfg =
+            BroadcastController::instance().settings_copy();
+        auto identity = reporter_cloud_identity();
+        const bool use_paired =
+            bcfg.storage_provider == "multisite_cloud" && identity &&
+            identity->paired() && identity->credentials().present();
+
+        if (use_paired) {
+            multisite::CloudStorageConfig csc;
+            csc.region = bcfg.region;
+            auto ct = std::make_unique<multisite::CloudTransport>(
+                *identity, multisite::CloudRole::Encoder, csc);
+            mlog_info("storage: Multisite Cloud — bucket '%s'",
+                      ct->bucket().c_str());
+            ctx->transport = std::move(ct);
+        } else if (bcfg.storage_provider == "multisite_cloud") {
+            // Chosen, but not usable yet: no pairing, or no credentials fetched.
+            // Refuse plainly rather than falling back to typed keys the operator
+            // did not choose — silence here is how a box reads the wrong bucket.
+            mlog_error("storage is set to Multisite Cloud but the machine is "
+                       "not paired yet (or has no credentials) — pair it in "
+                       "the Cloud section, or choose a different provider");
+            return false;
+        } else {
+            auto s3 = std::make_unique<S3Transport>(ctx->pending_s3);
+            // Report the URL actually in use: a mistyped endpoint is otherwise
+            // only visible as curl's opaque "bad/illegal format" error.
+            mlog_info("storage: %s", s3->base_url().c_str());
+            ctx->transport = std::move(s3);
+        }
 
         // The second bucket (PROJECT-SCOPE.md §10 Phase 9). Machine-wide
         // rather than part of this event's settings — see storage_secondary.h.

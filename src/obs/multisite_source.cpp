@@ -19,8 +19,10 @@
 
 #include "plugin_log.h"
 #include "storage_secondary.h"
+#include "reporter.h"   // the plugin's shared CloudIdentity (Phase 12)
 
 #include "../core/mirror_read_transport.h"
+#include "../core/cloud_storage.h"
 #include "multisite_ui.h"
 #include "decoder_settings.h"
 
@@ -2131,10 +2133,36 @@ static void src_update(void* data, obs_data_t* s) {
         // Cloud, LAN, both, or — since shared.configured() already checked
         // at least one is set — exactly one of the two below is always real.
         std::shared_ptr<S3Transport> tx;
+        std::shared_ptr<multisite::CloudTransport> cloud_tx;
         std::shared_ptr<LanTransport> lan_tx;
         std::shared_ptr<FallbackTransport> fb;
-        if (shared.cloud_configured())
+
+        // PAIRED (Phase 12): the collector supplies the bucket, endpoint and
+        // credentials, so this box reads through a CloudTransport instead of a
+        // typed-key S3Transport. The operator's choice of provider decides — a
+        // campus with typed keys that also heartbeats keeps reading with its
+        // typed keys. Role Decoder: a campus only reads.
+        const std::string provider = shared.storage_provider;
+        auto identity = reporter_cloud_identity();
+        const bool use_paired =
+            provider == "multisite_cloud" && identity && identity->paired() &&
+            identity->credentials().present();
+
+        if (use_paired) {
+            multisite::CloudStorageConfig csc;
+            csc.region = shared.region;
+            cloud_tx = std::make_shared<multisite::CloudTransport>(
+                *identity, multisite::CloudRole::Decoder, csc);
+            mlog_info("source: storage is Multisite Cloud — bucket '%s'",
+                      cloud_tx->bucket().c_str());
+        } else if (provider == "multisite_cloud") {
+            mlog_error("source: storage is set to Multisite Cloud but this "
+                       "machine is not paired yet (or has no credentials) — "
+                       "pair it in the Cloud section, or choose a provider");
+            return;
+        } else if (shared.cloud_configured()) {
             tx = std::make_shared<S3Transport>(s3);
+        }
         if (shared.lan_configured()) {
             LanTransportConfig lcfg;
             lcfg.host       = shared.lan_host;
@@ -2143,15 +2171,24 @@ static void src_update(void* data, obs_data_t* s) {
             lan_tx = std::make_shared<LanTransport>(lcfg);
         }
 
+        // The effective cloud leg, whichever producer supplied it.
+        Transport* cloud = cloud_tx
+            ? static_cast<Transport*>(cloud_tx.get())
+            : static_cast<Transport*>(tx.get());
+
         // The second bucket, when this machine has one configured
         // (PROJECT-SCOPE.md §10 Phase 9). Composed UNDER the LAN fallback, so
         // the preference order is LAN → primary cloud → second cloud, decided
         // per request: an event's later segments may exist only in the second
         // bucket after a write-side failover, and a 404 from a reachable
         // primary must fall through rather than be read as the primary failing.
+        //
+        // NOT for a paired device: it reads ONE bucket the broker named, so
+        // there is no second typed target to mirror and nothing to fall back
+        // to. The `if (tx)` below skips it by construction — tx is null when
+        // paired — so nothing needs saying here beyond this note.
         std::shared_ptr<S3Transport> tx2;
         std::shared_ptr<MirrorReadTransport> mirror_tx;
-        Transport* cloud = tx.get();
         if (tx) {
             S3Config sc2;
             if (secondary_s3_config(sc2)) {
@@ -2163,7 +2200,7 @@ static void src_update(void* data, obs_data_t* s) {
             }
         }
 
-        if (lan_tx && !tx) {
+        if (lan_tx && !cloud) {
             // A cue goes to the encoder's hub only when there is NO bucket to
             // write to. With cloud configured the cue is written directly, so a
             // configured-but-unreachable LAN host — a box tested at home, an
@@ -2177,7 +2214,7 @@ static void src_update(void* data, obs_data_t* s) {
         }
 
         Transport* active = nullptr;
-        if (lan_tx && tx) {
+        if (lan_tx && cloud) {
             // Preference and fallback (§8.7): LAN answers when it can, cloud
             // otherwise, decided per request — see fallback_transport.h.
             fb = std::make_shared<FallbackTransport>(*lan_tx, *cloud);
@@ -2191,11 +2228,12 @@ static void src_update(void* data, obs_data_t* s) {
 
         // Event browsing (§7.5) is inherently cloud-only — there is no such
         // thing as "list every event a LAN endpoint has ever served"; it
-        // only ever knows about whichever one is live right now. No catalog
-        // at all when cloud isn't configured, rather than one that can only
-        // ever come back empty and reads as a room with no history.
+        // only ever knows about whichever one is live right now. No catalog at
+        // all when cloud isn't configured, rather than one that can only ever
+        // come back empty and reads as a room with no history. A paired device
+        // gets one too: the broker's bucket lists exactly as a typed one does.
         std::shared_ptr<EventCatalog> cat;
-        if (tx) {
+        if (cloud) {
             // The catalog shares the cloud transport and, deliberately, the
             // same staleness rule as the decoder: the list and the player
             // must never disagree about whether an event is still running.

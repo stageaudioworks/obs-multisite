@@ -12,7 +12,10 @@
 // Deliberately free of Qt: a build without docks still reports, because the
 // machine nobody is sitting at is the one that most needs reporting.
 //
+#include <memory>
 #include <string>
+
+#include "../core/cloud_identity.h"
 
 namespace multisite_obs {
 
@@ -20,6 +23,21 @@ namespace multisite_obs {
 void reporter_start();
 // Stops the worker and joins it. Called from obs_module_unload.
 void reporter_stop();
+
+// The plugin's ONE cloud identity (Phase 12). The worker owns it, because it
+// already owns the collector connection, the clock and the network — and the
+// encoder output and decoder source read it, so a machine's storage and its
+// monitoring use one identity rather than two. Exactly the seam the Pi
+// appliance uses (Player::cloud_identity), so the two hosts cannot diverge.
+//
+// Shared and never null once the worker has started; callers tolerate a null
+// before that. The identity's own state is written only on the worker thread.
+std::shared_ptr<multisite::CloudIdentity> reporter_cloud_identity();
+
+// Adopt this role's saved collector url/id/token into the identity, so an
+// already-paired install works with no operator action. Called by the worker
+// each tick, cheap and idempotent.
+void reporter_adopt_saved_pairing();
 
 // The last POST outcome for a role ("obs-encoder" / "obs-decoder"), as stable
 // words for the docks: "accepted (200)", "rejected: 401 — token unknown",
