@@ -311,7 +311,7 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     // gate used to make pairing impossible to use, because every typed field it
     // demands is empty by design on exactly the machines this feature is for.
     if (m_cfg.cloud_enabled && m_cfg.storage_provider == "multisite_cloud") {
-        auto id = reporter_cloud_identity();
+        auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
         if (!id || !id->paired()) {
             error = "This machine is set to store through Multisite Cloud but "
                     "is not paired yet. Open the Cloud section above and press "
@@ -643,7 +643,7 @@ void BroadcastController::start_idle_monitor() {
     // return early and the monitor would never start — no link health, no colo,
     // nothing — on exactly the machines this reports status for. It failed
     // silently, which is why it read as an empty indicator rather than a fault.
-    auto identity = reporter_cloud_identity();
+    auto identity = reporter_cloud_identity(multisite::CloudRole::Encoder);
     const bool use_paired =
         m_cfg.storage_provider == "multisite_cloud" && identity &&
         identity->paired();

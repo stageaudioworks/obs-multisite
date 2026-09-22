@@ -669,7 +669,7 @@ static bool complete_start(OutputCtx* ctx) {
         // typed keys that also heartbeats is NOT switched onto brokered storage.
         const BroadcastSettings bcfg =
             BroadcastController::instance().settings_copy();
-        auto identity = reporter_cloud_identity();
+        auto identity = reporter_cloud_identity(multisite::CloudRole::Encoder);
         const bool use_paired =
             bcfg.storage_provider == "multisite_cloud" && identity &&
             identity->paired() && identity->credentials().present();
@@ -956,7 +956,7 @@ static bool out_start(void* data) {
         // rather than reporting an empty bucket.
         const std::string provider =
             BroadcastController::instance().settings_copy().storage_provider;
-        auto identity = reporter_cloud_identity();
+        auto identity = reporter_cloud_identity(multisite::CloudRole::Encoder);
         const bool paired_ok =
             provider == "multisite_cloud" && identity && identity->paired() &&
             identity->credentials().present();

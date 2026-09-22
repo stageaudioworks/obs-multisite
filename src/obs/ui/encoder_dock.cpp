@@ -363,7 +363,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         // name" and says nothing true. What CAN be reported is the pairing,
         // which is the real connection this provider uses.
         if (m_provider->currentData().toString() == "multisite_cloud") {
-            auto id = reporter_cloud_identity();
+            auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
             if (!id || !id->paired())
                 m_testConnectionResult->setText(tr_("Dock.TestCloudNotPaired"));
             else if (!id->credentials().present())
@@ -821,7 +821,7 @@ void EncoderDock::refreshPairedStorageNote() {
     // Reads the plugin's ONE cloud identity — the same one the encoder writes
     // through — so what the panel says is what the session does, not a
     // reconstruction from form fields.
-    auto id = reporter_cloud_identity();
+    auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
     QString t;
     if (!id || !id->paired()) {
         t = tr_("Dock.PairedNotYet");
@@ -1388,7 +1388,7 @@ void EncoderDock::onManageStorage() {
     // the reporter is already holding.
     multisite::S3Config s3;
     if (cfg.storage_provider == "multisite_cloud") {
-        auto id = reporter_cloud_identity();
+        auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
         if (!id || !id->paired() || !id->credentials().present()) {
             QMessageBox::information(this, tr_("Dock.ManageStorage"),
                                      tr_("Storage.CloudNotReady"));

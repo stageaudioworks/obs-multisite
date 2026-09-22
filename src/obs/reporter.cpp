@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "reporter.h"
+#include "../core/cloud_storage.h"   // CloudRole
 
 #include "broadcast_controller.h"
 #include "decoder_settings.h"
@@ -226,17 +227,44 @@ std::mutex g_mtx;
 Slot g_encoder{"obs-encoder", "encoder"};
 Slot g_decoder{"obs-decoder", "decoder"};
 
-// The plugin's ONE cloud identity (Phase 12), owned by this worker and read by
-// the encoder output and decoder source — see reporter.h. Made before the loop
-// starts and never replaced, so a reader's shared_ptr stays valid.
-std::shared_ptr<multisite::CloudIdentity> g_identity;
-// Which pairing the identity currently holds, so adoption is idempotent
-// without re-enrolling (which would throw away fetched credentials).
-std::string g_identity_src;
-// The bucket the last credential fetch named. A decoder source is asked to
-// rebuild when this CHANGES, not on every refresh: the session token rotates
-// each time, and rebuilding for that would interrupt a campus once per TTL.
-std::string g_last_storage_bucket;
+// ONE CLOUD IDENTITY PER ROLE (Phase 12), owned by this worker and read by that
+// role's storage — see reporter.h.
+//
+// It used to be one identity for the whole plugin, fed from the encoder's
+// pairing and falling back to the decoder's, on the assumption that "the
+// machine is one appliance to the collector whatever it is doing locally".
+// The pairing flow does not work that way: each role pairs on its own and is
+// its own appliance. A Mac running both had encoder apl_5d62… and decoder
+// apl_2a7b… — so the decoder heartbeated as one appliance and read storage
+// with credentials fetched under the other, with the encoder's READ-WRITE
+// role. That is the exact split this subsystem exists to make impossible, and
+// it handed a decoder write access it has no use for.
+//
+// Now each role's storage and its heartbeat come from that role's pairing and
+// nothing else. No fallback between them: a role that is not paired is not
+// paired, and says so.
+struct RoleIdentity {
+    // Made before the loop starts and never replaced, so a reader's
+    // shared_ptr stays valid.
+    std::shared_ptr<multisite::CloudIdentity> id;
+    // Which pairing it currently holds, so adoption is idempotent without
+    // re-enrolling (which would throw away fetched credentials).
+    std::string src;
+    // The bucket the last fetch named. The decoder's sources are asked to
+    // rebuild when this CHANGES, not on every refresh: the session token
+    // rotates each time, and rebuilding for that would interrupt a campus once
+    // per TTL.
+    std::string last_bucket;
+};
+RoleIdentity g_id_encoder;
+RoleIdentity g_id_decoder;
+
+RoleIdentity& role_identity(multisite::CloudRole r) {
+    return r == multisite::CloudRole::Encoder ? g_id_encoder : g_id_decoder;
+}
+const char* role_word(multisite::CloudRole r) {
+    return r == multisite::CloudRole::Encoder ? "encoder" : "decoder";
+}
 
 // Pairing phase transitions, logged once each (defined below, called from
 // serve_pairing with g_mtx held).
@@ -553,9 +581,11 @@ void serve(Slot& s) {    const auto now = std::chrono::steady_clock::now();
 // One credential step (Phase 12), on this worker's thread. Fetches only when
 // the identity says one is due, so a steady state costs nothing. The fetch runs
 // with nothing held — the identity's own state is written after it returns.
-void serve_cloud_credentials() {
-    auto id = g_identity;
+void serve_cloud_credentials(multisite::CloudRole role) {
+    RoleIdentity& ri = role_identity(role);
+    auto id = ri.id;
     if (!id) return;
+    const char* who = role_word(role);
 
     const long long now_ms = (long long)std::chrono::duration_cast<
         std::chrono::milliseconds>(
@@ -570,25 +600,28 @@ void serve_cloud_credentials() {
     if (!r.reached) {
         // Unreachable: an empty reply keeps last-good and schedules a retry.
         id->on_credentials(multisite::CredentialsReply{}, now_ms);
-        mlog_info("cloud credentials: collector not reached — keeping the last "
-                  "known set");
+        mlog_info("cloud credentials (%s): collector not reached — keeping the "
+                  "last known set", who);
         return;
     }
 
     const multisite::CredentialsReply reply =
         multisite::cloud_parse_credentials(r.body, (int)r.code);
     if (reply.ok) {
-        mlog_info("cloud credentials: fetched %s (role %s, expires in %lld s)",
+        // The role and the appliance, because "which pairing did this come
+        // from?" is the question the single identity could not answer.
+        mlog_info("cloud credentials (%s, %s): fetched %s (role %s, expires in "
+                  "%lld s)", who, id->appliance_id().c_str(),
                   reply.creds.bucket.c_str(),
                   reply.creds.read_write ? "read-write" : "read-only",
                   (reply.creds.expires_at_ms - now_ms) / 1000);
     } else if (reply.unpaired) {
-        mlog_warn("cloud credentials: the collector says this device is UNPAIRED "
-                  "— stopping fetches. A running event continues on the last "
-                  "known credentials until they expire.");
+        mlog_warn("cloud credentials (%s): the collector says this device is "
+                  "UNPAIRED — stopping fetches. A running event continues on "
+                  "the last known credentials until they expire.", who);
     } else {
-        mlog_warn("cloud credentials: HTTP %ld, keeping the last known set",
-                  r.code);
+        mlog_warn("cloud credentials (%s): HTTP %ld, keeping the last known set",
+                  who, r.code);
     }
     id->on_credentials(reply, now_ms);
 
@@ -605,11 +638,15 @@ void serve_cloud_credentials() {
     // rebuild the appliance had, and the reason its gate keys on the provider
     // rather than on the credentials. A refreshed token signs just as well
     // through a transport that already exists.
-    if (reply.ok && reply.creds.bucket != g_last_storage_bucket) {
-        const bool first = g_last_storage_bucket.empty();
-        g_last_storage_bucket = reply.creds.bucket;
-        mlog_info("cloud credentials: bucket %s '%s' — asking live decoder "
-                  "sources to read through it",
+    //
+    // The DECODER's identity only: the encoder output reads its identity when
+    // Go Live builds the session, so there is nothing running to wake.
+    if (role == multisite::CloudRole::Decoder && reply.ok &&
+        reply.creds.bucket != ri.last_bucket) {
+        const bool first = ri.last_bucket.empty();
+        ri.last_bucket = reply.creds.bucket;
+        mlog_info("cloud credentials (decoder): bucket %s '%s' — asking live "
+                  "decoder sources to read through it",
                   first ? "is" : "moved to",
                   reply.creds.bucket.c_str());
         decoder_reconfigure_all();
@@ -619,12 +656,14 @@ void serve_cloud_credentials() {
 void loop() {
     static std::once_flag curl_once;
     std::call_once(curl_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
-    g_identity = std::make_shared<multisite::CloudIdentity>();
+    g_id_encoder.id = std::make_shared<multisite::CloudIdentity>();
+    g_id_decoder.id = std::make_shared<multisite::CloudIdentity>();
     while (g_running.load()) {
         serve_pairing(g_encoder);
         serve_pairing(g_decoder);
         reporter_adopt_saved_pairing();
-        serve_cloud_credentials();
+        serve_cloud_credentials(multisite::CloudRole::Encoder);
+        serve_cloud_credentials(multisite::CloudRole::Decoder);
         serve(g_encoder);
         serve(g_decoder);
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -709,36 +748,38 @@ void reporter_pair_cancel(const std::string& kind) {
     s.pair_note.clear();
 }
 
-std::shared_ptr<multisite::CloudIdentity> reporter_cloud_identity() {
-    return g_identity;
+std::shared_ptr<multisite::CloudIdentity>
+reporter_cloud_identity(multisite::CloudRole role) {
+    return role_identity(role).id;
 }
 
-void reporter_adopt_saved_pairing() {
-    auto id = g_identity;
+namespace {
+// One role's saved pairing into that role's identity — never another role's.
+void adopt_role(multisite::CloudRole role, const Slot& slot) {
+    RoleIdentity& ri = role_identity(role);
+    auto id = ri.id;
     if (!id) return;
-
-    // Either role's saved pairing names the same device — the machine is one
-    // appliance to the collector whatever it is doing locally — so the encoder
-    // is preferred and the decoder is the fallback. A machine that only ever
-    // receives has the pairing in the decoder settings and nothing in the
-    // encoder's, which is exactly the campus case.
-    RoleCfg cfg = read_role_cfg(g_encoder);
-    if (cfg.url.empty() || cfg.id.empty() || cfg.token.empty())
-        cfg = read_role_cfg(g_decoder);
+    const RoleCfg cfg = read_role_cfg(slot);
     if (cfg.url.empty() || cfg.id.empty() || cfg.token.empty()) return;
 
     // Idempotent, and NEVER re-enrolling once a claim is held: a fetch already
     // collected this run is newer than the settings, which may not have been
     // written back yet. Re-enrolling would throw those credentials away.
     const std::string src = cfg.url + "\n" + cfg.id + "\n" + cfg.token;
-    if (g_identity_src == src) return;
+    if (ri.src == src) return;
     if (id->paired() && id->collector_url() == cfg.url &&
         id->appliance_id() == cfg.id && id->appliance_token() == cfg.token) {
-        g_identity_src = src;
+        ri.src = src;
         return;
     }
-    g_identity_src = src;
+    ri.src = src;
     id->set_enrolment(cfg.url, cfg.id, cfg.token);
+}
+} // namespace
+
+void reporter_adopt_saved_pairing() {
+    adopt_role(multisite::CloudRole::Encoder, g_encoder);
+    adopt_role(multisite::CloudRole::Decoder, g_decoder);
 }
 
 } // namespace multisite_obs

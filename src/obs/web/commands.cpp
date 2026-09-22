@@ -250,7 +250,7 @@ std::string encoder_status_json() {
     // identity, the same seam the transport uses, so the two cannot disagree.
     j["storage_provider"] = cfg.storage_provider;
     {
-        auto id = reporter_cloud_identity();
+        auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
         const bool paired = id && id->paired();
         j["paired"] = paired;
         if (paired && id->credentials().present()) {

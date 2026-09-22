@@ -2150,7 +2150,7 @@ static void src_update(void* data, obs_data_t* s) {
         // campus with typed keys that also heartbeats keeps reading with its
         // typed keys. Role Decoder: a campus only reads.
         const std::string provider = shared.storage_provider;
-        auto identity = reporter_cloud_identity();
+        auto identity = reporter_cloud_identity(multisite::CloudRole::Decoder);
         const bool use_paired =
             provider == "multisite_cloud" && identity && identity->paired() &&
             identity->credentials().present();

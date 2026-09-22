@@ -13,6 +13,8 @@
 // machine nobody is sitting at is the one that most needs reporting.
 //
 #include <memory>
+
+#include "../core/cloud_storage.h"   // CloudRole
 #include <string>
 
 #include "../core/cloud_identity.h"
@@ -24,19 +26,27 @@ void reporter_start();
 // Stops the worker and joins it. Called from obs_module_unload.
 void reporter_stop();
 
-// The plugin's ONE cloud identity (Phase 12). The worker owns it, because it
-// already owns the collector connection, the clock and the network — and the
-// encoder output and decoder source read it, so a machine's storage and its
-// monitoring use one identity rather than two. Exactly the seam the Pi
-// appliance uses (Player::cloud_identity), so the two hosts cannot diverge.
+// A ROLE's cloud identity (Phase 12) — one for the encoder, one for the
+// decoder, because each role pairs on its own and is its own appliance to the
+// collector. A role's storage and that role's heartbeat come from its identity
+// and from no other, which is the rule the subsystem exists for. The worker
+// owns them: it already owns the collector connection, the clock and the
+// network. The Pi appliance has one role and so one identity
+// (Player::cloud_identity).
+//
+// Deliberately no role-less overload. There was one, and it quietly gave the
+// decoder the encoder's pairing — read-write, and a different appliance from
+// the one the decoder heartbeats as. Making every caller name its role is what
+// stops that coming back.
 //
 // Shared and never null once the worker has started; callers tolerate a null
 // before that. The identity's own state is written only on the worker thread.
-std::shared_ptr<multisite::CloudIdentity> reporter_cloud_identity();
+std::shared_ptr<multisite::CloudIdentity>
+reporter_cloud_identity(multisite::CloudRole role);
 
-// Adopt this role's saved collector url/id/token into the identity, so an
-// already-paired install works with no operator action. Called by the worker
-// each tick, cheap and idempotent.
+// Adopt each role's saved collector url/id/token into that role's identity, so
+// an already-paired install works with no operator action. Called by the
+// worker each tick, cheap and idempotent.
 void reporter_adopt_saved_pairing();
 
 // The last POST outcome for a role ("obs-encoder" / "obs-decoder"), as stable

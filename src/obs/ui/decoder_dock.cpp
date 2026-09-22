@@ -745,7 +745,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         // that was working. The real connection for that provider is the
         // pairing, and that is what is reported instead.
         if (m_provider->currentData().toString() == "multisite_cloud") {
-            auto id = reporter_cloud_identity();
+            auto id = reporter_cloud_identity(multisite::CloudRole::Decoder);
             if (!id || !id->paired())
                 m_testConnectionResult->setText(tr_("Dock.TestCloudNotPaired"));
             else if (!id->credentials().present())
