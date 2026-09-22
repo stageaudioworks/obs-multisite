@@ -338,10 +338,13 @@ void Player::serve_cloud_credentials() {
         id->on_credentials(reply, now_ms);
     }
 
-    // A newly-arrived credential set is what lets a paired box build a cloud
-    // transport for the first time, or swap one built on stale keys. Ask the
-    // poll loop to rebuild — it owns session lifetime — rather than rebuilding
-    // from this thread.
+    // Ask for a rebuild ONLY when these credentials are the storage path. On a
+    // box that pairs for MONITORING and reads with typed keys — the ordinary
+    // case, and the one on the bench — a fetch must not tear a working session
+    // down and build it again every refresh for nothing. `storage_provider` is
+    // the operator's statement of which storage they use, so it decides.
+    if (cfg.storage_provider != "multisite_cloud") return;
+
     m_transport_wanted = true;
     m_poll_now = true;
 }
