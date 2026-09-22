@@ -52,6 +52,27 @@ struct Credentials {
     bool present() const { return !bucket.empty(); }
 };
 
+// The struct definition lives in s3_transport.h, which this header does not
+// include — a forward declaration is enough for the return type here.
+struct S3Config;
+
+// Credentials as a transport can use them.
+//
+// ONE definition, because this conversion had been written by hand at four
+// sites and three of them were wrong in the same way: they filled an S3Config
+// from the dock's typed fields, leaving the endpoint and the key pair empty on
+// a paired machine. That is how "Test connection" came to report "could not
+// resolve host name" on a working box, and how the storage window came to list
+// a bucket that was not the one being recorded to.
+//
+// The endpoint is returned EXACTLY as the collector gave it, scheme and all:
+// brokered credentials name their own host, and S3Transport strips the scheme.
+// Guessing a host from a region would be the "never guess a bucket" rule's twin.
+//
+// `region`, `use_https` and the timeouts are the caller's, not the collector's —
+// they are properties of how this host talks, not of who it is.
+S3Config s3_config_from_credentials(const Credentials& c);
+
 // The credential fetch's shape, host-owned HTTP. Parsers only; never throw.
 // Separate from the pairing parsers because this is a different endpoint and a
 // different reply.

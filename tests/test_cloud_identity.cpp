@@ -8,6 +8,7 @@
 // that a paired device's storage and its heartbeat share an identity, so the
 // distinctions the consumers depend on are pinned here rather than by example.
 #include "../src/core/cloud_identity.h"
+#include "../src/core/s3_transport.h"   // the S3Config the converter returns
 #include "../src/vendor/nlohmann/json.hpp"
 
 #include <cstdio>
@@ -247,6 +248,37 @@ int main() {
         CHECK(!id.paired(), "disconnect leaves the device unpaired");
         CHECK(!id.credentials().present(), "with no credentials held");
         CHECK(id.tick(0) == CloudAction::Idle, "and nothing scheduled");
+    }
+
+    std::printf("Credentials become a transport config in exactly one place\n");
+    {
+        // Every field a transport needs comes from the credentials. This is
+        // the conversion that had been hand-written at four surfaces and got
+        // the SAME field wrong at three of them: the endpoint, left empty
+        // because it was filled from the dock's typed host instead. That is
+        // what made "Test connection" say "could not resolve host name" on a
+        // working box, and the storage window list a bucket nobody was
+        // recording to.
+        Credentials c;
+        c.bucket = "multisite-demo-org";
+        c.endpoint = "https://s3.example.test";
+        c.access_key_id = "AKIA";
+        c.secret_access_key = "secret";
+        c.session_token = "tok";
+        c.expires_at_ms = 1000;
+
+        const S3Config s3 = s3_config_from_credentials(c);
+        CHECK(s3.bucket == "multisite-demo-org",
+              "the bucket is the credentials' bucket");
+        CHECK(s3.endpoint_host == "https://s3.example.test",
+              "the endpoint is the credentials' own host, scheme and all — "
+              "never re-derived from a region or read from a typed field");
+        CHECK(s3.access_key_id == "AKIA" && s3.secret_access_key == "secret",
+              "the key PAIR travels, not the token alone");
+        CHECK(s3.session_token == "tok",
+              "with the session token that proves the pair is temporary");
+        CHECK(s3.endpoint_host.rfind("http", 0) == 0,
+              "the scheme is preserved for S3Transport to strip");
     }
 
     std::printf("One authority: the set carries its own liveness\n");

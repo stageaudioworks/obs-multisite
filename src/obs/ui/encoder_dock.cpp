@@ -1379,20 +1379,36 @@ void EncoderDock::onEndAndStartFresh() {
 
 void EncoderDock::onManageStorage() {
     const BroadcastSettings& cfg = BroadcastController::instance().settings();
-    if (cfg.bucket.empty() ||
-        (cfg.endpoint_host.empty() && cfg.r2_account_id.empty())) {
-        QMessageBox::information(this, tr_("Dock.ManageStorage"),
-                                 tr_("Storage.NotConfigured"));
-        return;
-    }
 
+    // A paired machine keeps its bucket, endpoint and keys in the pairing, not
+    // in these typed fields — so the emptiness test below would refuse a box
+    // that is recording fine, and the S3Config built from the fields would name
+    // no host at all. The window is about the bucket being recorded TO, so on
+    // Multisite Cloud that is the paired bucket, read through the credentials
+    // the reporter is already holding.
     multisite::S3Config s3;
-    s3.endpoint_host    = cfg.endpoint_host;
-    s3.r2_account_id    = cfg.r2_account_id;
-    s3.bucket           = cfg.bucket;
-    s3.access_key_id    = cfg.access_key_id;
-    s3.secret_access_key = cfg.secret_access_key;
-    s3.region           = cfg.region;
+    if (cfg.storage_provider == "multisite_cloud") {
+        auto id = reporter_cloud_identity();
+        if (!id || !id->paired() || !id->credentials().present()) {
+            QMessageBox::information(this, tr_("Dock.ManageStorage"),
+                                     tr_("Storage.CloudNotReady"));
+            return;
+        }
+        s3 = multisite::s3_config_from_credentials(id->credentials());
+    } else {
+        if (cfg.bucket.empty() ||
+            (cfg.endpoint_host.empty() && cfg.r2_account_id.empty())) {
+            QMessageBox::information(this, tr_("Dock.ManageStorage"),
+                                     tr_("Storage.NotConfigured"));
+            return;
+        }
+        s3.endpoint_host    = cfg.endpoint_host;
+        s3.r2_account_id    = cfg.r2_account_id;
+        s3.bucket           = cfg.bucket;
+        s3.access_key_id    = cfg.access_key_id;
+        s3.secret_access_key = cfg.secret_access_key;
+        s3.region           = cfg.region;
+    }
 
     // The settings, not a ready-made transport: the window builds one per
     // operation, so closing it stops the work in flight without leaving a

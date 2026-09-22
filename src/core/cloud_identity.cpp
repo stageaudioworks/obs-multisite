@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cloud_identity.h"
 
+#include "s3_transport.h"   // s3_config_from_credentials
+
 #include "../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::json;
@@ -231,6 +233,22 @@ void CloudIdentity::reset() {
     m_unpaired = false;
     m_next_fetch_at_ms = 0;
     m_error.clear();
+}
+
+S3Config s3_config_from_credentials(const Credentials& c) {
+    S3Config s3;
+    s3.bucket = c.bucket;
+    // Exactly as received. Brokered credentials name their own host; guessing
+    // one from a region would be the "never guess a bucket" rule's twin.
+    s3.endpoint_host = c.endpoint;
+    s3.region = "auto";
+    // Temporary credentials are a key PAIR plus a session token: the pair signs
+    // and the token proves the pair is temporary. All three travel, or the
+    // signature is made with nothing.
+    s3.access_key_id     = c.access_key_id;
+    s3.secret_access_key = c.secret_access_key;
+    s3.session_token     = c.session_token;
+    return s3;
 }
 
 } // namespace multisite
