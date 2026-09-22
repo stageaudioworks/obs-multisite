@@ -561,13 +561,54 @@ async function loadStorageProviderChoices() {
 // Shows only the fields the selected provider actually needs — an account id
 // for R2, a region for AWS/Backblaze/Wasabi, both endpoint and region for
 // Custom — the same rule the OBS docks apply to the identical dropdown.
+//
+// Multisite Cloud needs NO field at all: the collector supplies the bucket,
+// endpoint and credentials. Every storage field is hidden as a group and a
+// read-only summary takes their place, because leaving editable boxes on screen
+// invites an operator to type into something the box will never read.
 function updateProviderFields() {
   const key = $('#c-provider').value;
   const info = storageProviders[key];
   if (!info) return;
-  $('#field-account').hidden  = !info.needs_account_id;
-  $('#field-endpoint').hidden = !info.needs_endpoint;
-  $('#field-region').hidden   = !info.needs_region;
+  const cloud = key === 'multisite_cloud';
+
+  const hide = (sel, h) => { const el = $(sel); if (el) el.hidden = h; };
+  // The whole typed-key form, gone as a block.
+  hide('#field-bucket', cloud);
+  hide('#field-key',    cloud);
+  hide('#field-secret', cloud);
+  hide('#field-account',  cloud || !info.needs_account_id);
+  hide('#field-endpoint', cloud || !info.needs_endpoint);
+  hide('#field-region',   cloud || !info.needs_region);
+  // And the summary that replaces it.
+  hide('#field-cloud-storage', !cloud);
+  if (cloud) refreshCloudStorageFacts();
+}
+
+// What the box is actually reading from, when storage comes from Cloud. The
+// same facts the front page shows, from the same /api/storage, so the two
+// cannot describe the same box differently.
+async function refreshCloudStorageFacts() {
+  const el = $('#cloud-storage-facts');
+  if (!el) return;
+  try {
+    const d = await api('GET', '/api/storage');
+    const rows = [];
+    const add = (k, v) => rows.push(`<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`);
+    if (d.mode === 'paired') {
+      add('Bucket', d.bucket_in_use || '(from Cloud)');
+      add('Credentials', d.credentials_stale
+          ? (d.credentials_note || 'last known — cannot be refreshed')
+          : 'current');
+    } else if (d.mode === 'waiting') {
+      add('Status', 'paired — waiting for credentials');
+    } else {
+      add('Status', 'not paired yet — press Connect above');
+    }
+    el.innerHTML = rows.join('');
+  } catch (e) {
+    el.innerHTML = '<dt>Storage</dt><dd class="bad">' + escapeHtml(e.message) + '</dd>';
+  }
 }
 
 async function loadSettings() {
@@ -797,6 +838,15 @@ let reporterPairTimer = null;
 function drawPairView(v) {
   const code = $('#reporter-code');
   const note = $('#reporter-pair');
+  // The typed ID/token are the MANUAL FALLBACK to pairing. Hide them once the
+  // box is paired: they are then meaningless, and leaving editable boxes that
+  // no longer do anything invites somebody to paste over a working claim. A
+  // box with no pairing keeps them, because then they are the only way in.
+  const paired = v && (v.phase === 'done' || v.phase === 'waiting');
+  const manual = $('#field-reporter-manual');
+  const tok = $('#field-reporter-token');
+  if (manual) manual.hidden = paired;
+  if (tok) tok.hidden = paired;
   if (!v || v.phase === 'idle') {
     code.textContent = '';
     note.textContent = '';

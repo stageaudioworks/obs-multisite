@@ -168,20 +168,26 @@
         Empty means nothing is paired and no heartbeat is sent.
       </p>
     </div>
-    <div class="field">
+    <!-- The manual fallback: an ID and token typed by hand, for a box that
+         was minted credentials outside the pairing flow. Hidden once the box
+         IS paired — they are then meaningless, and leaving them on screen
+         invites somebody to paste over a working claim. -->
+    <div class="field" id="field-reporter-manual">
       <label for="c-reporter-id">Appliance ID</label>
       <input id="c-reporter-id" name="reporter_appliance_id" autocomplete="off">
       <p class="hint">
         The ID the collector knows this box by — it must match the ID the
-        token was minted for.
+        token was minted for. Only needed if you were given an ID and token
+        instead of pairing.
       </p>
     </div>
-    <div class="field">
+    <div class="field" id="field-reporter-token">
       <label for="c-reporter-token">Token</label>
       <input id="c-reporter-token" name="reporter_token" type="password" autocomplete="new-password">
       <p class="hint">
         Minted with the collector's mint tool. Dots mean the saved token is
-        kept; clearing the field removes it.
+        kept; clearing the field removes it. Only needed if you were given an
+        ID and token instead of pairing.
       </p>
     </div>
     <div class="field">
@@ -237,7 +243,21 @@
       <select id="c-provider" name="storage_provider"></select>
       <p class="hint">Which fields below this needs depends on the provider.</p>
     </div>
-    <div class="field">
+
+    <!-- Multisite Cloud supplies the bucket, endpoint and credentials from the
+         collector, so NONE of the fields below apply. They are hidden as a
+         group when it is selected, and this read-only summary takes their
+         place — the bucket actually in use, and whether the credentials behind
+         it are fresh. "Brokered must not come to mean opaque." -->
+    <div class="field" id="field-cloud-storage" hidden>
+      <dl class="facts" id="cloud-storage-facts"></dl>
+      <p class="hint">
+        Storage for this box comes from Cloud. There is nothing to type —
+        the bucket and its credentials are supplied when the box is paired.
+      </p>
+    </div>
+
+    <div class="field" id="field-bucket">
       <label for="c-bucket">Bucket</label>
       <input id="c-bucket" name="bucket" autocomplete="off">
     </div>
@@ -254,11 +274,11 @@
       <label for="c-region">Region</label>
       <input id="c-region" name="region" autocomplete="off">
     </div>
-    <div class="field">
+    <div class="field" id="field-key">
       <label for="c-key">Access key ID</label>
       <input id="c-key" name="access_key_id" autocomplete="off">
     </div>
-    <div class="field">
+    <div class="field" id="field-secret">
       <label for="c-secret">Secret access key</label>
       <input id="c-secret" name="secret_access_key" type="password" autocomplete="new-password">
       <p class="hint">Read-only access is all this box needs.</p>
