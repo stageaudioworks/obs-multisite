@@ -12,7 +12,6 @@
 #include "../core/heartbeat_reporter.h"
 #include "../core/collector_client.h"
 
-#include <curl/curl.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,13 +32,6 @@
 namespace multisite_obs {
 
 namespace {
-
-// A monitor must not hold anything hostage: short connect, bounded total.
-constexpr long kConnectTimeoutMs = 5000;
-constexpr long kRequestTimeoutMs = 15000;
-// The only thing read from a response is interval_s, so a body bigger than
-// this is a server misbehaving and is cut off rather than buffered.
-constexpr size_t kMaxBodyBytes = 65536;
 
 // Machine uptime, in seconds — what the envelope's uptime_s is. CLOCK_MONOTONIC
 // starts at boot on both POSIX targets here; GetTickCount64 is milliseconds
@@ -72,89 +64,11 @@ std::string sent_at_iso() {
     return buf;
 }
 
-size_t append_capped(char* data, size_t size, size_t nmemb, void* user) {
-    auto* body = static_cast<std::string*>(user);
-    const size_t n = size * nmemb;
-    const size_t room = n > kMaxBodyBytes ? 0
-        : kMaxBodyBytes > body->size() ? kMaxBodyBytes - body->size() : 0;
-    body->append(data, room < n ? room : n);
-    return n;
-}
-
-size_t capture_retry_after(char* data, size_t size, size_t nmemb, void* user) {
-    const size_t n = size * nmemb;
-    // Header lines arrive one call each. Only the delay-seconds form is read;
-    // an HTTP-date form yields 0 and the 429 is then handled by doubling,
-    // which is the honest "told to slow down" without parsing dates.
-    static const char kPrefix[] = "retry-after:";
-    if (n > sizeof(kPrefix) - 1) {
-        bool match = true;
-        for (size_t i = 0; i < sizeof(kPrefix) - 1; ++i) {
-            const char a = data[i] >= 'A' && data[i] <= 'Z'
-                ? static_cast<char>(data[i] + ('a' - 'A')) : data[i];
-            if (a != kPrefix[i]) { match = false; break; }
-        }
-        if (match)
-            *static_cast<int*>(user) = atoi(data + sizeof(kPrefix) - 1);
-    }
-    return n;
-}
-
-struct PostResult {
-    bool        reached = false;  // a response arrived (any status)
-    long        code = 0;
-    std::string body;
-    int         retry_after_s = 0;
-};
-
-PostResult post_json(const std::string& url, const std::string& token,
-                     const std::string& payload) {
-    PostResult r;
-    CURL* curl = curl_easy_init();
-    if (!curl) return r;
-
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    // Pairing's first request has no token yet — the token is what it comes
-    // back with. An empty Bearer header would be worse than none: some
-    // servers read its presence as a (bad) credential.
-    const std::string auth = "Authorization: Bearer " + token;
-    if (!token.empty())
-        headers = curl_slist_append(headers, auth.c_str());
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)payload.size());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_capped);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r.body);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, capture_retry_after);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &r.retry_after_s);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, kConnectTimeoutMs);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, kRequestTimeoutMs);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    const CURLcode cc = curl_easy_perform(curl);
-    if (cc == CURLE_OK &&
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.code) == CURLE_OK)
-        r.reached = true;
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    return r;
-}
-
-std::string join_url(const std::string& base) {
-    std::string u = base;
-    while (!u.empty() && u.back() == '/') u.pop_back();
-    return u + "/v1/heartbeat";
-}
-
-std::string join_path(const std::string& base, const char* path) {
-    std::string u = base;
-    while (!u.empty() && u.back() == '/') u.pop_back();
-    return u + path;
-}
+// The HTTP call and the collector's paths live in core/collector_client. This
+// file had a private copy of both — the same timeouts, the same 64 KB cap, the
+// same empty-token rule, line for line — which is the "one quantity in two
+// places" this project keeps paying for (#11). It is the host's thread that
+// calls them; what they do is written once.
 
 long long wall_now_s() { return (long long)std::time(nullptr); }
 
@@ -376,8 +290,10 @@ void serve_pairing(Slot& s) {
         }
         mlog_info("heartbeat %s: pairing started against %s",
                   s.kind.c_str(), cfg.url.c_str());
-        const PostResult r =
-            post_json(join_path(cfg.url, "/v1/pair/start"), std::string(),
+        const multisite::HttpResult r =
+            multisite::http_post_json(
+                multisite::collector_url(cfg.url, multisite::kPairStartPath),
+                std::string(),
                       multisite::heartbeat_pair_start_body(dev, s.kind,
                                                            host_name()));
         std::lock_guard<std::mutex> lk(g_mtx);
@@ -400,8 +316,10 @@ void serve_pairing(Slot& s) {
             std::lock_guard<std::mutex> lk(g_mtx);
             token = s.pairing.poll_token();
         }
-        const PostResult r =
-            post_json(join_path(cfg.url, "/v1/pair/poll"), std::string(),
+        const multisite::HttpResult r =
+            multisite::http_post_json(
+                multisite::collector_url(cfg.url, multisite::kPairPollPath),
+                std::string(),
                       multisite::heartbeat_pair_poll_body(token));
         std::lock_guard<std::mutex> lk(g_mtx);
         if (!r.reached) {
@@ -494,31 +412,38 @@ void log_pair_phase(Slot& s) {
 void serve(Slot& s) {    const auto now = std::chrono::steady_clock::now();
     if (now < s.next_due) return;
 
+    // WHO this heartbeat is comes from the role's identity — the same object
+    // that role's storage reads through — so the two cannot name different
+    // appliances (#11). It used to read its own copy of the pairing from the
+    // settings, while storage read the identity: two answers to one question.
+    // Whether to heartbeat at all stays a setting: monitoring on/off is a
+    // separate choice from pairing, and a paired box may run with it off.
+    const multisite::CloudRole role = s.role == "encoder"
+        ? multisite::CloudRole::Encoder : multisite::CloudRole::Decoder;
     std::string url, id, token;
+    if (auto ident = role_identity(role).id; ident && ident->paired()) {
+        // Same thread as the identity's writer (this worker), so the
+        // references are read with nothing racing them.
+        url = ident->collector_url();
+        id = ident->appliance_id();
+        token = ident->appliance_token();
+    }
+    const bool configured = !url.empty() && !id.empty() && !token.empty();
+
     bool enabled = false, active = false;
     std::string status;
     if (s.role == "encoder") {
-        const BroadcastSettings cfg =
-            BroadcastController::instance().settings_copy();
-        enabled = cfg.reporter_enabled;
-        url = cfg.reporter_url; id = cfg.reporter_appliance_id;
-        token = cfg.reporter_token;
+        enabled = BroadcastController::instance().settings_copy().reporter_enabled;
         active = BroadcastController::instance().is_live();
-        if (enabled && !url.empty() && !id.empty() && !token.empty())
-            status = encoder_status_json();
+        if (enabled && configured) status = encoder_status_json();
     } else {
-        const DecoderSettings cfg = decoder_settings_copy();
-        enabled = cfg.reporter_enabled;
-        url = cfg.reporter_url; id = cfg.reporter_appliance_id;
-        token = cfg.reporter_token;
+        enabled = decoder_settings_copy().reporter_enabled;
         DecoderSnapshot snap;
         const bool have = decoder_snapshot(snap);
         active = have && (snap.playing || snap.paused || snap.buffering);
-        if (enabled && !url.empty() && !id.empty() && !token.empty())
-            status = decoder_status_json();
+        if (enabled && configured) status = decoder_status_json();
     }
 
-    const bool configured = !url.empty() && !id.empty() && !token.empty();
     std::string outcome;
     int wait_s = multisite::kHeartbeatIdleIntervalS;
     if (!role_wanted(s.kind) || !enabled) {
@@ -533,7 +458,8 @@ void serve(Slot& s) {    const auto now = std::chrono::steady_clock::now();
         const std::string body = multisite::heartbeat_build(
             ident, nullptr,
             multisite::heartbeat_filter_status(s.role, status), sent_at_iso());
-        const PostResult r = post_json(join_url(url), token, body);
+        const multisite::HttpResult r = multisite::http_post_json(
+            multisite::collector_url(url, multisite::kHeartbeatPath), token, body);
         if (!r.reached) {
             // Fire-and-forget (brief): dropped, never queued, base cadence
             // kept. NOT rate-limited — a dead link is not the collector
@@ -654,8 +580,7 @@ void serve_cloud_credentials(multisite::CloudRole role) {
 }
 
 void loop() {
-    static std::once_flag curl_once;
-    std::call_once(curl_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    multisite::collector_http_init();
     g_id_encoder.id = std::make_shared<multisite::CloudIdentity>();
     g_id_decoder.id = std::make_shared<multisite::CloudIdentity>();
     while (g_running.load()) {
@@ -760,7 +685,21 @@ void adopt_role(multisite::CloudRole role, const Slot& slot) {
     auto id = ri.id;
     if (!id) return;
     const RoleCfg cfg = read_role_cfg(slot);
-    if (cfg.url.empty() || cfg.id.empty() || cfg.token.empty()) return;
+    if (cfg.url.empty() || cfg.id.empty() || cfg.token.empty()) {
+        // The pairing was CLEARED: the identity follows it. It used to keep the
+        // old enrolment for the life of the process, so storage went on reading
+        // under a pairing the operator had removed — and now that the heartbeat
+        // reads the identity too, it would have gone on reporting under it.
+        if (!ri.src.empty() || id->paired()) {
+            mlog_info("cloud identity (%s): pairing cleared — no longer "
+                      "reading or reporting as %s", role_word(role),
+                      id->appliance_id().c_str());
+            id->reset();
+            ri.src.clear();
+            ri.last_bucket.clear();
+        }
+        return;
+    }
 
     // Idempotent, and NEVER re-enrolling once a claim is held: a fetch already
     // collected this run is newer than the settings, which may not have been
