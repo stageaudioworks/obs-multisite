@@ -1549,6 +1549,13 @@ void EncoderDock::refresh() {
         m_error->hide();
         m_resumedNote->hide();
         m_endAndFresh->hide();
+        // Pairing is shown while IDLE, which is when it happens — before
+        // anyone goes live. This used to fall through past the call, so the
+        // dock's pairing label was only ever updated during a broadcast: the
+        // worker generated the code, logged it, and the dock showed nothing,
+        // because it was not live at the time. See BUGS.md entry 2-style:
+        // a code that exists and is never displayed.
+        refreshPairing();
         return;
     }
 
