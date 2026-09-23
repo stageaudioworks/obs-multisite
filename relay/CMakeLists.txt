@@ -29,6 +29,7 @@ add_executable(multisite-relay
     src/service.cpp
     src/config_store.cpp
     src/auth.cpp
+    src/reporter.cpp
     src/relay_session.cpp
     src/room_feeder.cpp
     src/log.cpp

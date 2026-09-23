@@ -64,6 +64,31 @@ public:
     std::string storage_provider() const;
     void set_storage_provider(const std::string& key);
 
+    // ── Multisite Cloud pairing (PROJECT-SCOPE.md §8.2, ADR-0001/0002) ──────
+    // The relay is the third CloudIdentity host, after the OBS plugin and the
+    // campus player, and it is its own role: a relay on a machine that also
+    // runs an encoder pairs separately and shares nothing with it (ADR-0001).
+    //
+    // When the provider is "multisite-cloud" the collector supplies the
+    // bucket, the endpoint and expiring credentials, and the typed storage
+    // fields above are not consulted at all — there is no fallback between the
+    // two, because a relay reading from a bucket nobody paired it to is the
+    // state Phase 12 exists to make unrepresentable.
+    struct PairingConfig {
+        std::string collector_url;     // empty means not paired
+        std::string appliance_id;
+        std::string appliance_token;   // never leaves the container
+        // Minted once and kept, so re-pairing the same relay is recognisable
+        // as the same box rather than a new one each time.
+        std::string device_id;
+    };
+    PairingConfig pairing() const;
+    void set_pairing(const PairingConfig& c);
+    bool paired() const;
+    // Forget the pairing without touching anything else — the Disconnect an
+    // operator reaches for when a relay is moved between organisations.
+    void clear_pairing();
+
     // ── LAN / direct delivery (PROJECT-SCOPE.md §8.7) ───────────────────────
     // A relay sitting on the same network as the encoder (or reachable over an
     // existing VPN) can read the live feed straight from it instead of round-
@@ -84,7 +109,29 @@ public:
     // the gate that decides whether a downloader gets built, and it is why
     // storage_configured() alone stopped being enough: a LAN-only relay has
     // no bucket credentials whatsoever.
-    bool configured() const { return storage_configured() || lan_configured(); }
+    // Is there any path to the media at all?
+    //
+    // A pairing counts only when Multisite Cloud is also the chosen PROVIDER.
+    // Pairing alone does not: a relay can be paired for monitoring while still
+    // reading a bucket whose keys were typed in, and counting that as a storage
+    // path let a relay with a pairing and no bucket through this gate. The
+    // feeder then built with an empty S3Config, and RoomFeeder's "guaranteed
+    // non-null" active transport — guaranteed BY this function — was null.
+    // It crashed on the first poll.
+    bool configured() const {
+        return storage_configured() || lan_configured() ||
+               (storage_is_paired() && paired());
+    }
+
+    // Whether the operator chose Multisite Cloud as the storage provider, as
+    // distinct from merely having paired. A relay can be paired for monitoring
+    // while still reading a bucket whose keys were typed in — the pairing and
+    // the provider are separate choices, exactly as they are on the player.
+    //
+    // Compares against provider_key(MultisiteCloud) rather than a literal: the
+    // key is "multisite_cloud" and writing it out here is how a rename becomes
+    // a silent no-match instead of a build error.
+    bool storage_is_paired() const;
 
     // ── Room ─────────────────────────────────────────────────────────────────
     RoomSettings room() const;

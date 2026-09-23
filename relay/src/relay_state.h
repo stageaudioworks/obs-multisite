@@ -51,6 +51,19 @@ enum class RelayState {
 
 const char* to_string(RelayState s);
 
+// Whether this state means content is actually going out.
+//
+// One rule, three readers: the operator's page calls it being on air, the
+// monitoring heartbeat calls it active and reports every 30s rather than every
+// 5 minutes because of it, and the aggregate outbound figure counts only these.
+// It is deliberately NOT "a destination exists" and not "the room is live" — a
+// relay whose destinations are all stopped is idle however busy the main site
+// is, and that is the distinction an operator reads the number for.
+inline bool relay_state_is_sending(RelayState s) {
+    return s == RelayState::Streaming || s == RelayState::Stalled ||
+           s == RelayState::Ending;
+}
+
 // Plain language for the operator's status line. Never mentions segments,
 // pipes, or ffmpeg.
 std::string describe(RelayState s);

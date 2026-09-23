@@ -78,6 +78,24 @@ const std::vector<std::string>& heartbeat_decoder_fields() {
     return k;
 }
 
+const std::vector<std::string>& heartbeat_relay_fields() {
+    static const std::vector<std::string> k = {
+        "role", "version", "now_ms", "room_id", "room_state", "event_id",
+        // What the relay is for: where a service is going and whether it is
+        // actually going there. `sending` is the number on air now, which is
+        // not the number configured — a destination can be stopped, blocked by
+        // a codec it cannot send, or reconnecting.
+        "destinations", "sending", "blocked", "reconnecting",
+        // Upload is the resource a relay runs out of first, and several
+        // destinations share one box's. An operator finding this out from a
+        // failure rather than a number is the thing worth monitoring for.
+        "out_kbps", "behind_live_s", "restarts",
+        "link_health", "link_known", "last_error", "storage_host",
+        "paired", "read_only", "configured", "site_name",
+    };
+    return k;
+}
+
 std::string heartbeat_link_word(int v) {
     switch (v) {
         case 0: return "Healthy";
@@ -99,6 +117,8 @@ std::string heartbeat_filter_status(const std::string& role,
         keep = &heartbeat_encoder_fields();
     else if (role == "decoder")
         keep = &heartbeat_decoder_fields();
+    else if (role == "relay")
+        keep = &heartbeat_relay_fields();
     else
         return "{}";
 

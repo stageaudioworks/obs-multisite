@@ -389,6 +389,83 @@ int main() {
               "an accepted reply naming no bucket moves nothing");
     }
 
+    std::printf("A read-only device refuses credentials that can write\n");
+    {
+        // ADR-0002. The relay only ever reads, and is the one component
+        // deliberately exposed to the internet, so a read-write set from the
+        // collector is an error rather than a convenience.
+        CloudIdentity id;
+        id.set_require_read_only(true);
+        id.set_enrolment("https://collector", "apl_relay", "tok");
+
+        auto rw = cloud_parse_credentials(
+            creds_body("org-bucket", "https://s3.example", 0, "sess", "encoder"),
+            200);
+        CHECK(rw.ok && rw.creds.read_write, "the reply itself is read-write");
+
+        id.on_credentials(rw, 1000);
+        CHECK(!id.credentials().present(),
+              "nothing is adopted: a refused set must not become the one in use");
+        CHECK(id.error().find("read-write") != std::string::npos,
+              "and the reason says what was wrong");
+        CHECK(!id.unpaired(),
+              "this is not an unpairing — the device is still enrolled");
+
+        // Not terminal: a collector corrected to issue read-only is picked up
+        // without anyone restarting the relay.
+        CHECK(id.tick(1000 + 60000) == CloudAction::Fetch,
+              "it keeps asking, so a corrected collector recovers by itself");
+
+        auto ro = cloud_parse_credentials(
+            creds_body("org-bucket", "https://s3.example",
+                       0, "sess", "decoder"),
+            200);
+        id.on_credentials(ro, 2000);
+        CHECK(id.credentials().present() && !id.credentials().read_write,
+              "and a read-only set is accepted normally");
+        CHECK(id.error().empty(), "with the refusal cleared");
+    }
+
+    std::printf("A read-only refusal leaves last-good exactly as it was\n");
+    {
+        // The trap this avoids: refusing by clearing would leave a working
+        // device with nothing, so a collector that starts issuing read-write
+        // mid-event would end the event rather than decline the new set.
+        CloudIdentity id;
+        id.set_require_read_only(true);
+        id.set_enrolment("https://collector", "apl_relay", "tok");
+
+        auto ro = cloud_parse_credentials(
+            creds_body("org-bucket", "https://s3.example", 0, "sess", "decoder"),
+            200);
+        id.on_credentials(ro, 1000);
+        CHECK(id.credentials().present(), "a good set is in use");
+
+        auto rw = cloud_parse_credentials(
+            creds_body("other-bucket", "https://s3.example", 0, "s2", "encoder"),
+            200);
+        id.on_credentials(rw, 2000);
+        CHECK(id.credentials().bucket == "org-bucket",
+              "the refused set does not replace the working one");
+        CHECK(!id.credentials().from_last_good,
+              "and the working one is not marked stale by a refusal it survived");
+    }
+
+    std::printf("Requiring read-only is off unless a host asks for it\n");
+    {
+        // Every existing host keeps today's behaviour: the decoder logs the
+        // role and carries on (ADR-0001), and nothing changes for it.
+        CloudIdentity id;
+        CHECK(!id.requires_read_only(), "off by default");
+        id.set_enrolment("https://collector", "apl_dec", "tok");
+        auto rw = cloud_parse_credentials(
+            creds_body("org-bucket", "https://s3.example", 0, "sess", "encoder"),
+            200);
+        id.on_credentials(rw, 1000);
+        CHECK(id.credentials().present() && id.credentials().read_write,
+              "a read-write set is still accepted where it is allowed");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL CLOUD IDENTITY TESTS PASSED"
                                       : "SOME CLOUD IDENTITY TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

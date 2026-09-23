@@ -190,6 +190,11 @@ CloudAction CloudIdentity::tick(long long now_ms) const {
     return CloudAction::Idle;
 }
 
+void CloudIdentity::set_require_read_only(bool require) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_require_read_only = require;
+}
+
 void CloudIdentity::on_credentials(const CredentialsReply& r, long long now_ms) {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (r.unpaired) {
@@ -200,6 +205,22 @@ void CloudIdentity::on_credentials(const CredentialsReply& r, long long now_ms) 
         m_error = "the device was unpaired by the collector";
         m_next_fetch_at_ms = 0;   // no schedule; tick() returns Idle anyway
         if (m_creds.present()) m_creds.from_last_good = true;
+        return;
+    }
+
+    if (r.ok && m_require_read_only && r.creds.read_write) {
+        // ADR-0002. A host that only reads refuses a set that can write,
+        // rather than holding more access than its job needs. Nothing is
+        // adopted: any last-good set is left exactly as it was, because a set
+        // that is refused must not become the one in use by being the only one
+        // left. The schedule carries on, so a collector corrected to issue
+        // read-only is picked up without a restart.
+        m_error = "the collector issued read-write credentials to a "
+                  "read-only device; refusing them";
+        const long long wait = m_creds.present()
+                                 ? cloud_next_refresh_ms(m_creds, now_ms)
+                                 : 0;
+        m_next_fetch_at_ms = now_ms + (wait > 0 ? wait : kMinRefreshMs);
         return;
     }
 

@@ -17,6 +17,7 @@ $$('.tab').forEach((t) => {
     $$('.panel').forEach((p) =>
       p.classList.toggle('is-on', p.id === 'tab-' + t.dataset.tab));
     if (t.dataset.tab === 'log') refreshLog();
+    if (t.dataset.tab === 'settings') refreshPairing();
     if (t.dataset.tab === 'past') { refreshEvents(false); refreshRebroadcast(); }
   };
 });
@@ -348,6 +349,13 @@ function updateProviderFields() {
   $('#field-account').hidden  = !info.needs_account_id;
   $('#field-endpoint').hidden = !info.needs_endpoint;
   $('#field-region').hidden   = !info.needs_region;
+  // Multisite Cloud needs no typed field at all — the collector supplies the
+  // bucket, the address and the keys — so the whole group goes, and the
+  // pairing panel stands in its place. Leaving empty boxes on screen invites
+  // someone to fill them in, and they would be ignored.
+  const paired = key === 'multisite_cloud';
+  $('#storage-typed').hidden = paired;
+  $('#storage-paired-note').hidden = !paired;
 }
 $('#config-form [name=storage_provider]').addEventListener('change', updateProviderFields);
 
@@ -585,6 +593,86 @@ $('#rb-stop').onclick = async () => {
 
 $('#past-refresh').onclick = () => refreshEvents(true);
 
+// ── Multisite Cloud pairing ─────────────────────────────────────────────────
+let pairPoll = null;
+
+function renderPairing(p) {
+  const paired = p.paired;
+  $('#pair-connected').hidden = !paired;
+  $('#pair-start').hidden = paired || p.phase === 1;
+  $('#pair-waiting').hidden = p.phase !== 1;
+
+  if (paired) {
+    $('#pair-appliance').textContent = p.appliance_id;
+    $('#pair-heartbeat').textContent = p.heartbeat || '—';
+    // ADR-0002 made visible rather than asserted: this box is the one
+    // deliberately on the internet, so what it can do to the bucket matters.
+    const access = $('#pair-access');
+    if (!p.credentials_present) {
+      access.textContent = p.credentials_error || 'waiting for storage details';
+      access.className = 'pill stalled';
+    } else if (p.read_only) {
+      access.textContent = 'read only';
+      access.className = 'pill streaming';
+    } else {
+      access.textContent = 'read and write';
+      access.className = 'pill blocked';
+    }
+    $('#pair-bucket').textContent = p.bucket || '—';
+    $('#pair-stale').hidden = !p.credentials_stale;
+  }
+
+  if (p.phase === 1) {
+    $('#pair-code').textContent = p.user_code || '…';
+    const a = $('#pair-url');
+    a.textContent = p.verification_url || '';
+    a.href = p.verification_url || '#';
+  }
+  const err = $('#pair-error');
+  const message = p.note || p.error || '';
+  err.textContent = message;
+  err.hidden = !message;
+}
+
+async function refreshPairing() {
+  if (!signedIn) return;
+  try {
+    const p = await api('GET', '/api/pairing');
+    renderPairing(p);
+    // Poll briskly only while a code is on screen and someone is standing at
+    // the collector; otherwise this rides the ordinary refresh.
+    const watching = p.phase === 1;
+    if (watching && !pairPoll) pairPoll = setInterval(refreshPairing, 2000);
+    if (!watching && pairPoll) { clearInterval(pairPoll); pairPoll = null; }
+  } catch (e) { /* the page will try again */ }
+}
+
+$('#pair-begin').onclick = async () => {
+  const url = $('#pair-collector').value.trim();
+  const err = $('#pair-error');
+  err.hidden = true;
+  try {
+    await api('POST', '/api/pairing', { collector_url: url });
+    refreshPairing();
+  } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+};
+
+$('#pair-cancel').onclick = async () => {
+  try { await api('DELETE', '/api/pairing', { disconnect: false }); }
+  catch (e) { /* nothing to undo */ }
+  refreshPairing();
+};
+
+$('#pair-disconnect').onclick = async () => {
+  if (!confirm('Disconnect this relay from Multisite Cloud? If it reads its '
+             + 'storage through the pairing, it will stop until you set '
+             + 'storage up another way.')) return;
+  try { await api('DELETE', '/api/pairing', { disconnect: true }); }
+  catch (ex) { alert(ex.message); }
+  loadConfig().catch(() => {});
+  refreshPairing();
+};
+
 // ── changing the password ───────────────────────────────────────────────────
 $('#password-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -617,5 +705,6 @@ setInterval(refresh, 1000);
 setInterval(() => {
   if (!signedIn) return;
   if ($('#tab-log').classList.contains('is-on')) refreshLog();
+  if ($('#tab-settings').classList.contains('is-on')) refreshPairing();
   if ($('#tab-past').classList.contains('is-on')) refreshRebroadcast();
 }, 3000);

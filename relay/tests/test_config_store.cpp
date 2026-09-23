@@ -176,6 +176,65 @@ int main() {
     ::unlink((path + "-wal").c_str());
     ::unlink((path + "-shm").c_str());
 
+    // ── Multisite Cloud pairing ─────────────────────────────────────────────
+    {
+        ConfigStore cs;
+        CHECK(cs.open(path).empty(), "the database reopens for pairing");
+        CHECK(!cs.paired(), "a fresh relay is not paired");
+        CHECK(cs.configured() == false || cs.storage_configured(),
+              "and pairing is not what makes an unconfigured relay configured");
+
+        ConfigStore::PairingConfig pc;
+        pc.collector_url = "https://collector.example";
+        pc.appliance_id = "apl_relay1";
+        pc.appliance_token = "tok_secret";
+        pc.device_id = "dev_abc";
+        cs.set_pairing(pc);
+        CHECK(cs.paired(), "a complete claim reads as paired");
+        // The one that matters, and the one that was wrong first: pairing is
+        // not on its own a way to read anything. A relay can be paired purely
+        // for monitoring while its bucket details are still typed in.
+        //
+        // Counting a bare pairing here let a relay with no bucket at all
+        // through the gate, and RoomFeeder's active transport — guaranteed
+        // non-null BY this function — was null. It segfaulted on the first
+        // poll, with the relay reporting itself paired and healthy right up to
+        // the moment it died.
+        CHECK(!cs.configured(),
+              "a pairing alone is not a way to read the media");
+
+        // The three together or none: a url from one pairing with a token from
+        // another is a device the collector has never heard of.
+        auto partial = pc;
+        partial.appliance_token.clear();
+        cs.set_pairing(partial);
+        CHECK(!cs.paired(), "a claim missing its token is not a pairing");
+        cs.set_pairing(pc);
+
+        CHECK(!cs.storage_is_paired(),
+              "pairing alone does not move storage — the provider decides");
+        cs.set_storage_provider("multisite_cloud");
+        CHECK(cs.storage_is_paired(),
+              "choosing Multisite Cloud does");
+        CHECK(cs.configured(),
+              "and THEN a paired relay is configured with no typed key at all");
+    }
+    {
+        // Survives a restart, or an operator pairs again every boot.
+        ConfigStore cs;
+        CHECK(cs.open(path).empty(), "reopened once more");
+        const auto pc = cs.pairing();
+        CHECK(pc.appliance_id == "apl_relay1" && pc.appliance_token == "tok_secret",
+              "the claim survives a restart");
+        CHECK(pc.device_id == "dev_abc", "and so does the device id");
+
+        cs.clear_pairing();
+        CHECK(!cs.paired(), "Disconnect forgets the claim");
+        CHECK(cs.pairing().device_id == "dev_abc",
+              "but keeps the device id: it identifies this box, not this "
+              "pairing, so re-pairing after a move is the same relay");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL CONFIG STORE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

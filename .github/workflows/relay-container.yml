@@ -81,7 +81,7 @@ jobs:
         run: |
           fail=0
           for endpoint in /api/status /api/config /api/destinations /api/log \
-                          /api/events /api/rebroadcast; do
+                          /api/events /api/rebroadcast /api/pairing; do
             code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:8080${endpoint}")
             echo "  GET ${endpoint} -> ${code}"
             if [ "${code}" = "200" ]; then
@@ -89,7 +89,11 @@ jobs:
               fail=1
             fi
           done
-          for endpoint in /api/config /api/destinations/update /api/destinations; do
+          # /api/pairing is on this list for a specific reason: a stranger who
+          # could start a pairing could enrol a church's relay into a collector
+          # of their own choosing.
+          for endpoint in /api/config /api/destinations/update /api/destinations \
+                          /api/pairing; do
             code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST \
                      -H 'Content-Type: application/json' \
                      -d '{"url":"rtmp://elsewhere/live","bucket":"elsewhere"}' \

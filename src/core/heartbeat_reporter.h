@@ -80,8 +80,16 @@ std::string heartbeat_clean_serial(const std::string& raw);
 const std::vector<std::string>& heartbeat_encoder_fields();
 const std::vector<std::string>& heartbeat_decoder_fields();
 
-// Keep only the listed fields of a status document. `role` is "encoder" or
-// "decoder" (pi-player hosts pass "decoder"). Anything else, or a body that
+// A relay reports what neither of the others can: how many places a service is
+// going to, how many are actually on air, and what that costs in upload. It
+// reads the bucket like a decoder but its status document is not decoder-
+// shaped, so filtering it through the decoder list would have sent almost
+// nothing — every relay-only field dropped, and the fields that did survive
+// describing a playhead a relay does not have.
+const std::vector<std::string>& heartbeat_relay_fields();
+
+// Keep only the listed fields of a status document. `role` is "encoder",
+// "decoder" (pi-player hosts pass "decoder") or "relay". Anything else, or a body that
 // is not a JSON object, yields "{}" rather than throwing: a malformed status
 // must not be the thing that stops a heartbeat, and the collector answers
 // malformed bodies with 400 rather than us refusing to send.

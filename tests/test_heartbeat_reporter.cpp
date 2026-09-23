@@ -357,6 +357,35 @@ int main() {
         CHECK(q.phase() == Pairing::Phase::Expired, "a late reply cannot revive it");
     }
 
+    // ── A relay's status survives the filter ────────────────────────────────
+    {
+        // Before "relay" was a role the filter knew, it fell through to the
+        // "anything else" arm and every relay heartbeat carried {} — the box
+        // reported itself alive and said nothing about what it was doing.
+        json in;
+        in["role"] = "relay";
+        in["room_state"] = "live";
+        in["destinations"] = 2;
+        in["sending"] = 1;
+        in["out_kbps"] = 5800;
+        in["behind_live_s"] = 180.0;
+        in["secret_stream_key"] = "must-not-travel";
+
+        json out = json::parse(heartbeat_filter_status("relay", in.dump()));
+        CHECK(out["room_state"] == "live", "the room state travels");
+        CHECK(out["destinations"] == 2 && out["sending"] == 1,
+              "how many places, and how many actually on air");
+        CHECK(out["out_kbps"] == 5800, "and what it costs in upload");
+        CHECK(!out.contains("secret_stream_key"),
+              "an allowlist, so a field nobody vetted cannot ride along");
+
+        // The reason relay needed its own list rather than borrowing one.
+        json through_decoder =
+            json::parse(heartbeat_filter_status("decoder", in.dump()));
+        CHECK(!through_decoder.contains("destinations"),
+              "the decoder list would have dropped what a relay is for");
+    }
+
     if (g_fail == 0)
         std::printf("heartbeat_reporter: all passed\n");
     else

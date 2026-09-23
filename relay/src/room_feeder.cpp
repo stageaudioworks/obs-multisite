@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "room_feeder.h"
 
+#include "log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -35,10 +37,22 @@ RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
     } else if (m_lan_transport) {
         m_active = m_lan_transport.get();
     } else {
-        // Guaranteed non-null: Service::reload() only builds a RoomFeeder
-        // once ConfigStore::configured() is true, so cloud alone is the only
+        // Expected non-null: Service::reload() only builds a RoomFeeder once
+        // ConfigStore::configured() is true, so cloud alone is the only
         // remaining case here.
         m_active = m_transport.get();
+    }
+
+    // ...but "expected" is not "guaranteed", and the cost of being wrong was a
+    // segfault on the first poll rather than a message. It happened once:
+    // configured() briefly counted a bare pairing as a storage path, so a
+    // relay that had paired but chosen no bucket got here with nothing. The
+    // gate is fixed; this makes the next way of getting it wrong say so
+    // instead of taking the container down mid-event.
+    if (!m_active) {
+        rlog_error("no way to read the media: neither a bucket nor a LAN host "
+                   "is configured. Nothing will be sent.");
+        return;   // m_session stays null; run() and every accessor check it
     }
 
     DecoderConfig dc;
@@ -134,6 +148,8 @@ void RoomFeeder::set_lowest_reader(uint64_t seq) {
 }
 
 void RoomFeeder::run() {
+    // Nothing to read from. The constructor has already said why.
+    if (!m_session) return;
     int64_t next_poll = 0;
     while (m_running) {
         const int64_t t = now_ms();

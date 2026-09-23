@@ -911,6 +911,36 @@ stores the password as PBKDF2-HMAC-SHA256 over a random salt, and binds to
 localhost so that exposing it is a decision. It does not terminate TLS: a proxy
 in front of it does, shipped as a working example.
 
+**Multisite Cloud (Phase 12).** The relay is the third `CloudIdentity` host,
+after the OBS plugin and the campus player, and it is its own role: a relay on a
+machine that also runs an encoder pairs separately and shares nothing with it
+(ADR-0001). It reports as kind `relay`, which has been a reserved word on the
+wire since the heartbeat was written, so this is wiring rather than a protocol
+change. Pairing is the device-code flow the other two use, driven from the
+relay's own settings page.
+
+Pairing and storage stay separate choices. A relay can be paired for monitoring
+while still reading a bucket whose keys were typed in; choosing **Multisite
+Cloud** as the storage provider is what moves storage onto the pairing, and then
+the typed fields are not consulted at all — not even as a fallback, because a
+relay reading a bucket nobody paired it to is the state Phase 12 exists to make
+unrepresentable.
+
+**A relay refuses credentials that can write (ADR-0002).** Unlike the decoder,
+which logs whatever role it was granted, the relay declines a read-write set:
+nothing is adopted, the page says why, and any last-good set is left untouched
+so a collector that starts issuing read-write mid-event declines the new set
+rather than ending the event. It is the one component deliberately exposed to
+the internet and it never writes, so the access it holds should be the least its
+job needs. The cost, accepted knowingly: a collector that issues read-write to
+kind `relay` stops that relay working until it is changed cloud-side.
+
+What the heartbeat carries is the relay's own vocabulary — how many places an
+event is going to, how many are actually on air, what that costs in upload —
+rather than a decoder's playhead, which it does not have. "Active" for the
+30s/5min cadence means at least one destination is sending; a relay whose
+destinations are all stopped is idle however busy the main site is.
+
 **Not built.** Re-encoding; splitting packed audio; SRT listener mode being
 reachable through anything (the port has to be published, and nothing is shipped
 to help); signing in to YouTube (a stream key is pasted, and the broadcast is

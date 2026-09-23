@@ -177,6 +177,12 @@
       <select name="storage_provider"></select>
       <span class="hint">Which fields below this needs depends on the provider.</span>
     </label>
+    <p class="hint" id="storage-paired-note" hidden>
+      Multisite Cloud supplies the bucket, the address and the keys, so there
+      is nothing to type here. Connect this relay below.
+    </p>
+
+    <div id="storage-typed">
     <label id="field-account">Cloudflare Account ID
       <input name="r2_account_id">
     </label>
@@ -204,6 +210,7 @@
       <span class="hint">Leave this on. Turn it off only for storage running
         on your own network without a certificate.</span>
     </label>
+    </div>
 
     <h2>LAN delivery</h2>
     <label>Encoder LAN host
@@ -238,6 +245,58 @@
     <div class="error" id="config-error" hidden></div>
     <div class="good" id="config-ok" hidden></div>
   </form>
+
+  <div class="card form" id="pairing-card">
+    <h2>Multisite Cloud</h2>
+    <p class="hint">
+      Connecting this relay lets Multisite Cloud supply its storage details and
+      keep an eye on it. It is optional: a relay with its own bucket details
+      works exactly as before, and an unconnected relay sends nothing anywhere.
+    </p>
+
+    <!-- Connected ------------------------------------------------------- -->
+    <div id="pair-connected" hidden>
+      <div class="stats">
+        <div><b id="pair-appliance">—</b><span>this relay</span></div>
+        <div><b id="pair-bucket">—</b><span>reading from</span></div>
+        <div><b id="pair-heartbeat">—</b><span>last report</span></div>
+      </div>
+      <p class="hint">
+        Storage access: <span id="pair-access" class="pill">—</span>
+        A relay only ever reads, so it refuses anything more and says so here.
+      </p>
+      <p class="hint" id="pair-stale" hidden>
+        The storage details could not be refreshed just now. The event carries
+        on with the ones it already has.
+      </p>
+      <div class="row">
+        <button type="button" class="danger" id="pair-disconnect">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- Not connected --------------------------------------------------- -->
+    <div id="pair-start" hidden>
+      <label>Collector address
+        <input id="pair-collector" placeholder="https://cloud.example.org">
+        <span class="hint">Given to you with your Multisite Cloud account.</span>
+      </label>
+      <div class="row">
+        <button type="button" class="primary" id="pair-begin">Connect</button>
+      </div>
+    </div>
+
+    <!-- Waiting for approval -------------------------------------------- -->
+    <div id="pair-waiting" hidden>
+      <p class="hint">Enter this code at <a id="pair-url" target="_blank" rel="noopener">your Multisite Cloud page</a>:</p>
+      <div class="pair-code" id="pair-code">…</div>
+      <p class="hint">This page will notice by itself once you have approved it.</p>
+      <div class="row">
+        <button type="button" class="ghost" id="pair-cancel">Cancel</button>
+      </div>
+    </div>
+
+    <div class="error" id="pair-error" hidden></div>
+  </div>
 
   <form class="card form" id="password-form">
     <h2>Your login</h2>

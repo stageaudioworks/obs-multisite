@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "service.h"
+
+#include "cloud_identity.h"
+#include "s3_transport.h"
 #include "log.h"
 #include "relay_send.h"
 
@@ -16,6 +19,19 @@ Service::~Service() { stop(); }
 std::string Service::start(const std::string& db_path) {
     std::string e = m_cfg.open(db_path);
     if (!e.empty()) return e;
+
+    // Hand the saved pairing to the identity BEFORE the first reload, so a
+    // paired relay comes up already knowing who it is and fetches on its first
+    // tick rather than sitting unconfigured until something else happens.
+    const auto pc = m_cfg.pairing();
+    if (m_cfg.paired())
+        m_reporter.cloud_identity().set_enrolment(pc.collector_url,
+                                                  pc.appliance_id,
+                                                  pc.appliance_token);
+    // Always started: it sends nothing at all until paired, so an ordinary
+    // self-hosted relay pays one sleeping thread and no sockets.
+    m_reporter.start(*this);
+
     reload();
     m_running = true;
     m_thread = std::thread([this] { supervise(); });
@@ -24,6 +40,9 @@ std::string Service::start(const std::string& db_path) {
 
 void Service::stop() {
     if (m_running.exchange(false) && m_thread.joinable()) m_thread.join();
+    // Before the sessions: the reporter can call reload(), which takes the
+    // lock the teardown below is about to hold.
+    m_reporter.stop();
     std::lock_guard<std::mutex> lk(m_mtx);
     m_rebroadcast.reset();
     if (m_rebroadcast_feeder) m_rebroadcast_feeder->stop();
@@ -53,8 +72,25 @@ static bool same_lan(const ConfigStore::LanConfig& a,
     return a.host == b.host && a.port == b.port && a.auth_token == b.auth_token;
 }
 
+// Where the relay's bucket credentials come from.
+//
+// When the provider is Multisite Cloud they come from the pairing and NOTHING
+// ELSE: the typed fields are not consulted, not even as a fallback. A relay
+// reading a bucket nobody paired it to is the state Phase 12 exists to make
+// unrepresentable, and ADR-0001 is explicit that a role which is not paired is
+// not paired rather than quietly something else. So an empty S3Config here
+// means "paired, but no credentials yet", which reads as not-configured and
+// says so, rather than silently falling back to whatever was typed before.
+multisite::S3Config Service::effective_storage() const {
+    if (!m_cfg.storage_is_paired()) return m_cfg.storage();
+    const auto creds = const_cast<Reporter&>(m_reporter)
+                           .cloud_identity().credentials();
+    if (!creds.present()) return multisite::S3Config{};
+    return multisite::s3_config_from_credentials(creds);
+}
+
 void Service::reload() {
-    const auto storage = m_cfg.storage();
+    const auto storage = effective_storage();
     const auto lan = m_cfg.lan();
     const auto room = m_cfg.room();
     const auto dests = m_cfg.destinations();
@@ -83,6 +119,18 @@ void Service::reload() {
     // bucket credentials at all, and configured() is what admits that case.
     if (!m_cfg.configured()) {
         m_storage_error = "Storage has not been set up yet.";
+        return;
+    }
+    // Paired, but nothing usable has arrived yet. Distinguished from "not set
+    // up" on purpose: one is waiting and one needs an operator, and telling
+    // them apart is the difference between watching and intervening.
+    if (m_cfg.storage_is_paired() && storage.bucket.empty() &&
+        lan.host.empty()) {
+        const std::string why =
+            const_cast<Reporter&>(m_reporter).cloud_identity().error();
+        m_storage_error = why.empty()
+            ? "Waiting for storage details from Multisite Cloud."
+            : why;
         return;
     }
     m_storage_error.clear();
@@ -359,7 +407,17 @@ ServiceStatus Service::status() const {
     s.storage_error = m_storage_error;
     if (!m_feeder) {
         s.room_state = "offline";
-        s.room_state_text = "Storage has not been set up yet";
+        // Three different reasons nothing is being read, and they need
+        // different things from the operator: fill something in, wait, or go
+        // and change something at the collector. Saying "not set up yet" for
+        // all three sends someone to the settings page to re-enter details
+        // that are already correct.
+        if (!m_cfg.configured())
+            s.room_state_text = "Storage has not been set up yet";
+        else if (!m_storage_error.empty())
+            s.room_state_text = "Storage is not usable yet";
+        else
+            s.room_state_text = "Waiting for storage details";
         return s;
     }
 

@@ -298,8 +298,7 @@ RelayStatus RelaySession::status() const {
     s.bitrate_kbps = m_bitrate_kbps;
 
     const auto st = m_machine.state();
-    s.live = (st == RelayState::Streaming || st == RelayState::Stalled ||
-              st == RelayState::Ending);
+    s.live = relay_state_is_sending(st);
     if (s.live && m_started_ms > 0)
         s.uptime_s = (now_ms() - m_started_ms) / 1000;
 

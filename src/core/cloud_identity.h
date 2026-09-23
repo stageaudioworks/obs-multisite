@@ -217,6 +217,25 @@ public:
         return m_error;
     }
 
+    // Refuse a credential set that can write.
+    //
+    // ADR-0002. A host that only ever reads can say so, and then a read-write
+    // set from the collector is an error rather than a convenience: it is
+    // refused, nothing is adopted, and error() says why. The relay sets this
+    // because it is the one component deliberately exposed to the internet, so
+    // write access on it reaches the whole bucket from the least trusted box
+    // in the system.
+    //
+    // Checked when a reply is ADOPTED, not when this is set, so there is no
+    // ordering trap — a host that sets it late simply starts refusing at the
+    // next fetch. The refusal is not terminal: the schedule carries on, so a
+    // collector corrected to issue read-only recovers without a restart.
+    void set_require_read_only(bool require);
+    bool requires_read_only() const {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_require_read_only;
+    }
+
     // Clear everything — Disconnect. Typed keys are not this class's concern.
     void reset();
 
@@ -231,6 +250,7 @@ private:
     std::string m_url, m_id, m_token;
     Credentials m_creds;
     bool        m_unpaired = false;
+    bool        m_require_read_only = false;
     // 0 means "not fetched yet": the first tick must fetch. Set from the reply
     // so a boot with last-good credentials still refreshes on schedule.
     long long   m_next_fetch_at_ms = 0;

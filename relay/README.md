@@ -220,9 +220,38 @@ setup.
 
 ### What it needs from your bucket
 
-Read access only — `GetObject` on the room and event prefixes. The relay never
-writes anything. Give it its own read-only credentials rather than reusing the
-encoder's.
+Read access only — `GetObject` on the room and event prefixes, plus
+`ListBucket` if you want Past events to work. The relay never writes anything.
+Give it its own read-only credentials rather than reusing the encoder's.
+
+### Connecting it to Multisite Cloud
+
+Optional, and separate from everything above. A relay with its own bucket
+details works exactly as it always has, and an unconnected relay talks to
+nothing.
+
+Connecting it does two things: Multisite Cloud can supply the storage details
+so there is nothing to type, and it can see that the relay is alive and what it
+is sending. Go to **Settings → Multisite Cloud**, enter your collector address,
+and a code appears to approve at your Multisite Cloud page. The relay notices
+by itself once you have.
+
+To move storage onto the pairing as well, set **Storage provider** to
+**Multisite Cloud**. The typed fields disappear, because from then on they are
+not consulted — there is deliberately no falling back to them, so a relay is
+never quietly reading a bucket nobody connected it to.
+
+**It will refuse write access.** A relay only reads, and it is the one part of
+this system that sits on the public internet on purpose, so if Multisite Cloud
+hands it credentials that can also write, it declines them and says so rather
+than holding more access than it needs. If you see that, it is a setting at the
+Multisite Cloud end, not here. A relay already running when it happens keeps
+using the details it already had — an event in progress is not interrupted by
+it.
+
+This is a separate connection from any encoder or campus player on the same
+machine. Each pairs on its own and they share nothing, so a machine doing two
+jobs connects twice.
 
 ### How much bandwidth and disk
 
@@ -315,6 +344,8 @@ not running. The Log tab has the detail.
 | **Reconnecting** | The connection dropped. It retries by itself, backing off up to fifteen seconds between attempts. |
 | **Cannot send this event** | Something about the feed means it must not be sent — usually the wrong video format, or a sound feed that no longer exists. The message says which. |
 | **Finishing off** | The event ended; the last of it is still going out. |
+| **Storage is not usable yet** | Something is set up but not working. Most often Multisite Cloud handing out write access, which a relay refuses — the line underneath says which. |
+| **Waiting for storage details** | Connected to Multisite Cloud, but the bucket details have not arrived yet. Normal for a few seconds after connecting. |
 
 Stream keys are never shown in the interface or written to the log, and the
 database file is not readable by other users on the machine. They are stored

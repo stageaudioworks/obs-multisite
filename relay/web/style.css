@@ -308,3 +308,24 @@ details.advanced[open] > summary { margin-bottom: 0.5rem; }
 .foot .saw { display: flex; align-items: center; opacity: 0.75; }
 .foot .saw:hover { opacity: 1; }
 .foot .saw img { display: block; width: auto; }
+
+/* A pairing code is read aloud across a room, or typed on a phone held in the
+   other hand. Big, spaced, and unambiguous matters more here than elegance. */
+.pair-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 2rem;
+  letter-spacing: 0.22em;
+  text-align: center;
+  padding: 0.9rem 0.5rem;
+  margin: 0.6rem 0;
+  background: #10141a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  user-select: all;
+}
+
+/* A stat's value and its label are separate elements: writing the value must
+   never be able to delete the label, which is what one container holding both
+   allowed. */
+.stats div b { font-weight: 600; display: block; }

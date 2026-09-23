@@ -9,6 +9,7 @@
 #include "room_feeder.h"
 #include "log.h"
 #include "storage_providers.h"
+#include "cloud_identity.h"
 
 #include "nlohmann/json.hpp"
 
@@ -378,6 +379,79 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
                                 {"available", info.available}});
         }
         res.json(json{{"providers", list}}.dump());
+    });
+
+    // ── Multisite Cloud pairing ──────────────────────────────────────────────
+    // Behind the login like everything else: a stranger who could start a
+    // pairing could enrol a church's relay into their own collector.
+
+    route("GET", "/api/pairing", [&service](const HttpRequest&,
+                                            HttpResponse& res) {
+        const auto pc = service.config().pairing();
+        const auto view = service.reporter().pair_view();
+        const auto creds =
+            service.reporter().cloud_identity().credentials();
+        json j;
+        j["paired"] = service.config().paired();
+        j["collector_url"] = pc.collector_url;
+        j["appliance_id"] = pc.appliance_id;
+        // The token never leaves the container, the same rule as a stream key.
+        j["storage_is_paired"] = service.config().storage_is_paired();
+        j["phase"] = view.phase;
+        j["user_code"] = view.user_code;
+        j["verification_url"] = view.verification_url;
+        j["error"] = view.error;
+        j["note"] = view.note;
+        j["saved"] = view.saved;
+        j["heartbeat"] = service.reporter().last_result();
+        // What the relay actually holds, so ADR-0002's guarantee is visible
+        // rather than asserted: an operator can see that the most exposed box
+        // in the system has read access only.
+        j["credentials_present"] = creds.present();
+        j["credentials_stale"] = creds.from_last_good;
+        j["read_only"] = !creds.read_write;
+        j["bucket"] = creds.bucket;
+        j["credentials_error"] =
+            service.reporter().cloud_identity().error();
+        res.json(j.dump());
+    });
+
+    route("POST", "/api/pairing", [&service](const HttpRequest& req,
+                                             HttpResponse& res) {
+        const auto j = body_json(req);
+        std::string url = str(j, "collector_url");
+        if (url.empty()) url = service.config().pairing().collector_url;
+        if (url.empty())
+            return fail(res, 400, "Enter the address of your Multisite Cloud "
+                                  "collector first.");
+        // Remember it before the attempt, so a code on screen survives a
+        // reload of the page while the operator goes to approve it.
+        auto pc = service.config().pairing();
+        pc.collector_url = url;
+        service.config().set_pairing(pc);
+        if (!service.reporter().pair_begin(url))
+            return fail(res, 400, "Could not start pairing.");
+        ok(res);
+    });
+
+    route("DELETE", "/api/pairing", [&service](const HttpRequest& req,
+                                               HttpResponse& res) {
+        // Two different things behind one verb, told apart by the body:
+        // cancelling a pairing that is in flight, and disconnecting one that
+        // completed. Conflating them would mean an operator watching a code
+        // could not back out without also forgetting a working pairing.
+        const auto j = body_json(req);
+        if (flag(j, "disconnect", false)) {
+            service.config().clear_pairing();
+            service.reporter().cloud_identity().reset();
+            service.reporter().pair_cancel();
+            rlog_info("disconnected from Multisite Cloud");
+            // Storage may have just disappeared from under the relay.
+            service.reload();
+        } else {
+            service.reporter().pair_cancel();
+        }
+        ok(res);
     });
 
     route("POST", "/api/storage/test", [&service](const HttpRequest&,

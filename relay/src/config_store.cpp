@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "config_store.h"
+
+#include "storage_providers.h"
 #include "log.h"
 
 #include <cstdint>
@@ -161,6 +163,47 @@ bool ConfigStore::storage_configured() const {
 std::string ConfigStore::storage_provider() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return get_setting(m_db, "storage_provider");
+}
+
+bool ConfigStore::storage_is_paired() const {
+    return storage_provider() ==
+           multisite::provider_key(multisite::StorageProvider::MultisiteCloud);
+}
+
+ConfigStore::PairingConfig ConfigStore::pairing() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    PairingConfig c;
+    c.collector_url   = get_setting(m_db, "collector_url");
+    c.appliance_id    = get_setting(m_db, "appliance_id");
+    c.appliance_token = get_setting(m_db, "appliance_token");
+    c.device_id       = get_setting(m_db, "device_id");
+    return c;
+}
+
+void ConfigStore::set_pairing(const PairingConfig& c) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    put_setting(m_db, "collector_url", c.collector_url);
+    put_setting(m_db, "appliance_id", c.appliance_id);
+    put_setting(m_db, "appliance_token", c.appliance_token);
+    put_setting(m_db, "device_id", c.device_id);
+}
+
+bool ConfigStore::paired() const {
+    const auto c = pairing();
+    // All three together or none: a url from one pairing with the token from
+    // another is a device the collector has never heard of (cloud_identity.h,
+    // Enrolment).
+    return !c.collector_url.empty() && !c.appliance_id.empty() &&
+           !c.appliance_token.empty();
+}
+
+void ConfigStore::clear_pairing() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    put_setting(m_db, "collector_url", "");
+    put_setting(m_db, "appliance_id", "");
+    put_setting(m_db, "appliance_token", "");
+    // device_id is deliberately KEPT: it identifies this box, not this
+    // pairing, so re-pairing after a move is recognisable as the same relay.
 }
 
 void ConfigStore::set_storage_provider(const std::string& key) {

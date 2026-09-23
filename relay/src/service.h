@@ -10,6 +10,7 @@
 // destination sets a flag on the session that already exists.
 //
 #include "config_store.h"
+#include "reporter.h"
 #include "relay_session.h"
 #include "room_feeder.h"
 
@@ -68,6 +69,11 @@ public:
 
     ConfigStore& config() { return m_cfg; }
 
+    // The relay's side of Multisite Cloud: pairing, the heartbeat, and the
+    // credential lifecycle storage reads through when the provider is
+    // Multisite Cloud. Always constructed; it sends nothing until paired.
+    Reporter& reporter() { return m_reporter; }
+
     // Brings the running relay into line with the database. Rebuilds the
     // downloader only if the bucket or the room actually changed; otherwise
     // adds, removes and updates sessions in place, so a destination that is
@@ -112,6 +118,9 @@ public:
 
 private:
     void supervise();
+    // Typed keys, or the pairing's — never a mixture, and never a fallback
+    // from one to the other.
+    multisite::S3Config effective_storage() const;
     void sync_destinations_locked(const std::vector<Destination>& dests,
                                   const RoomSettings& room);
 
@@ -121,6 +130,7 @@ private:
     std::map<int64_t, std::unique_ptr<RelaySession>> m_sessions;
     // What the current downloader was built from, so a save that changes
     // nothing about the bucket or the LAN path does not rebuild it.
+    Reporter m_reporter;
     multisite::S3Config m_feeder_storage;
     ConfigStore::LanConfig m_feeder_lan;
     std::string         m_feeder_room;

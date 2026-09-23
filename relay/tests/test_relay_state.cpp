@@ -593,6 +593,30 @@ int main() {
               "it is dropped and rebuilt, like any other lost connection");
     }
 
+    // ── What counts as on air ───────────────────────────────────────────────
+    // Read by three things that must agree: the page, the aggregate outbound
+    // figure, and the monitoring heartbeat's cadence. It was written out twice
+    // before this, which is how two of them could have drifted apart without
+    // anything failing.
+    {
+        CHECK(relay_state_is_sending(RelayState::Streaming),
+              "streaming is on air");
+        CHECK(relay_state_is_sending(RelayState::Stalled),
+              "so is stalled — the connection is up and being held open");
+        CHECK(relay_state_is_sending(RelayState::Ending),
+              "and ending, which is still sending the last of it");
+
+        CHECK(!relay_state_is_sending(RelayState::Idle), "idle is not");
+        CHECK(!relay_state_is_sending(RelayState::Waiting),
+              "nor waiting for a service to start");
+        CHECK(!relay_state_is_sending(RelayState::Reconnecting),
+              "nor reconnecting — nothing is reaching the destination");
+        CHECK(!relay_state_is_sending(RelayState::Blocked),
+              "nor blocked, which needs an operator rather than a fast beat");
+        CHECK(!relay_state_is_sending(RelayState::Stopped),
+              "nor stopped");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL RELAY STATE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;
