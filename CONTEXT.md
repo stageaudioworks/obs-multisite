@@ -101,4 +101,4 @@ Sequence numbers, positions and media times **start at 0**. `0` is therefore a
 real value everywhere in this codebase, and `-1` (or `INT64_MIN`, or `null`) is
 what absent looks like. `if (!x)` is not a test for missing — it is a test for
 *missing or at the very beginning*, and the second is usually the ordinary case.
-This trap has been hit six times; see BUGS #4 and #5.
+This trap has been hit seven times; see BUGS #4 and #5, and `src/core/mpp_pts.h`.

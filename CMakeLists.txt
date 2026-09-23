@@ -218,6 +218,9 @@ add_test(NAME playout_timeline COMMAND test_playout_timeline)
 add_executable(test_seek_skip tests/test_seek_skip.cpp)
 add_test(NAME seek_skip COMMAND test_seek_skip)
 
+add_executable(test_mpp_pts tests/test_mpp_pts.cpp)
+add_test(NAME mpp_pts COMMAND test_mpp_pts)
+
 add_executable(test_feed_wait tests/test_feed_wait.cpp)
 add_test(NAME feed_wait COMMAND test_feed_wait)
 

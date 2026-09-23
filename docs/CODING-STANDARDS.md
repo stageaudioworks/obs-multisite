@@ -45,7 +45,8 @@ exactly that and opened half exposed).
 Sequence numbers, positions and media times start at 0. `if (!x)` is therefore
 not a test for missing — it tests *missing or at the very beginning*, and the
 beginning is usually the ordinary case. Use `>= 0`, `Number.isFinite`, or an
-explicit sentinel. This has been hit six times.
+explicit sentinel. This has been hit seven times, the seventh in MPP's own
+API, where 0 means "no pts" (`src/core/mpp_pts.h`).
 
 ## 4. Constants that must agree are tied together
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mpp_decoder.h"
+#include "mpp_pts.h"
 
 #include <cstdio>
 #include <cstring>
@@ -181,9 +182,9 @@ static bool drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 // frame's own, not the one just fed: MPP pipelines, so frames
                 // come back a packet or two behind, and stamping them with the
                 // current packet's time is what pulls the picture off the
-                // playout clock.
-                const int64_t fp = (int64_t)mpp_frame_get_pts(frame);
-                f.pts_ns = (fp != 0) ? fp : pts_ns;
+                // playout clock. Biased by a nanosecond so that a real 0 is not
+                // read as MPP's "none" (mpp_pts.h).
+                f.pts_ns = mpp_pts_from_frame((int64_t)mpp_frame_get_pts(frame), pts_ns);
                 f.full_range = false;
                 // NV12: Y plane, then interleaved UV. The vertical stride
                 // (1088 for 1080) is why the conversion is told both strides.
@@ -207,7 +208,7 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
         error = "mpp_packet_init failed";
         return false;
     }
-    mpp_packet_set_pts(packet, (RK_S64)pts_ns);
+    mpp_packet_set_pts(packet, (RK_S64)mpp_pts_to_packet(pts_ns));
 
     // Put the packet, taking frames while the queue is full. A full queue means
     // the hardware is still busy, not that a frame is ready, so when a drain
