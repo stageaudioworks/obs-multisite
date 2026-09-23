@@ -80,6 +80,36 @@ int main() {
               == kBase + 400,
           "bound 0 is 'unbounded', not 'clamp to zero'");
 
+    std::printf("== a hold does not count as elapsed time ==\n");
+    {
+        // Segment 11 starts at 50.0 s; the dock samples twice a second.
+        const long long seg = 5600;
+        PlayheadAnchor a;
+        reanchor_playhead(a, 11, 50'000, 1'000'000, true);
+        reanchor_playhead(a, 11, 50'500, 1'000'500, true);
+        CHECK(anchored_playhead(a, 1'002'933, seg, 0) == 52'933,
+              "playing: the bar glides from the segment's anchor");
+        // Held at 52.933 s for eleven seconds. Samples keep arriving.
+        reanchor_playhead(a, 11, 52'933, 1'003'000, false);
+        reanchor_playhead(a, 11, 52'933, 1'014'000, false);
+        CHECK(anchored_playhead(a, 1'014'000, seg, 0) == 52'933,
+              "held: the readout is where the picture stopped, not the segment start");
+        // Resumed. Same segment, so the old rule kept the pre-hold anchor.
+        reanchor_playhead(a, 11, 52'933, 1'014'400, true);
+        CHECK(anchored_playhead(a, 1'014'400, seg, 0) == 52'933,
+              "resume does not jump a segment forward");
+        CHECK(anchored_playhead(a, 1'015'400, seg, 0) == 53'933,
+              "and counts up from the first second, not the next segment");
+        reanchor_playhead(a, 11, 53'900, 1'015'400, true);
+        CHECK(anchored_playhead(a, 1'015'400, seg, 0) == 53'933,
+              "a later sample in the same segment does not re-base it (no jitter)");
+        reanchor_playhead(a, 12, 55'600, 1'017'100, true);
+        CHECK(anchored_playhead(a, 1'017'100, seg, 0) == 55'600,
+              "a new segment re-anchors, as before");
+        CHECK(anchored_playhead(a, 1'017'100 + 60'000, seg, 0) == 55'600 + seg,
+              "a stalled refresh still stops at one segment");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL POSITION INTERP TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

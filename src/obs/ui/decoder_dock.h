@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "../../core/position_interp.h"
 //
 // decoder_dock.h — the satellite operator panel.
 //
@@ -175,13 +176,11 @@ private:
     // One segment, in milliseconds: the unit that turns a segment number into
     // the media time the timeline draws.
     long long m_mediaSegMs = 6000;
-    // Where the playhead interpolation is anchored: the on-screen segment and
-    // when the dock first saw it. Media time advances at 1x, so wall time since
-    // the anchor fills the gap between refreshes — otherwise the playhead sits
-    // still and then jumps a whole segment.
-    unsigned long long m_mediaAnchorSeq = 0;
-    long long m_mediaAnchorMs = 0;
-    long long m_mediaAnchorWallMs = 0;
+    // Where the playhead interpolation is anchored: the on-screen segment, when
+    // the dock first saw it, and whether it was running. Media time advances at
+    // 1x, so wall time since the anchor fills the gap between refreshes —
+    // otherwise the playhead sits still and then jumps a whole segment.
+    multisite::PlayheadAnchor m_mediaAnchor;
     double    m_posBehindS = 0;
 
     // The interpolated playhead right now, or the plain sample when not

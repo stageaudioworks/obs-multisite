@@ -1707,14 +1707,6 @@ void DecoderDock::refresh() {
     m_posBaseMs     = (long long)s.playhead_ms;
     m_posBaseWallMs = (long long)QDateTime::currentMSecsSinceEpoch();
 
-    // Anchor the interpolation to the on-screen segment. Media time advances at
-    // 1x, so wall time since this anchor is what makes the bar glide rather
-    // than step once per segment.
-    if (s.playhead_seq != m_mediaAnchorSeq) {
-        m_mediaAnchorSeq    = s.playhead_seq;
-        m_mediaAnchorMs     = m_posBaseMs;
-        m_mediaAnchorWallMs = m_posBaseWallMs;
-    }
 
     if (s.stopped) {
         // First, ahead of everything else: a stopped source is not downloading,
@@ -1795,6 +1787,14 @@ void DecoderDock::refresh() {
         if (s.end_ms > 0) m_posBoundMs = (long long)s.end_ms;
         m_posAnimate = s.playing && !s.paused && !s.buffering;
     }
+
+    // Anchor the interpolation. Media time advances at 1x, so wall time since
+    // the anchor is what makes the bar glide rather than step once per segment.
+    // Here, after the branches above, because whether the playhead is RUNNING
+    // is part of the anchor: a hold and its resume re-anchor it, or the hold is
+    // counted as elapsed time (see reanchor_playhead).
+    multisite::reanchor_playhead(m_mediaAnchor, s.playhead_seq, m_posBaseMs,
+                                 m_posBaseWallMs, m_posAnimate);
 
     // Timeline entirely in clock time now, with the real downloaded ranges.
     // A finished recording spans its WHOLE length — from the moment it started
@@ -2045,17 +2045,12 @@ void DecoderDock::paintPosition() {
 }
 
 long long DecoderDock::livePlayheadMs() const {
-    if (!m_posAnimate) return m_mediaAnchorMs ? m_mediaAnchorMs : m_posBaseMs;
-    // Media plays at 1x, so wall time since the segment was anchored is the
-    // media time advanced into it. Capped at one segment, so a stalled refresh
-    // cannot run the playhead past the segment it belongs to; bounded by the
-    // span so a recording cannot be drawn past its own end.
-    long long adv = (long long)QDateTime::currentMSecsSinceEpoch() - m_mediaAnchorWallMs;
-    if (adv < 0) adv = 0;
-    if (m_mediaSegMs > 0 && adv > m_mediaSegMs) adv = m_mediaSegMs;
-    long long head = m_mediaAnchorMs + adv;
-    if (m_posBoundMs > 0 && head > m_posBoundMs) head = m_posBoundMs;
-    return head;
+    // Capped at one segment, so a stalled refresh cannot run the playhead past
+    // the segment it belongs to; bounded by the span so a recording cannot be
+    // drawn past its own end. Held, it is the sample itself.
+    return multisite::anchored_playhead(
+        m_mediaAnchor, (long long)QDateTime::currentMSecsSinceEpoch(),
+        m_mediaSegMs, m_posBoundMs);
 }
 
 } // namespace multisite_obs

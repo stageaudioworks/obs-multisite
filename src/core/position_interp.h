@@ -46,4 +46,44 @@ inline long long interpolate_position(long long base_ms, long long base_wall_ms,
     return head;
 }
 
+// The dock's playhead between samples, anchored rather than re-based on every
+// sample so the bar glides instead of twitching by a sample's jitter.
+//
+// The anchor used to move only when the on-screen SEGMENT changed. A hold does
+// not change it, so on resume the wall time since the anchor included the whole
+// hold: capped at one segment, the readout jumped a segment forward, and then
+// sat there until the next segment began — "elapsed only starts counting after a
+// couple of seconds". While held it showed the segment's start rather than
+// where the picture stopped.
+//
+// So the anchor moves on a new segment AND whenever the playhead starts or
+// stops running; and while it is not running it simply follows the sample.
+struct PlayheadAnchor {
+    unsigned long long seq = 0;
+    long long media_ms = 0;
+    long long wall_ms  = 0;
+    bool      running  = false;
+};
+
+inline void reanchor_playhead(PlayheadAnchor& a, unsigned long long seq,
+                              long long sample_ms, long long sample_wall_ms,
+                              bool running) {
+    if (seq != a.seq || running != a.running || !running)
+        a = PlayheadAnchor{seq, sample_ms, sample_wall_ms, running};
+}
+
+// seg_ms caps the advance at one segment, so a stalled refresh cannot run the
+// playhead past the segment it belongs to; bound_ms (0 = none) is the end of a
+// recording.
+inline long long anchored_playhead(const PlayheadAnchor& a, long long now_wall_ms,
+                                   long long seg_ms, long long bound_ms) {
+    if (!a.running) return a.media_ms;
+    long long adv = now_wall_ms - a.wall_ms;
+    if (adv < 0) adv = 0;
+    if (seg_ms > 0 && adv > seg_ms) adv = seg_ms;
+    long long head = a.media_ms + adv;
+    if (bound_ms > 0 && head > bound_ms) head = bound_ms;
+    return head;
+}
+
 } // namespace multisite
