@@ -12,6 +12,7 @@
 // Offline: the transports are in-process fakes.
 #include "../src/core/retry_uploader.h"
 #include "../src/core/spool_queue.h"
+#include "test_tmpdir.h"
 
 #include <atomic>
 #include <chrono>
@@ -69,7 +70,7 @@ static bool wait_for(F pred, int ms) {
 }
 
 int main() {
-    const fs::path base = fs::temp_directory_path() / "multisite_mirror_upload";
+    const fs::path base = unique_temp_dir("multisite_mirror_upload");
     fs::remove_all(base);
 
     UploaderConfig fast;

@@ -8,6 +8,7 @@
 // and never silently skipping a missing segment.
 #include "../src/core/decoder_session.h"
 #include "../src/core/checksum.h"
+#include "test_tmpdir.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -229,7 +230,7 @@ public:
 };
 
 int main() {
-    fs::path base = fs::temp_directory_path() / "multisite_decoder_test";
+    fs::path base = unique_temp_dir("multisite_decoder_test");
     fs::remove_all(base);
     fs::create_directories(base);
 

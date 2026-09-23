@@ -3,6 +3,7 @@
 // lockup: a timeline click had to wait for whatever transfer was in flight.
 #include "decoder_session.h"
 #include "checksum.h"
+#include "test_tmpdir.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -37,7 +38,7 @@ public:
 };
 
 int main(){
-    fs::path base = fs::temp_directory_path() / "ms_responsive";
+    fs::path base = unique_temp_dir("ms_responsive");
     fs::remove_all(base); fs::create_directories(base);
 
     SlowStore store;

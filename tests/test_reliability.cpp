@@ -13,6 +13,7 @@
 #include "../src/core/model.h"
 #include "../src/core/checksum.h"
 #include "../src/core/session.h"   // for now_ms()
+#include "test_tmpdir.h"
 
 #include <atomic>
 #include <cassert>
@@ -61,7 +62,7 @@ public:
 };
 
 int main() {
-    fs::path base = fs::temp_directory_path() / "multisite_test";
+    fs::path base = unique_temp_dir("multisite_test");
     fs::remove_all(base);
     fs::create_directories(base);
 

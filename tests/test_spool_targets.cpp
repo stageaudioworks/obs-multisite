@@ -5,6 +5,7 @@
 //
 // Offline and filesystem-only: no transport, no network.
 #include "../src/core/spool_queue.h"
+#include "test_tmpdir.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -35,7 +36,7 @@ static void fill(SpoolQueue& q, uint64_t from, uint64_t to) {
 }
 
 int main() {
-    const fs::path base = fs::temp_directory_path() / "multisite_spool_targets";
+    const fs::path base = unique_temp_dir("multisite_spool_targets");
     fs::remove_all(base);
 
     std::printf("== 1. One target is exactly the old behaviour ==\n");

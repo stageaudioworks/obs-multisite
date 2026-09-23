@@ -11,6 +11,7 @@
 // to this class instead of S3Transport.
 #include "../src/core/lan_transport.h"
 #include "../src/core/lan_object_server.h"
+#include "test_tmpdir.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -25,7 +26,7 @@ static int g_fail = 0;
                          else { std::printf("  [ok]   %s\n", m); } } while(0)
 
 int main() {
-    fs::path cache_dir = fs::temp_directory_path() / "multisite_lan_transport_test";
+    fs::path cache_dir = unique_temp_dir("multisite_lan_transport_test");
     fs::remove_all(cache_dir);
     fs::create_directories(cache_dir);
 

@@ -10,6 +10,7 @@
 // folder (see BUGS.md). These tests prove the sweep that closes that gap,
 // and that it does not touch the directory actually being switched to.
 #include "../src/core/segment_cache.h"
+#include "test_tmpdir.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -28,7 +29,7 @@ static void touch(const fs::path& p) {
 }
 
 int main() {
-    fs::path base = fs::temp_directory_path() / "multisite_segment_cache_test";
+    fs::path base = unique_temp_dir("multisite_segment_cache_test");
     fs::remove_all(base);
     fs::create_directories(base);
 

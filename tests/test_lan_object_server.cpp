@@ -11,6 +11,7 @@
 // the fallback composite (FallbackTransport) have their own test files;
 // this one proves the server in isolation, over a real loopback socket.
 #include "../src/core/lan_object_server.h"
+#include "test_tmpdir.h"
 
 #include <chrono>
 #include <cstdint>
@@ -117,7 +118,7 @@ std::vector<uint8_t> fake_bytes(uint64_t seed, size_t n) {
 } // namespace
 
 int main() {
-    fs::path cache_dir = fs::temp_directory_path() / "multisite_lan_object_server_test";
+    fs::path cache_dir = unique_temp_dir("multisite_lan_object_server_test");
     fs::remove_all(cache_dir);
     fs::create_directories(cache_dir);
 
