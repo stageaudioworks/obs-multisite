@@ -232,9 +232,6 @@ add_test(NAME feed_wait COMMAND test_feed_wait)
 add_test(NAME locale COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR}
          -P ${CMAKE_SOURCE_DIR}/tests/check_locale.cmake)
 
-add_executable(test_caption_text tests/test_caption_text.cpp)
-add_test(NAME caption_text COMMAND test_caption_text)
-
 # The Pi player page's media-time arithmetic. Node rather than C++ because the
 # code under test is the page's, and it is only testable at all because the
 # arithmetic was split out of app.js (which needs a browser) into media.js.
@@ -987,7 +984,6 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
-        src/obs/caption_bridge.cpp
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp
         src/obs/plugin_log.cpp

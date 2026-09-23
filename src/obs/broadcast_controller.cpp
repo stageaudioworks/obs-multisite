@@ -207,11 +207,6 @@ void BroadcastSettings::load() {
         video_encoder_id = obs_data_get_string(d, "video_encoder_id");
     if (obs_data_has_user_value(d, "tile_layout"))
         tile_layout = obs_data_get_string(d, "tile_layout");
-    // Only when the key is PRESENT, so an existing configuration written before
-    // captions existed keeps the struct default (Automatic) rather than being
-    // read back as an empty string, which means "no captions".
-    if (obs_data_has_user_value(d, "caption_source"))
-        caption_source = obs_data_get_string(d, "caption_source");
     if (obs_data_has_user_value(d, "lan_enabled"))
         lan_enabled = obs_data_get_bool(d, "lan_enabled");
     if (obs_data_has_user_value(d, "lan_port"))
@@ -259,7 +254,6 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "channel_labels", channel_labels.c_str());
     obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
     obs_data_set_string(d, "tile_layout", tile_layout.c_str());
-    obs_data_set_string(d, "caption_source", caption_source.c_str());
     obs_data_set_bool(d, "lan_enabled", lan_enabled);
     obs_data_set_int(d, "lan_port", lan_port);
     obs_data_set_string(d, "lan_auth_token", lan_auth_token.c_str());
@@ -470,11 +464,6 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
         return false;
     }
 
-    // Captions. AFTER the output has started: libobs only allocates the
-    // output's caption track when its video encoder is set, and nothing can
-    // carry a caption until packets flow.
-    m_captions.start(m_output, m_cfg.caption_source);
-
     // Live now: the uploader's own traffic is the health signal, so retire the
     // idle probe.
     stop_idle_monitor();
@@ -486,20 +475,14 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
 }
 
 void BroadcastController::unload() {
-    // The bridge holds a libobs signal handler and a libobs output pointer.
-    // Both are gone by the time this object's destructor would run — it is a
-    // function-local static, destroyed during __cxa_finalize at process exit —
-    // so the stop has to happen here, while libobs is still whole. Without
-    // this the destructor calls obs_get_signal_handler() on a torn-down libobs
-    // and the process segfaults on its way out of an otherwise clean shutdown.
-    m_captions.stop();
+    // Nothing to release in this build: the one libobs-holding member, the
+    // captions bridge, is held out of this release (see RELEASE-NOTES.md).
+    // Kept so obs_module_unload's call and main's shape stay the same.
 }
 
 void BroadcastController::end_broadcast() {
     if (!m_output) return;
     mlog_info("ending broadcast (draining the upload queue)");
-    // BEFORE the output stops: the bridge holds a pointer to it.
-    m_captions.stop();
     obs_output_stop(m_output);
     release_all();
     // Back to idle: resume the background probe so the operator still sees a
