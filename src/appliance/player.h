@@ -510,7 +510,10 @@ private:
     // under m_obj_mtx, the same place every other rebuild happens.
     std::atomic<bool> m_transport_wanted{false};
     int      m_last_room = -1;
-    uint64_t m_feed_start_ns = 0;      // monotonic time this decoder started
+    // Atomic: resume() moves it forward by the hold from the control thread
+    // (see feed_start_after_hold), while the feed loop reads it.
+    std::atomic<uint64_t> m_feed_start_ns{0};   // monotonic time this decoder started
+    std::atomic<uint64_t> m_pause_started_ns{0};
     uint64_t m_pushed_media_ns = 0;    // media duration handed over so far
     bool     m_logged_av_offset = false;
     int64_t  m_last_video_pts_ns = 0;

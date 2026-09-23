@@ -27,6 +27,8 @@
 //
 // Pure, so tests/test_feed_wait.cpp pins it.
 
+#include <cstdint>
+
 namespace multisite {
 
 enum class FeedWait {
@@ -43,6 +45,24 @@ inline FeedWait feed_wait_step(bool jumped, bool paused, bool lead_allows) {
     if (jumped) return FeedWait::Drop;
     if (paused) return FeedWait::Keep;
     return lead_allows ? FeedWait::Push : FeedWait::Wait;
+}
+
+// Where the feed's pacing clock starts once a hold ends.
+//
+// The lead gate compares media pushed against WALL time since the decoder
+// started. A hold stops the media and not the wall, so without this every
+// second held read as a second fallen behind: after a 30 s hold the gate let
+// the feed run until the decoder's queue refused it, and it stayed pinned there
+// — four fragments, about 24 s, ahead instead of 2.5 s — until the next seek.
+// Moving the start forward by the hold makes held time not count.
+//
+// `pause_started_ns` of 0 means no hold was recorded; a start later than
+// `now_ns` is a clock oddity. Neither moves anything.
+inline uint64_t feed_start_after_hold(uint64_t feed_start_ns,
+                                      uint64_t pause_started_ns,
+                                      uint64_t now_ns) {
+    if (pause_started_ns == 0 || pause_started_ns > now_ns) return feed_start_ns;
+    return feed_start_ns + (now_ns - pause_started_ns);
 }
 
 }  // namespace multisite

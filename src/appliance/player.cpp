@@ -10,6 +10,7 @@
 #include "core/playout_clock.h"
 #include "core/tile_crop.h"
 #include "core/collector_client.h"   // the endpoint paths + bounded HTTP call
+#include "core/feed_wait.h"          // what a hold does to the fragment in hand
 
 #include <algorithm>
 #include <chrono>
@@ -1896,12 +1897,28 @@ void Player::feed_loop() {
 
         // Feed at playout rate with a small lead, so the decoder always has
         // work but never runs seconds ahead of the clock.
-        while (m_running.load() && !m_paused.load()) {
-            const uint64_t elapsed = now_ns() - m_feed_start_ns;
-            if (m_pushed_media_ns <= elapsed + kFeedLeadNs) break;
+        //
+        // A hold KEEPS the fragment in hand (#10, the same rule as the OBS
+        // source). This loop used to exit on `m_paused` and fall straight
+        // through to the push, so every hold began by sending the decoder one
+        // more fragment than the picture was showing. A jump still drops it:
+        // next_segment() has already moved past it, and the teardown above
+        // runs on the next pass.
+        const uint64_t feeding_disc = sess->discontinuity_id();
+        bool jumped = false;
+        while (m_running.load()) {
+            const uint64_t elapsed = now_ns() - m_feed_start_ns.load();
+            const multisite::FeedWait step = multisite::feed_wait_step(
+                /*jumped=*/!m_decoder_started.load() ||
+                    sess->discontinuity_id() != feeding_disc,
+                /*paused=*/m_paused.load(),
+                /*lead_allows=*/m_pushed_media_ns <= elapsed + kFeedLeadNs);
+            if (step == multisite::FeedWait::Drop) { jumped = true; break; }
+            if (step == multisite::FeedWait::Push) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (!m_running.load()) break;
+        if (jumped) continue;
 
         m_seg_starts_at_ms = (long long)seg->starts_at_ms;
         m_seg_first_pts_ns = -1;                 // set by the first frame
@@ -1956,6 +1973,7 @@ void Player::pause() {
     // Order matters: stop delivery first so the picture holds immediately,
     // then stop pulling new segments.
     m_paused = true;
+    m_pause_started_ns = now_ns();
     sess->pause();
     plog_info("HOLDING the picture — the cache keeps filling");
 }
@@ -1968,6 +1986,14 @@ void Player::resume() {
     // that never become due — a picture frozen for good. Treating it as a
     // discontinuity costs the handful of frames still queued and always works.
     flush_delivery();
+    // Held time is not time fallen behind; without this the lead gate let the
+    // feed run until the decoder's queue refused it (see feed_start_after_hold).
+    // Only a hold that is still on counts: a jump or a stop ends one without
+    // coming through here, and its start must not be charged to a later decoder.
+    const uint64_t held_since = m_pause_started_ns.exchange(0);
+    if (m_paused.load())
+        m_feed_start_ns = multisite::feed_start_after_hold(
+            m_feed_start_ns.load(), held_since, now_ns());
     m_paused = false;
     sess->resume();
     plog_info("CONTINUING at %.0fs behind live", sess->behind_live_s());

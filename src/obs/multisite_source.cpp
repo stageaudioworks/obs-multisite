@@ -2496,6 +2496,12 @@ void SourceCtx::resume() {
     // of already-decoded frames still in the queue (under half a second);
     // playback continues from the same point in the programme because the
     // decoder itself is not restarted.
+    // The feed's pacing clock must not count the hold, or the lead gate reads
+    // it as the feed having fallen behind and lets it run until the decoder's
+    // queue refuses it (see feed_start_after_hold). The feed loop only writes
+    // this when a decoder starts, which it does not do while held.
+    feed_start_ns = multisite::feed_start_after_hold(
+        feed_start_ns.load(), pause_started_ns.load(), os_gettime_ns());
     pause_started_ns = 0;
 
     // WHERE THE PICTURE STOPPED. This is the whole of the DVR contract, and
