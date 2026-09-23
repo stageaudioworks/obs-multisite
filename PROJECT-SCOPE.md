@@ -748,6 +748,18 @@ product line, planned and built outside this repository.
   Note that libdav1d runs its own thread pool rather than FFmpeg's, so it
   reports no thread count. `decoding on its own threads` in the log is that,
   not single-threaded decode.
+- **Rockchip decode is in the core too.** The same player also runs on RK3588
+  boards, the hardware under the separate product line above. Those boards
+  have no V4L2 codec node, so the core carries its own path to the SoC's
+  decoder through Rockchip MPP (`src/core/mpp_decoder.cpp`, built when
+  `librockchip_mpp` is found). It is proven on a ROCK 5B for H.264, HEVC and
+  AV1, 4:2:0 only. It is GPL media code like the rest of the player, which is
+  why it lives here and not in that product line's own software.
+- **The encoder for that hardware is not here.** A headless HDMI-in encoder is
+  a separate GPL program. It links this core as an installed CMake package
+  (`MULTISITE_INSTALL_CORE`, which exports `multisite::core`, `multisite::s3`
+  and `multisite::cmaf`) rather than copying it, so its segments come from
+  the same muxer as the OBS encoder's.
 - **Audio.** HDMI carries up to 8 channels of LPCM, which suits the packed
   multi-channel layout: an inexpensive HDMI audio de-embedder recovers the
   individual channels at the campus. That gives a third audio path alongside
