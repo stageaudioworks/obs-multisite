@@ -152,10 +152,17 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 if (!logged) {
                     logged = true;
                     // Said once, because the shape of MPP's output buffer is the
-                    // one thing a green or torn picture needs explaining.
+                    // one thing a green or torn picture needs explaining: the
+                    // format, the strides, the buffer size, and whether the
+                    // chroma is actually where the conversion reads it.
+                    const uint8_t* uv = base + (size_t)hs * (size_t)vs;
+                    unsigned uvs = 0;
+                    for (int k = 0; k < 64; ++k) uvs += uv[k];
                     std::fprintf(stderr,
-                                 "mpp: first frame %dx%d fmt=%d stride=%dx%d\n",
-                                 w, h, (int)mpp_frame_get_fmt(frame), hs, vs);
+                                 "mpp: first frame %dx%d fmt=%d stride=%dx%d buf=%zu"
+                                 " uv@%zu first64sum=%u\n",
+                                 w, h, (int)mpp_frame_get_fmt(frame), hs, vs,
+                                 mpp_buffer_get_size(buf), (size_t)hs * (size_t)vs, uvs);
                 }
                 DecodedVideoFrame f;
                 f.width = w;
