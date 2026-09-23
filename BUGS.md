@@ -92,10 +92,12 @@ number would be a nicety, not a gate.
 
 ---
 
-### 2. Hold/resume: the stall after a resume — root cause FOUND, fix awaiting a live hold
+### 2. Hold/resume: the stall after a resume — FIXED and VERIFIED
 
-**Status: fixed in code, pinned by `test_feed_wait`; confirming on a real hold
-is the last step.** Tracked as [#10](https://github.com/stageaudioworks/obs-multisite/issues/10).
+**Status: fixed in `2653b22`, pinned by `test_feed_wait`, verified on a real
+~10 s hold on 2026-09-23** — no far-future stamp, no pts jump, no stall after
+the resume, and `frames_out` advancing straight through. Delete this entry once
+it ships in a release. Tracked as [#10](https://github.com/stageaudioworks/obs-multisite/issues/10).
 The resume fix before it (position loss constant at ~33 ms) was verified on a
 real hold on 2026-09-21 and still stands.
 
