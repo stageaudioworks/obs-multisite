@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cmaf_decoder.h"
+#include "mpp_decoder.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -43,6 +44,18 @@ static int64_t mono_ms() {
 // fragment at a time.
 static constexpr size_t kAvioBufSize = 1 << 16;
 static constexpr size_t kMaxQueuedFragments = 4;
+
+// The MPP codec name for an FFmpeg codec id, or empty when MPP does not take
+// it. The RK3588 decoder block handles H.264, HEVC, VP9 and AV1.
+static std::string mpp_codec_name(AVCodecID id) {
+    switch (id) {
+        case AV_CODEC_ID_H264: return "h264";
+        case AV_CODEC_ID_HEVC: return "hevc";
+        case AV_CODEC_ID_AV1:  return "av1";
+        case AV_CODEC_ID_VP9:  return "vp9";
+        default:               return {};
+    }
+}
 
 // Seekable read context over a fixed byte buffer.
 struct MemReader {
@@ -197,6 +210,17 @@ struct CmafDecoder::Impl {
         last_progress_ms = mono_ms();
     }
 
+    // An MPP frame arrives already I420 with its plane pointers set, so it needs
+    // none of emit_video's hardware-transfer or scaling — only the bookkeeping
+    // the rest of the class expects (the last-known size, and the progress mark
+    // the wedge watchdog reads).
+    void emit_mpp_video(const DecodedVideoFrame& f) {
+        if (!on_video) return;
+        width = f.width; height = f.height;
+        on_video(f);
+        last_progress_ms = mono_ms();
+    }
+
     void emit_audio(AVFrame* f, AVRational tb, int track_index) {
         if (!on_audio) return;
         const int out_ch = f->ch_layout.nb_channels > 0 ? f->ch_layout.nb_channels : 2;
@@ -270,6 +294,11 @@ struct CmafDecoder::Impl {
         std::vector<AVCodecContext*> ctxs(fmt->nb_streams, nullptr);
         std::vector<int> audio_idx(fmt->nb_streams, -1);
         int video_stream = -1, an = 0;
+        // The hardware video decoder for this unit, when the board has MPP. A
+        // unit is self-contained — init + fragment, keyframe first — so a fresh
+        // decoder per unit is correct, and matches the FFmpeg path below, which
+        // also opens per unit.
+        std::unique_ptr<MppVideoDecoder> mpp;
 
         auto open_codec = [](AVCodecParameters* par,
                              const AVCodec* codec) -> AVCodecContext* {
@@ -323,7 +352,23 @@ struct CmafDecoder::Impl {
             // another codec, or that refuses to open falls through to the
             // software decoder below — so a preference can change which
             // decoder runs, and never whether playback works.
-            if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+            if (par->codec_type == AVMEDIA_TYPE_VIDEO && !mpp) {
+                // Rockchip MPP first where the board has it. On a vendor kernel
+                // the h264_v4l2m2m preference below can never open — there is no
+                // V4L2 codec node, only /dev/mpp_service — so this is the only
+                // hardware path there. A failure is not fatal: the FFmpeg paths
+                // below then run exactly as they did.
+                const std::string name = mpp_codec_name(par->codec_id);
+                if (!name.empty() && mpp_decode_available()) {
+                    auto d = std::make_unique<MppVideoDecoder>();
+                    std::string e;
+                    if (d->open(name, e)) {
+                        video_codec = d->name();
+                        mpp = std::move(d);
+                    }
+                }
+            }
+            if (par->codec_type == AVMEDIA_TYPE_VIDEO && !mpp) {
                 for (const std::string& name : prefer_video_decoders) {
                     const AVCodec* cand = avcodec_find_decoder_by_name(name.c_str());
                     if (!cand || cand->id != par->codec_id) continue;
@@ -334,7 +379,7 @@ struct CmafDecoder::Impl {
                     break;
                 }
             }
-            if (!ctxs[i]) {
+            if (!ctxs[i] && !(par->codec_type == AVMEDIA_TYPE_VIDEO && mpp)) {
                 const AVCodec* sw = avcodec_find_decoder(par->codec_id);
                 AVCodecContext* c = open_codec(par, sw);
                 if (!c) continue;
@@ -384,6 +429,20 @@ struct CmafDecoder::Impl {
         AVFrame* frm = av_frame_alloc();
         for (auto& sp : plist) {
             if (!running.load()) break;
+            if (mpp && (int)sp.pkt->stream_index == video_stream) {
+                // Video through MPP, audio through FFmpeg, both fed from the
+                // one demuxer. The packet's own time is what MPP cannot know,
+                // so it is converted here and carried onto every frame.
+                AVRational tb = fmt->streams[video_stream]->time_base;
+                int64_t ts = (sp.pkt->pts != AV_NOPTS_VALUE) ? sp.pkt->pts : sp.pkt->dts;
+                int64_t pts_ns = (ts == AV_NOPTS_VALUE)
+                                     ? 0 : (int64_t)(ts * av_q2d(tb) * 1e9);
+                std::vector<DecodedVideoFrame> got;
+                std::string e;
+                if (mpp->decode(sp.pkt->data, sp.pkt->size, pts_ns, seq, got, e))
+                    for (auto& fr : got) emit_mpp_video(fr);
+                continue;
+            }
             AVCodecContext* c = ctxs[sp.pkt->stream_index];
             if (c && avcodec_send_packet(c, sp.pkt) >= 0) {
                 while (avcodec_receive_frame(c, frm) >= 0) {
@@ -405,6 +464,13 @@ struct CmafDecoder::Impl {
                 else emit_audio(frm, tb, audio_idx[i]);
                 av_frame_unref(frm);
             }
+        }
+        // Frames still held inside MPP at the end of the unit. The FFmpeg
+        // decoders were flushed above; MPP has its own end-of-stream.
+        if (mpp) {
+            std::vector<DecodedVideoFrame> got;
+            mpp->flush(got);
+            for (auto& fr : got) emit_mpp_video(fr);
         }
         av_frame_free(&frm);
         for (auto*& c : ctxs) if (c) avcodec_free_context(&c);

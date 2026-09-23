@@ -150,18 +150,30 @@ target_link_libraries(multisite_core PUBLIC Threads::Threads)
 # 5B and friends), where the decode door is /dev/mpp_service and the V4L2 path
 # does not exist. Off by default — found only where it is installed, so every
 # other build is unchanged and stays on FFmpeg's decoders.
+#
+# Applied to two targets: the core, and the standalone CMAF library the decoder
+# tests link, which carries cmaf_decoder.cpp without the rest of the core.
 find_package(PkgConfig QUIET)
+set(MULTISITE_MPP_FOUND FALSE)
 if(PkgConfig_FOUND AND NOT WIN32)
     pkg_check_modules(MPP QUIET rockchip_mpp)
     if(MPP_FOUND)
-        target_compile_definitions(multisite_core PRIVATE MULTISITE_HAVE_MPP)
-        target_include_directories(multisite_core PRIVATE ${MPP_INCLUDE_DIRS})
-        target_link_libraries(multisite_core PRIVATE ${MPP_LIBRARIES})
+        set(MULTISITE_MPP_FOUND TRUE)
         message(STATUS "Rockchip MPP found: hardware video decode enabled")
     else()
         message(STATUS "Rockchip MPP not found: video decode stays on FFmpeg")
     endif()
 endif()
+
+function(multisite_apply_mpp target)
+    if(MULTISITE_MPP_FOUND)
+        target_compile_definitions(${target} PRIVATE MULTISITE_HAVE_MPP)
+        target_include_directories(${target} PRIVATE ${MPP_INCLUDE_DIRS})
+        target_link_libraries(${target} PRIVATE ${MPP_LIBRARIES})
+    endif()
+endfunction()
+
+multisite_apply_mpp(multisite_core)
 
 # Winsock, for the shared HTTP server. Nothing else in the core opens a socket
 # of its own: every request it makes goes out through libcurl.
@@ -563,10 +575,12 @@ endif()
 if(FFMPEG_FOUND)
     add_library(multisite_cmaf STATIC
         src/core/cmaf_muxer.cpp
-        src/core/cmaf_decoder.cpp)
+        src/core/cmaf_decoder.cpp
+        src/core/mpp_decoder.cpp)
     target_include_directories(multisite_cmaf PUBLIC src src/core)
     target_link_libraries(multisite_cmaf PUBLIC ffmpeg_iface)
     set_target_properties(multisite_cmaf PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    multisite_apply_mpp(multisite_cmaf)
 
     add_executable(test_cmaf tests/test_cmaf.cpp)
     target_link_libraries(test_cmaf PRIVATE multisite_cmaf)
