@@ -194,10 +194,13 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 // Temporary: the first frames' timestamps, which is what the
                 // playout clock paces on. If these are zero or flat, the picture
                 // races and the identity screen flashes between bursts.
-                if (logged < 12) {
-                    std::fprintf(stderr, "mpp: frame %d pts=%.3fs seq=%llu\n",
+                if (logged < 24) {
+                    size_t nz = 0;
+                    for (uint8_t b : f.data) if (b) ++nz;
+                    std::fprintf(stderr,
+                                 "mpp: frame %d pts=%.3fs seq=%llu nonzero=%zu\n",
                                  logged, (double)f.pts_ns / 1e9,
-                                 (unsigned long long)f.seq);
+                                 (unsigned long long)f.seq, nz);
                 }
                 ++logged;
                 out.push_back(std::move(f));
