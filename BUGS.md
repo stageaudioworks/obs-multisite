@@ -92,119 +92,57 @@ number would be a nicety, not a gate.
 
 ---
 
-### 2. Hold/resume: fix VERIFIED, and a second fault found after it
+### 2. Hold/resume: the stall after a resume — root cause FOUND, fix awaiting a live hold
 
-**Status: the resume fix works — verified on a real hold 2026-09-21. A separate
-fault that surfaces after a resume is OPEN and reproduced live.**
+**Status: fixed in code, pinned by `test_feed_wait`; confirming on a real hold
+is the last step.** Tracked as [#10](https://github.com/stageaudioworks/obs-multisite/issues/10).
+The resume fix before it (position loss constant at ~33 ms) was verified on a
+real hold on 2026-09-21 and still stands.
 
-**The resume fix is confirmed.** On a real hold: `PAUSED ... on screen 848.067s`
-→ `RESUMED ... held from 848.067s` → `playout anchored on first video frame (pts
-848.100s)`. **33 ms** — constant, not growing with the hold. No
-`playout clock fell Ns behind` line. The old fault is gone; this entry's
-original root cause and fix are now proven, not merely reasoned.
+**Symptom.** Seconds after a clean resume, delivery stops handing anything to
+OBS for ~6 s, every audio frame is dropped at the cap, and `frames_out` freezes.
 
-**The new, separate fault (OPEN, reproduced 2026-09-21).** Seconds after that
-clean resume, delivery stops handing anything to OBS and the queue jams
-permanently:
-
-```
-17:06:51.683  first 1s after resume — video min lead 395 ms; audio min lead 395 ms   <- healthy
-17:06:52.309  dropped an audio frame after waiting 250 ms — delivery last handed over
-              1265 ms ago, playing, this stream held 1003 ms (bound 1000 ms)
-17:06:54.327  ... delivery last handed over 3283 ms ago, held 1003 ms (bound 1000 ms)
-17:06:56.347  ... delivery last handed over 5302 ms ago, held 1003 ms (bound 1000 ms)
-```
-
-`frames_out` freezes; the gap since the last handover grows without bound. This
-is the entry's own previously-unexplained half — *"22 of 47 drops were audio,
-which should never have jammed on capacity"* — now reproduced on demand.
-
-**Cause: NOT the deliver loop stopping. A thread dump on 2026-09-22 refutes
-that; the real anomaly is a 6677 ms queued span.**
-
-An earlier reading of these logs concluded the deliver loop thread was
-descheduled for ~5.9 s. **That conclusion is withdrawn** — it was inference
-from the wait duration alone, and the thread dump below contradicts it. The
-sequence is kept because it shows why the inference was wrong.
-
-What the logs first showed:
+**Root cause (measured 2026-09-23).** A hold dropped a whole segment. The feed
+loop takes a fragment with `next_segment()` — which advances the session's head
+as it hands it over — then parks at the feed-lead gate until playout catches
+up. `paused` sat in that gate's jump test beside the discontinuity and the
+decoder teardown, so a hold landing while the loop was parked (most of the
+time) was treated as a jump and the fragment in hand was thrown away. The head
+was already past it, so it was lost for good. The reading that proved it:
 
 ```
-07:21:41.468  parked 5324 ms into a due-wait for a audio frame timestamped 984 ms in the future
-07:21:42.057  deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now, audio)
+FAR-FUTURE stamp — audio track 0 … pts 18.008s, previous on this stream 11.992s (jump +6016 ms),
+                   anchor 7.704s …, 3479 ms after resume, 31305 ms after decoder start
 ```
 
-The second line is logged by the loop itself after the wait returned: it
-entered with the frame 395 ms away and the wait took 5913 ms. That is longer
-than the ≤50 ms-slice wait can account for, so "the thread must not be running"
-was the inference.
+Audio went from the end of segment [6,12) straight to the start of [18,24): one
+segment plus one AAC frame. No decoder restart (it had started 31 s earlier), so
+the push_fragment wedge watchdog — the leading suspect — was ruled out, and so
+was the anchor. Those frames were stamped ~6.3 s ahead; the deliver loop, which
+releases the earliest timestamp, waited for the first of them.
 
-**`sample OBS 3` during a stall shows the opposite.** 1126 of 1135 samples of
-`deliver_loop` are inside `std::this_thread::sleep_for` — the due-wait, where
-it should be — and it appears in `obs_source_output_video` in the rest:
+**Fix.** `feed_wait_step()` (`src/core/feed_wait.h`): a hold KEEPS the fragment
+in hand and waits; only a real jump drops it. `test_feed_wait` fails three ways
+against the old rule.
 
-```
-1135 multisite_obs::deliver_loop(...)
- 1126   std::this_thread::sleep_for(...)
-  1126     nanosleep / __semwait_signal
-    6   obs_source_output_video(...)
-    1   obs_source_output_audio(...)
-```
+**Don't:** re-derive the anchor, re-argue the queue bound, or read "deliver loop
+waited N ms … +395 ms from now" as the distance at the start of the wait. That
+line was printed *after* the wait returned, when the frame is always ~400 ms
+away by construction — and reading it the other way is what produced both
+"the thread stops running" and its withdrawal. It now prints both ends.
 
-The loop is alive, sleeping correctly, and delivering. It is **not** frozen and
-**not** descheduled. The Mac is simply busy — 11 `av:h264:df0..df10` decode
-threads and a graphics thread alongside — so a 50 ms sleep is overshot, but not
-by 5.9 s.
+**Still open, separately:** the feed-lead gate measures `pushed_media_ns`
+against wall time since the decoder started, so a hold inflates it and the loop
+over-feeds for a while after every resume. Not a stall — push_fragment bounds
+it — but it is the same wall-clock thinking the rest of the project removed.
+The Pi's feed loop does not drop on a hold; it pushes the fragment in hand
+immediately instead, which its own comment says not to do while held.
 
-**The anomaly to chase is the queued span, not the loop.** At
-`07:27:58.808` the drop line reads *"this stream held 6677 ms of programme"* for
-**audio** — where it had read 1003 ms in every other line. A 6.7 s audio span is
-11× a normal frame's worth and cannot come from a queue of ~48 frames at
-20.9 ms. **Frames are entering the queue with mutually inconsistent timestamps**,
-or the span scan is seeing frames it should not. That is a timestamp/queue
-question, upstream of delivery, and it is the first thing to measure next.
+**Files:** `src/obs/multisite_source.cpp` (`feed_loop`), `src/core/feed_wait.h`,
+`tests/test_feed_wait.cpp`.
 
-**Two suspicions retired on the way:**
-- the queue bound is not the cause, though not for the reason first given;
-- "a far-future awaited timestamp" is not the cause — the loop's own line read
-  +395 ms.
-
-**Diagnostics that lie, twice over — read with care.** Two lines were added to
-settle this and both misled:
-1. `parked N ms into a due-wait … timestamped M ms in the future`, emitted from
-   `enqueue_frame` on another thread, samples `dl_in_wait` / `dl_wait_start_ns`
-   non-atomically; its `M` values (421/400/5039/3009/984 ms) disagree with the
-   loop's own +395 ms.
-2. The loop's own `deliver loop waited …` line is real but was read as proof the
-   thread stopped; the dump shows it did not.
-
-The earlier `bound is 0` bug is the third. A measurement is code and earns no
-more trust than the thing it measures.
-
-**Next step:** instrument the *timestamp* side, not the loop — log, at enqueue,
-each frame's pts and its computed `timestamp` for a few hundred frames around a
-resume, and find the ones that disagree by seconds. Do not touch the loop's
-wait, the queue bound, or the anchor.
-
-**DO NOT:**
-- **Re-apply option (a)** (`resume()` seeking back to `last_out_pts_ns`). Tried,
-  measured, reverted. Do not try it again.
-- **Re-derive the anchor.** There is ONE anchor, correctly placed. Read
-  `playout_clock.h` before touching any of this arithmetic.
-- **Touch the queue bound.** Retired as a cause, twice argued.
-- **Conclude "the loop stopped" without a thread dump.** It did not, and the
-  inference cost a commit.
-
-**Files:** `src/obs/multisite_source.cpp` (`enqueue_frame`, `deliver_video`,
-`deliver_audio`, `deliver_loop`, `queued_span_ns`, `resume`),
-`src/core/playout_timeline.h`, `src/core/playout_clock.h`.
-
-**Archive:** `docs/bugs/02-hold-resume-skips.md` — **read this before changing
-timing code.** It carries the measurements, the four rejected fixes, and the
-end-to-end account of the original root cause.
-
-**Ticket:** [#10](https://github.com/stageaudioworks/obs-multisite/issues/10) —
-parked here on 2026-09-22 to start Phase 12; everything above is in the ticket.
+**Archive:** `docs/bugs/02-hold-resume-skips.md` — the 2026-09-23 section is
+the one to read.
 
 ---
 

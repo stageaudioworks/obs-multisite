@@ -752,3 +752,83 @@ that first next time, not after the inference is written into a commit.
 At `enqueue_frame`, log each frame's pts and its computed `timestamp` for a few
 hundred frames spanning a resume, and find the ones that disagree by seconds.
 No change to the wait, the bound, or the anchor until those are seen.
+
+## 2026-09-23 — the cause: a hold dropped a whole segment (measured, and fixed)
+
+### The line everyone read the wrong way
+
+```
+deliver loop waited 5913 ms for one frame (its timestamp was +395 ms from now, audio)
+```
+
+The distance is computed **after** the wait returns:
+
+```c
+(long long)((int64_t)item.timestamp - (int64_t)os_gettime_ns()) / 1000000LL
+```
+
+and the wait exits when `item.timestamp <= now + kMaxDeliveryLeadNs` (400 ms).
+So at the moment it prints, the frame is always ~400 ms away. The figure
+restates the exit condition; it never said where the wait began. Read
+correctly: the loop entered the wait ~6.3 s from due and slept through it in
+50 ms slices, exactly as designed. That is what `sample OBS 3` showed (1126 of
+1135 samples in the due-wait), and what the "parked N ms … timestamped M ms in
+the future" lines had been counting down all along — 5039 → 3009 → 984, ~2 s
+apart, in real time. **There was never a contradiction.** Both earlier
+conclusions — "the deliver loop STOPS RUNNING" and its withdrawal — came from
+taking a post-wait number as a pre-wait one. The line now prints both.
+
+### The measurement that settled it (`321e6e1`, measurement only)
+
+`note_stamp()` logs, on the decode thread as each timestamp is made, any frame
+stamped more than 3 s ahead, with the previous pts on its stream:
+
+```
+07:55:50.696 RESUMED at 240s behind live (… 69 queued frame(s) discarded …) — held from 7.367s
+07:55:54.176 FAR-FUTURE stamp — audio track 0 stamped +7324 ms ahead: pts 18.008s,
+             previous on this stream 11.992s (jump +6016 ms), anchor 7.704s (pts-anchor +10304 ms),
+             … 3479 ms after resume, 31305 ms after decoder start
+07:55:54.176 PTS JUMP — audio track 0 went 11.992s -> 18.008s (+6016 ms) between consecutive frames
+07:56:01.101 deliver loop waited 5902 ms for one audio frame, pts 18.008s — it was +6302 ms
+             from due when the wait began (+399 ms when it ended …)
+```
+
+- **The pts jumped**, by one segment plus one AAC frame: audio for [12,18)
+  never reached `deliver_audio`. So not the anchor.
+- **The decoder was not restarted** — it started 31 s earlier, before the hold,
+  and nothing logged "decoder stopped consuming". So not the push_fragment
+  wedge watchdog, which was the leading suspect going in.
+- The status line at resume read `head=3` while playback was in segment 1: the
+  session had handed segment 2 out already.
+
+### Root cause
+
+The feed loop takes a fragment with `next_segment()`, which advances the head as
+it hands it over, then parks at the feed-lead gate. The gate's wake test was
+
+```c
+if (ctx->paused.load() || !ctx->decoder_started.load() ||
+    sess->discontinuity_id() != feeding_disc) { jumped = true; break; }
+…
+// … the top of the loop handles the hold …
+if (jumped) continue;
+```
+
+`58bb449` put the jump tests there so a seek wakes the loop promptly, which is
+right: after a seek the fragment in hand is stale. `paused` went in the same
+condition, and a hold is not a jump. The head had not moved and was already past
+the fragment, so dropping it lost that segment; after resume `next_segment()`
+served the one after. The decoder finished segment 1's frames, then produced
+segment 3's, stamped ~6 s ahead of where playout was; the deliver loop, which
+takes the earliest timestamp, waited for the first of them and nothing else got
+out. The comment — "the top of the loop handles the hold" — described the
+intention and not the code.
+
+### Fix
+
+`src/core/feed_wait.h`: `feed_wait_step(jumped, paused, lead_allows)` returns
+Push, Wait, Keep or Drop. A hold is **Keep** — hold the fragment and wait,
+never push it while held, never drop it. Only a jump is Drop, and a seek made
+*during* a hold is still a jump. `tests/test_feed_wait.cpp` fails three ways
+against a shim of the old rule and passes against the new.
+

@@ -33,6 +33,7 @@
 #include "../core/position_interp.h"
 #include "../core/playout_timeline.h"
 #include "../core/seek_skip.h"
+#include "../core/feed_wait.h"
 
 #ifdef MULTISITE_HAVE_FRONTEND_API
 #include <obs-frontend-api.h>
@@ -1988,19 +1989,38 @@ static void feed_loop(SourceCtx* ctx) {
         //
         // Cheap to check: discontinuity_id() is a plain atomic load, and the
         // decoder_started flag is cleared by the teardown a jump performs.
+        //
+        // A HOLD IS NOT A JUMP (#10). `paused` used to sit in the jump test
+        // beside the discontinuity and the decoder teardown, so holding while
+        // parked here dropped the fragment in hand — which next_segment() had
+        // already advanced past. Every such hold lost exactly one segment: the
+        // decoder went from the end of one to the start of the one after next,
+        // those frames were stamped ~6 s in the future, and the deliver loop
+        // waited ~6 s for the first of them with nothing else able to get out.
+        // The decision now lives in feed_wait_step() and is pinned by
+        // test_feed_wait: a hold KEEPS the fragment and waits; only a real jump
+        // drops it.
         const uint64_t feeding_disc = sess->discontinuity_id();
         bool jumped = false;
         while (ctx->running.load()) {
-            if (ctx->paused.load() || !ctx->decoder_started.load() ||
-                sess->discontinuity_id() != feeding_disc) { jumped = true; break; }
             const uint64_t elapsed = os_gettime_ns() - ctx->feed_start_ns;
-            if (ctx->pushed_media_ns <= elapsed + kFeedLeadNs) break;
+            const multisite::FeedWait step = multisite::feed_wait_step(
+                /*jumped=*/!ctx->decoder_started.load() ||
+                    sess->discontinuity_id() != feeding_disc,
+                /*paused=*/ctx->paused.load(),
+                /*lead_allows=*/ctx->pushed_media_ns <= elapsed + kFeedLeadNs);
+            if (step == multisite::FeedWait::Drop) { jumped = true; break; }
+            if (step == multisite::FeedWait::Push) break;
+            // Wait, or Keep: a held fragment is kept here, not pushed. Nothing
+            // goes to the decoder during a hold, which is what stops
+            // push_fragment blocking and Resume being unable to get in.
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (!ctx->running.load()) break;
-        // The fragment in hand belongs to the position just left. Drop it and
-        // go round: the top of the loop handles the hold, and the next
-        // next_segment() serves the place we are actually going.
+        // Only a JUMP reaches here with jumped set: the head has moved, so the
+        // fragment in hand belongs to the position just left. Drop it; the next
+        // next_segment() serves the place we are actually going. A hold never
+        // does — see above.
         if (jumped) continue;
 
         // The FIRST fragment since the decoder started defines the media
