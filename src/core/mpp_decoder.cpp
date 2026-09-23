@@ -149,7 +149,8 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             const int vs = (int)mpp_frame_get_ver_stride(frame);
             const auto* base = static_cast<const uint8_t*>(mpp_buffer_get_ptr(buf));
             if (base && w > 0 && h > 0) {
-                if (!logged) {
+                const bool first = !logged;
+                if (first) {
                     logged = true;
                     // Said once, because the shape of MPP's output buffer is the
                     // one thing a green or torn picture needs explaining: the
@@ -180,6 +181,14 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 // (1088 for 1080) is why the conversion is told both strides.
                 nv12_to_i420(base, hs, base + (size_t)hs * (size_t)vs, hs,
                              w, h, f.data, f.plane, f.stride);
+                if (first) {
+                    // Temporary: the first converted frame, written where it can
+                    // be looked at off the box. Remove once the picture is right.
+                    if (FILE* df = std::fopen("/tmp/mpp-first.i420", "wb")) {
+                        std::fwrite(f.data.data(), 1, f.data.size(), df);
+                        std::fclose(df);
+                    }
+                }
                 out.push_back(std::move(f));
             }
         }
