@@ -221,6 +221,11 @@ add_test(NAME seek_skip COMMAND test_seek_skip)
 add_executable(test_feed_wait tests/test_feed_wait.cpp)
 add_test(NAME feed_wait COMMAND test_feed_wait)
 
+# The plugin's translation files: one Key="value" per line, and every tr_()
+# key defined in en-US. A glued line hid Dock.End for a day (see the script).
+add_test(NAME locale COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR}
+         -P ${CMAKE_SOURCE_DIR}/tests/check_locale.cmake)
+
 add_executable(test_caption_text tests/test_caption_text.cpp)
 add_test(NAME caption_text COMMAND test_caption_text)
 
