@@ -28,10 +28,26 @@ CaptionBridge::~CaptionBridge() { stop(); }
 
 void CaptionBridge::subscribe(obs_source_t* src) {
     if (!src) return;
-    obs_source_add_caption_callback(src, &CaptionBridge::on_cea708, this);
+    // Everything under the one lock, and m_running checked INSIDE it. stop()
+    // clears m_running before unsubscribe_all() takes this lock, so a
+    // source_create arriving mid-stop either finishes here first — and is then
+    // removed with the rest — or sees the bridge stopping and adds nothing. A
+    // check outside the lock let it add a callback after the cleanup had run,
+    // leaving one pointing at a bridge that believed it was stopped.
+    std::lock_guard<std::mutex> lk(m_subs_mtx);
+    if (!m_running.load()) return;
+    // Once per source. The source_create handler is connected BEFORE the
+    // existing sources are enumerated (see start()), so a source made in
+    // between is offered twice, and a second callback would send every one of
+    // its captions twice.
+    for (obs_weak_source_t* weak : m_subs)
+        if (obs_weak_source_references_source(weak, src)) return;
+    // The weak reference FIRST. Without one there is no safe way to remove the
+    // callback later, so adding it anyway left one that could never be taken
+    // off.
     obs_weak_source_t* weak = obs_source_get_weak_source(src);
     if (!weak) return;
-    std::lock_guard<std::mutex> lk(m_subs_mtx);
+    obs_source_add_caption_callback(src, &CaptionBridge::on_cea708, this);
     m_subs.push_back(weak);
 }
 
@@ -62,16 +78,26 @@ void CaptionBridge::start(obs_output_t* output, const std::string& setting) {
         // Every source, so it does not matter which plugin carries the
         // captions. DeckLink emits them from SDI VANC today; this needs to know
         // nothing about that, or about whatever does it next.
+        //
+        // Connected BEFORE enumerating. The other way round, a source created
+        // between the two was in neither — its captions silently not carried
+        // for the whole broadcast. This way it is in both, and subscribe()
+        // takes it once.
+        signal_handler_connect(obs_get_signal_handler(), "source_create",
+                               &CaptionBridge::on_source_created, this);
         obs_enum_sources(
             [](void* param, obs_source_t* src) -> bool {
                 static_cast<CaptionBridge*>(param)->subscribe(src);
                 return true;
             },
             this);
-        signal_handler_connect(obs_get_signal_handler(), "source_create",
-                               &CaptionBridge::on_source_created, this);
+        size_t n = 0;
+        {
+            std::lock_guard<std::mutex> lk(m_subs_mtx);
+            n = m_subs.size();
+        }
         mlog_info("captions: listening to every source for embedded CEA-708 "
-                  "(%zu source(s) now)", m_subs.size());
+                  "(%zu source(s) now)", n);
     } else {
         obs_source_t* src = obs_get_source_by_name(m_text_source.c_str());
         if (src) {
