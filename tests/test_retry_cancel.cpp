@@ -19,6 +19,7 @@
 // portable and fast rather than POSIX-only.
 #include "../src/core/retry_uploader.h"
 #include "../src/core/spool_queue.h"
+#include "test_tmpdir.h"
 
 #include <atomic>
 #include <chrono>
@@ -59,7 +60,7 @@ public:
 };
 
 int main() {
-    fs::path dir = fs::temp_directory_path() / "multisite_retry_cancel_test";
+    fs::path dir = unique_temp_dir("multisite_retry_cancel_test");
     fs::remove_all(dir);
     fs::create_directories(dir);
 
@@ -90,6 +91,14 @@ int main() {
         std::printf("     (stop() returned after %lld ms)\n", (long long)elapsed.count());
         CHECK(elapsed < std::chrono::milliseconds(1000),
               "stop() returned promptly rather than waiting out the stalled request");
+        // The abort stop() just caused is ours, not the link's. Counting it
+        // put "1 retries" and an "upload failed (attempt 1) — HTTP 0 —
+        // Operation was aborted by an application callback" warning in the
+        // log of every clean End Broadcast.
+        CHECK(up.stats().retries.load() == 0,
+              "the cancelled request was not counted as a retry");
+        CHECK(up.health() == LinkHealth::Healthy,
+              "the cancelled request did not mark the link degraded");
     }
 
     fs::remove_all(dir);

@@ -84,6 +84,13 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             if (m_on_confirmed_after) m_on_confirmed_after(seg);
             return true;
         }
+        // A request stop() aborted is not the link failing. Counting it put a
+        // retry, a degraded link and an "HTTP 0 — Operation was aborted by an
+        // application callback" warning into the log of every clean End
+        // Broadcast. m_running covers transports that cannot say they were
+        // cancelled (every mock); the transport's own answer covers a cancel
+        // that came from somewhere else.
+        if (!m_running || m_transport.last_request_cancelled()) return false;
         if (!r.retryable) {
             // Permanent error (e.g. auth). Don't spin forever on this segment;
             // surface it and stop draining so the operator can fix credentials.
