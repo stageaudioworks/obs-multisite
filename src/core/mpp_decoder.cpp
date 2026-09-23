@@ -180,10 +180,13 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 // (1088 for 1080) is why the conversion is told both strides.
                 nv12_to_i420(base, hs, base + (size_t)hs * (size_t)vs, hs,
                              w, h, f.data, f.plane, f.stride);
-                if (first) {
-                    // Temporary: the first converted frame, written where it can
-                    // be looked at off the box. Remove once the picture is right.
-                    if (FILE* df = std::fopen("/tmp/mpp-first.i420", "wb")) {
+                if (logged < 4) {
+                    // Temporary: the first few converted frames, written where
+                    // they can be looked at off the box. Remove once the picture
+                    // is right.
+                    char path[64];
+                    std::snprintf(path, sizeof(path), "/tmp/mpp-frame-%d.i420", logged);
+                    if (FILE* df = std::fopen(path, "wb")) {
                         std::fwrite(f.data.data(), 1, f.data.size(), df);
                         std::fclose(df);
                     }
