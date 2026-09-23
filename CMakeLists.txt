@@ -103,6 +103,10 @@ add_library(multisite_core STATIC
     # is added below, guarded: it is POSIX-only.)
     src/core/destination.cpp
     src/core/stream_plan.cpp
+    # Hardware video decode for Rockchip boards. Portable as written — the MPP
+    # parts are guarded — so the core still builds on Windows and a dev laptop;
+    # only a build that finds librockchip_mpp compiles the decoder in.
+    src/core/mpp_decoder.cpp
     # The small HTTP server every consumer of the core shares: the appliance's
     # operator interface, the relay's browser, and the OBS plugin's
     # remote-control pages. Portable rather than POSIX-only, because a plugin
@@ -141,6 +145,23 @@ endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(multisite_core PUBLIC Threads::Threads)
+
+# Optional: Rockchip MPP, for hardware video decode on a vendor kernel (a ROCK
+# 5B and friends), where the decode door is /dev/mpp_service and the V4L2 path
+# does not exist. Off by default — found only where it is installed, so every
+# other build is unchanged and stays on FFmpeg's decoders.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND AND NOT WIN32)
+    pkg_check_modules(MPP QUIET rockchip_mpp)
+    if(MPP_FOUND)
+        target_compile_definitions(multisite_core PRIVATE MULTISITE_HAVE_MPP)
+        target_include_directories(multisite_core PRIVATE ${MPP_INCLUDE_DIRS})
+        target_link_libraries(multisite_core PRIVATE ${MPP_LIBRARIES})
+        message(STATUS "Rockchip MPP found: hardware video decode enabled")
+    else()
+        message(STATUS "Rockchip MPP not found: video decode stays on FFmpeg")
+    endif()
+endif()
 
 # Winsock, for the shared HTTP server. Nothing else in the core opens a socket
 # of its own: every request it makes goes out through libcurl.
@@ -273,6 +294,13 @@ add_test(NAME http_date COMMAND test_http_date)
 add_executable(test_version tests/test_version.cpp)
 target_link_libraries(test_version PRIVATE multisite_core)
 add_test(NAME version COMMAND test_version)
+
+# The one part of the MPP decode path that needs no board: NV12 into I420,
+# including the stride MPP actually hands back (1920 into a padded row). Runs
+# everywhere; the decoder itself is proved on hardware.
+add_executable(test_mpp_convert tests/test_mpp_convert.cpp)
+target_link_libraries(test_mpp_convert PRIVATE multisite_core)
+add_test(NAME mpp_convert COMMAND test_mpp_convert)
 
 # Per-target confirmation in the spool: two upload streams over one set of files,
 # so the second bucket can be written independently of the first (Phase 9).
