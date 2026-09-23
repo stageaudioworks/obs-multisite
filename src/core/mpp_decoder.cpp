@@ -77,8 +77,14 @@ struct MppVideoDecoder::Impl {
     bool opened = false;
     int logged = 0;        // frames seen, for the first few diagnostics
     int errored = 0;       // frames MPP flagged as errored and we dropped
+    int refused = 0;       // packets MPP would not take before the deadline
     int width = 0, height = 0;
 };
+
+// How long a packet may wait for room in MPP's input queue. The queue is four
+// tasks deep and a whole fragment is fed from memory at once, so a full queue is
+// the normal state, not a fault; this only bounds a decoder that has wedged.
+static constexpr int kPutWaitMs = 1000;
 
 bool mpp_decode_available() {
     // The library being linked is not enough: the board must expose the MPP
@@ -124,13 +130,16 @@ bool MppVideoDecoder::open(const std::string& codec, std::string& error) {
     return true;
 }
 
-// Pull whatever frames are ready and append them as I420.
-static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
+// Pull whatever frames are ready and append them as I420. Returns true once the
+// end-of-stream frame has come out, which is what flush() waits for.
+static bool drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                   std::vector<DecodedVideoFrame>& out,
                   int64_t pts_ns, uint64_t seq, int& logged, int& errored) {
+    bool saw_eos = false;
     for (;;) {
         MppFrame frame = nullptr;
         if (mpi->decode_get_frame(ctx, &frame) != MPP_OK || !frame) break;
+        if (mpp_frame_get_eos(frame)) saw_eos = true;
 
         if (mpp_frame_get_info_change(frame)) {
             // The stream told us its size; there is nothing to allocate with an
@@ -142,13 +151,16 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             continue;
         }
 
-        // A frame MPP flagged as errored carries a blank buffer — all-zero
-        // YUV, which renders as a green field. Drop it, exactly as MPP's own
-        // decoder test does, rather than painting the error on the screen.
+        // A frame MPP flagged carries a blank buffer — all-zero YUV, which
+        // renders as a green field. Two flags, not one: a bad reference frame
+        // gets err_info, but a non-reference frame decoded against one gets
+        // `discard` instead and would otherwise pass through as green.
         const RK_U32 err_info = mpp_frame_get_errinfo(frame);
-        if (err_info) {
+        const RK_U32 discard = mpp_frame_get_discard(frame);
+        if (err_info || discard) {
             if (errored < 24)
-                std::fprintf(stderr, "mpp: errored frame dropped (err=0x%x)\n", err_info);
+                std::fprintf(stderr, "mpp: frame dropped (err=0x%x discard=0x%x)\n",
+                             err_info, discard);
             ++errored;
             mpp_frame_deinit(&frame);
             continue;
@@ -221,6 +233,7 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
         }
         mpp_frame_deinit(&frame);
     }
+    return saw_eos;
 }
 
 bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
@@ -235,18 +248,31 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
     }
     mpp_packet_set_pts(packet, (RK_S64)pts_ns);
 
-    // Put the packet, then take frames. put_packet returns non-OK while the
-    // decoder is full, which is exactly when there is a frame waiting.
+    // Put the packet, taking frames while the queue is full. A full queue means
+    // the hardware is still busy, not that a frame is ready, so when a drain
+    // finds nothing this waits and tries again rather than giving up. Giving up
+    // drops the packet, and every frame that referenced it then decodes blank.
+    // MPP copies the bytes on a successful put, so `data` need not outlive this.
     MPP_RET ret = MPP_NOK;
-    for (int guard = 0; guard < 64; ++guard) {
+    for (int waited_ms = 0;;) {
         ret = d->mpi->decode_put_packet(d->ctx, packet);
         if (ret == MPP_OK) break;
+        const size_t before = out.size();
         drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged,
               d->errored);
+        if (out.size() == before) {
+            if (waited_ms >= kPutWaitMs) break;
+            ::usleep(1000);
+            ++waited_ms;
+        }
     }
     mpp_packet_deinit(&packet);
 
     if (ret != MPP_OK) {
+        if (d->refused < 24)
+            std::fprintf(stderr, "mpp: packet refused after %d ms (ret=%d)\n",
+                         kPutWaitMs, (int)ret);
+        ++d->refused;
         error = "mpp decode_put_packet refused the packet";
         return false;
     }
@@ -258,12 +284,27 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
 void MppVideoDecoder::flush(std::vector<DecodedVideoFrame>& out) {
     if (!d->opened) return;
     MppPacket packet = nullptr;
-    if (mpp_packet_init(&packet, nullptr, 0) == MPP_OK && packet) {
-        mpp_packet_set_eos(packet);
-        d->mpi->decode_put_packet(d->ctx, packet);
-        mpp_packet_deinit(&packet);
+    if (mpp_packet_init(&packet, nullptr, 0) != MPP_OK || !packet) return;
+    mpp_packet_set_eos(packet);
+    bool put = false;
+    for (int waited_ms = 0; waited_ms < kPutWaitMs; ++waited_ms) {
+        if (d->mpi->decode_put_packet(d->ctx, packet) == MPP_OK) { put = true; break; }
+        drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged, d->errored);
+        ::usleep(1000);
     }
-    drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged, d->errored);
+    mpp_packet_deinit(&packet);
+    if (!put) return;
+
+    // get_frame does not block, and the last frames of the fragment are still in
+    // the hardware when EOS goes in. Wait for the EOS frame itself, or the
+    // decoder is destroyed with them inside and every fragment loses its tail.
+    for (int waited_ms = 0; waited_ms < kPutWaitMs; ++waited_ms) {
+        if (drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged,
+                  d->errored))
+            return;
+        ::usleep(1000);
+    }
+    std::fprintf(stderr, "mpp: end of stream not seen within %d ms\n", kPutWaitMs);
 }
 
 const std::string& MppVideoDecoder::name() const { return d->name; }
