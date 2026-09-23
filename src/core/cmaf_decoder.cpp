@@ -5,6 +5,7 @@
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
@@ -299,6 +300,11 @@ struct CmafDecoder::Impl {
         // decoder per unit is correct, and matches the FFmpeg path below, which
         // also opens per unit.
         std::unique_ptr<MppVideoDecoder> mpp;
+        // AVCC -> Annex-B, for MPP only. The MP4/CMAF demuxer hands out
+        // length-prefixed NAL units with the parameter sets in the init's
+        // extradata; MPP's parser wants start codes. The filter also re-inserts
+        // the SPS/PPS, so MPP sees a complete stream. AV1 is OBU already.
+        AVBSFContext* mpp_bsf = nullptr;
 
         auto open_codec = [](AVCodecParameters* par,
                              const AVCodec* codec) -> AVCodecContext* {
@@ -365,6 +371,18 @@ struct CmafDecoder::Impl {
                     if (d->open(name, e)) {
                         video_codec = d->name();
                         mpp = std::move(d);
+                        const char* bname = (par->codec_id == AV_CODEC_ID_H264)
+                                                ? "h264_mp4toannexb"
+                                                : (par->codec_id == AV_CODEC_ID_HEVC)
+                                                      ? "hevc_mp4toannexb" : nullptr;
+                        if (bname) {
+                            const AVBitStreamFilter* f = av_bsf_get_by_name(bname);
+                            if (f && av_bsf_alloc(f, &mpp_bsf) >= 0) {
+                                avcodec_parameters_copy(mpp_bsf->par_in, par);
+                                mpp_bsf->time_base_in = fmt->streams[i]->time_base;
+                                if (av_bsf_init(mpp_bsf) < 0) av_bsf_free(&mpp_bsf);
+                            }
+                        }
                     }
                 }
             }
@@ -437,10 +455,22 @@ struct CmafDecoder::Impl {
                 int64_t ts = (sp.pkt->pts != AV_NOPTS_VALUE) ? sp.pkt->pts : sp.pkt->dts;
                 int64_t pts_ns = (ts == AV_NOPTS_VALUE)
                                      ? 0 : (int64_t)(ts * av_q2d(tb) * 1e9);
+                AVPacket* use = sp.pkt;
+                AVPacket* conv = nullptr;
+                if (mpp_bsf) {
+                    conv = av_packet_alloc();
+                    if (!conv || av_bsf_send_packet(mpp_bsf, sp.pkt) < 0
+                        || av_bsf_receive_packet(mpp_bsf, conv) < 0) {
+                        av_packet_free(&conv);
+                        continue;   // filtered away, or the filter failed
+                    }
+                    use = conv;
+                }
                 std::vector<DecodedVideoFrame> got;
                 std::string e;
-                if (mpp->decode(sp.pkt->data, sp.pkt->size, pts_ns, seq, got, e))
+                if (mpp->decode(use->data, use->size, pts_ns, seq, got, e))
                     for (auto& fr : got) emit_mpp_video(fr);
+                if (conv) av_packet_free(&conv);
                 continue;
             }
             AVCodecContext* c = ctxs[sp.pkt->stream_index];
@@ -472,6 +502,7 @@ struct CmafDecoder::Impl {
             mpp->flush(got);
             for (auto& fr : got) emit_mpp_video(fr);
         }
+        if (mpp_bsf) av_bsf_free(&mpp_bsf);
         av_frame_free(&frm);
         for (auto*& c : ctxs) if (c) avcodec_free_context(&c);
         avformat_close_input(&fmt);
