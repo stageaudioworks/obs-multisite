@@ -1164,3 +1164,77 @@ option(MULTISITE_BUILD_RELAY "Build the multi-destination simulcast relay" OFF)
 if(MULTISITE_BUILD_RELAY)
     add_subdirectory(relay)
 endif()
+
+# ── The core, as a package another project can build against ─────────────────
+# Off by default, so installing the player or the plugin puts nothing else in
+# the prefix. On, `cmake --install` adds the core's static libraries, their
+# headers and a package config, and a project outside this repository — the
+# headless encoder — links the core with
+#
+#     find_package(multisite_core REQUIRED)
+#     target_link_libraries(enc PRIVATE multisite::core multisite::s3 multisite::cmaf)
+#
+# instead of vendoring any of it. multisite::s3 and multisite::cmaf exist when
+# this build found libcurl and FFmpeg; MULTISITE_CORE_HAS_S3/_CMAF/_MPP say so.
+option(MULTISITE_INSTALL_CORE "Install the core as a CMake package (for the headless encoder)" OFF)
+if(MULTISITE_INSTALL_CORE)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+    set(_core_incdir "${CMAKE_INSTALL_INCLUDEDIR}/multisite")
+    set(_core_cmakedir "${CMAKE_INSTALL_LIBDIR}/cmake/multisite_core")
+
+    set(_core_targets multisite_core)
+    set(MULTISITE_CORE_HAS_S3 FALSE)
+    set(MULTISITE_CORE_HAS_CMAF FALSE)
+    if(TARGET multisite_s3)
+        list(APPEND _core_targets multisite_s3)
+        set(MULTISITE_CORE_HAS_S3 TRUE)
+    endif()
+    if(TARGET multisite_cmaf)
+        # ffmpeg_iface is the INTERFACE target multisite_cmaf links FFmpeg
+        # through; it has to travel in the same export set.
+        list(APPEND _core_targets multisite_cmaf ffmpeg_iface)
+        set(MULTISITE_CORE_HAS_CMAF TRUE)
+    endif()
+    set(MULTISITE_CORE_HAS_MPP ${MULTISITE_MPP_FOUND})
+
+    # In the build tree the headers are found where they are; installed, they
+    # are all in one directory and included by bare name, exactly as the code
+    # in this repository already includes them.
+    foreach(_t IN LISTS _core_targets)
+        get_target_property(_type ${_t} TYPE)
+        if(NOT _type STREQUAL "INTERFACE_LIBRARY")
+            set_target_properties(${_t} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "")
+            target_include_directories(${_t} PUBLIC
+                "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+                "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+                "$<INSTALL_INTERFACE:${_core_incdir}>")
+        endif()
+    endforeach()
+    set_target_properties(multisite_core PROPERTIES EXPORT_NAME core)
+    if(TARGET multisite_s3)
+        set_target_properties(multisite_s3 PROPERTIES EXPORT_NAME s3)
+    endif()
+    if(TARGET multisite_cmaf)
+        set_target_properties(multisite_cmaf PROPERTIES EXPORT_NAME cmaf)
+        set_target_properties(ffmpeg_iface PROPERTIES EXPORT_NAME ffmpeg)
+    endif()
+
+    install(TARGETS ${_core_targets} EXPORT multisite_coreTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    file(GLOB _core_headers "${CMAKE_CURRENT_SOURCE_DIR}/src/core/*.h")
+    install(FILES ${_core_headers} DESTINATION ${_core_incdir})
+    install(EXPORT multisite_coreTargets NAMESPACE multisite::
+            DESTINATION ${_core_cmakedir})
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/multisite_coreConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/multisite_coreConfig.cmake"
+        INSTALL_DESTINATION ${_core_cmakedir})
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/multisite_coreConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/multisite_coreConfig.cmake"
+                  "${CMAKE_CURRENT_BINARY_DIR}/multisite_coreConfigVersion.cmake"
+            DESTINATION ${_core_cmakedir})
+    message(STATUS "The core will install as a CMake package (multisite_core)")
+endif()
