@@ -206,7 +206,7 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
         error = "mpp decode_put_packet refused the packet";
         return false;
     }
-    drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq);
+    drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged);
     return true;
 }
 
