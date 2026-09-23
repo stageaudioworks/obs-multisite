@@ -326,7 +326,8 @@ settings under **Monitoring heartbeat**.
 
 **What it sends** is the same status the dock already shows — link health,
 how far behind live the campus is, queue and buffer figures, the software
-version — plus nothing else. No pictures, no sound, no credentials, no IP
+version — plus the site's name, so a dashboard can say which box is which, and
+nothing else. No pictures, no sound, no credentials, no IP
 addresses. A failed post is dropped, never queued, so monitoring never
 competes with the programme for the venue's link.
 

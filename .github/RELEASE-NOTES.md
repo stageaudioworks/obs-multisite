@@ -31,6 +31,71 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.24-alpha
+
+**Resuming after a hold no longer freezes the picture.** Hold, then resume, and
+the picture could sit still for about six seconds before playing on. The hold
+was dropping the fragment the decoder was about to be handed — a whole segment
+lost — so the frames after it arrived stamped six seconds in the future and
+delivery waited for them. A hold now keeps that fragment and only a real jump
+drops it. Verified on a real hold, and the decision is pinned by a test so it
+cannot slide back.
+
+Three smaller faults around a hold went with it. The first frame after a hold
+began is no longer dropped. The feed no longer counts held time as time fallen
+behind, which had left it running about 24 seconds ahead for the rest of the
+session. And the decoder dock's elapsed time no longer jumps a segment forward on
+resume and then stands still until the next one: it stops where the picture
+stopped and counts up the moment you resume.
+
+**Multisite Cloud storage, in the OBS plugin.** For a site with a Multisite
+Cloud account, a machine can now be paired from the dock's **Cloud** section and
+then record to, or play from, the account's bucket with no bucket, endpoint or
+keys typed in. Credentials are short-lived and fetched as needed. Choosing
+Multisite Cloud as the storage provider hides the fields that such a machine
+never reads, and every surface that deals with storage — Manage storage, the
+upload test, the idle monitor, Go Live's own checks — now knows about it.
+Verified on a Mac with both halves: an encoder recording to the bucket and a
+decoder playing it back.
+
+A machine that is both encoder and decoder is **one identity per role**, so the
+dashboard sees the decoder as a read-only reader in its own right rather than as
+the encoder's write access. Typed keys work exactly as before, and a machine
+with typed keys is never moved onto brokered storage behind your back.
+
+**The Pi player has the same Cloud section on its page**, and the code to play
+from a Cloud bucket. That path is **not yet proven on a Pi**: the unit it was
+tested on reads a bucket with typed keys and is paired for monitoring only. If
+you try it, a log is very welcome.
+
+**Monitoring heartbeat.** The plugin and the Pi can report their health to a
+monitoring collector such as the Multisite Cloud dashboard, now including the
+site's name so a dashboard can say which box is which. It is off by default, and
+sends the status the dock already shows — no pictures, no sound, no credentials,
+no IP addresses. `docs/OPERATOR.md` says exactly what goes.
+
+**OBS no longer freezes when uploads stall.** A status read waited behind a
+network upload, so a stalled link could lock the whole interface. Manifest writes
+have their own thread now, and a test pins the wait at zero.
+
+**A likely cause of the Windows crash is fixed.** A worker thread could deliver
+to a dock widget that was already gone. That has been removed everywhere it
+occurred. It matches the crash's shape but has not been confirmed against one,
+so the Windows build now also ships its debug symbols as a build artifact: if it
+does happen again, the dump will be readable.
+
+**Smaller things.** A clean End Broadcast no longer logs a failed upload and a
+retry for the request that stopping cancelled. A paired machine no longer logs
+"not paired yet" as an error at every launch while its credentials arrive. The
+Pi keeps the fragment in hand on a hold, as the plugin does. Pairing says why it
+failed, every time.
+
+**Captions are still not in this release**, for the same reasons as last time:
+the work is on `main`, it has never run end to end, and it would be on by
+default — an untested change to the encoded video for anyone whose feed carries
+captions. Three races in it were fixed this week, from reading the code; that is
+not the same as seeing captions arrive.
+
 ## What's new in v0.1.23-alpha
 
 A short release, cut for two faults that v0.1.22-alpha shipped. If you are on

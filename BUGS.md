@@ -193,7 +193,7 @@ each, so the history is findable without being 1,100 lines in the way.
 - **Phase 10 tiles**, the AES67 stream controls, the open AES67 stack replacing
   the licensed card, the decoder seek/timeline readout, resume-stale dialog,
   orphaned cache sweep, idle keep-alive fix, and the monitoring heartbeat.
-- **2026-09-23 sweep, on `main`, not released.** Seven small faults found
+- **2026-09-23 sweep, released in v0.1.24-alpha.** Seven small faults found
   reading the logs after #10:
   - A clean End Broadcast logged a failed upload and a retry. The upload
     `stop()` aborts is no longer counted (`test_retry_cancel`).
@@ -211,7 +211,8 @@ each, so the history is findable without being 1,100 lines in the way.
   - Tests used fixed temp directories, so parallel runs broke each other
     (`tests/test_tmpdir.h`).
 
-  None of the OBS-side changes is verified live yet.
+  The OBS decoder fixes were verified live on 2026-09-23; the End Broadcast
+  line, the Pi changes and captions were not.
 
 ---
 
