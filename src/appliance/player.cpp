@@ -313,9 +313,14 @@ void Player::serve_cloud_credentials() {
     // One snapshot: rebuild_session can rewrite the enrolment on another thread,
     // and a url from one pairing with the token from another is refused.
     const multisite::Enrolment en = id->enrolment();
+    // What this box was reading from before the fetch, for the rebuild rule
+    // below. Empty until the first set lands, and again after a pairing is
+    // cleared (the identity is reset), so a re-pairing rebuilds as it must.
+    const std::string bucket_before = id->credentials().bucket;
     const std::string url =
         multisite::collector_url(en.url, multisite::kCredentialsPath);
     const multisite::HttpResult r = multisite::http_get_json(url, en.token);
+    multisite::CredentialsReply reply;   // stays !ok when not reached
     if (!r.reached) {
         // Unreachable: hand the identity an empty reply so it keeps last-good
         // and schedules a retry. The event goes on.
@@ -323,8 +328,7 @@ void Player::serve_cloud_credentials() {
         plog_info("cloud credentials: collector not reached — keeping the last "
                   "known set");
     } else {
-        const multisite::CredentialsReply reply =
-            multisite::cloud_parse_credentials(r.body, (int)r.code);
+        reply = multisite::cloud_parse_credentials(r.body, (int)r.code);
         if (reply.ok) {
             plog_info("cloud credentials: fetched %s (role %s, expires in %lld s)",
                       reply.creds.bucket.c_str(),
@@ -348,6 +352,17 @@ void Player::serve_cloud_credentials() {
     // the operator's statement of which storage they use, so it decides.
     if (cfg.storage_provider != "multisite_cloud") return;
 
+    // And only when the fetch MOVED storage: the first bucket, or a different
+    // one. This asked on every fetch, so a paired box tore its decoder down and
+    // restarted playback — from the start plan, not from where it was — every
+    // refresh (~7.5 minutes at a 900 s TTL), and every 5 s retry while the
+    // collector was unreachable. The CloudTransport signs with a refreshed
+    // token by itself; a new token is not a new session.
+    if (!multisite::credentials_move_storage(bucket_before, reply)) return;
+
+    plog_info("cloud credentials: bucket %s '%s' — rebuilding the session to "
+              "read through it", bucket_before.empty() ? "is" : "moved to",
+              reply.creds.bucket.c_str());
     m_transport_wanted = true;
     m_poll_now = true;
 }
@@ -709,7 +724,13 @@ void Player::reconfigure(const Config& cfg) {
 
     // Only a change to what is being received justifies taking the picture
     // away. Editing the idle colour must not interrupt an event.
+    // storage_provider is here because it decides which leg is built at all
+    // (typed keys or the paired CloudTransport). It was missing, and nothing
+    // noticed: every credential fetch rebuilt the session anyway, so a switch
+    // took effect within one refresh. With the fetch rebuilding only when the
+    // bucket moves, a box already paired for monitoring would never switch.
     const bool receive_changed =
+        before.storage_provider   != cfg.storage_provider ||
         before.endpoint_host      != cfg.endpoint_host ||
         before.r2_account_id      != cfg.r2_account_id ||
         before.bucket             != cfg.bucket ||

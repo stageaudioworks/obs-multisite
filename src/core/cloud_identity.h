@@ -86,6 +86,24 @@ struct CredentialsReply {
 };
 CredentialsReply cloud_parse_credentials(const std::string& body, int http_code);
 
+// Whether a credentials reply MOVES this device's storage, so the session
+// reading it has to be rebuilt: the first bucket it has ever had, or a
+// different one. A refresh of the same bucket does not — the session token
+// rotates on every refresh, and CloudTransport signs with whatever set the
+// identity holds now, rebuilding its own connection when that set changes. So
+// does an unreachable collector or an unpairing: last-good carries on.
+//
+// One rule for both hosts. The Pi asked for a rebuild on every fetch, which on
+// a paired box tore the decoder down and restarted playback every refresh (and
+// every retry while the collector was down); the OBS reporter already keyed on
+// the bucket. `bucket_before` is the bucket the device was using when the
+// fetch was made.
+inline bool credentials_move_storage(const std::string& bucket_before,
+                                     const CredentialsReply& reply) {
+    return reply.ok && !reply.creds.bucket.empty() &&
+           reply.creds.bucket != bucket_before;
+}
+
 // ── The lifecycle ───────────────────────────────────────────────────────────
 
 // The collector's `expires_at` is an ISO-8601 UTC instant with milliseconds —

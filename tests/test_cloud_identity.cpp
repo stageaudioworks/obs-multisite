@@ -358,6 +358,37 @@ int main() {
         CHECK(id.paired(), "and the identity is still coherent afterwards");
     }
 
+    std::printf("== a refresh does not move storage; a new bucket does ==\n");
+    {
+        // The Pi asked for a full session rebuild on EVERY fetch, so a paired
+        // box lost its picture and its position every ~7.5 minutes, and every
+        // 5 s while the collector was unreachable. The transport signs with
+        // refreshed tokens by itself; only a new bucket needs a new session.
+        CredentialsReply fresh;
+        fresh.ok = true;
+        fresh.creds.bucket = "org-bucket";
+        fresh.creds.session_token = "token-2";
+        CHECK(credentials_move_storage("", fresh),
+              "the first bucket moves storage: the session has nothing to read yet");
+        CHECK(!credentials_move_storage("org-bucket", fresh),
+              "a refresh of the same bucket does not — a new token is not a new session");
+        CHECK(credentials_move_storage("old-bucket", fresh),
+              "a different bucket does");
+        CredentialsReply unreachable;          // the collector was not reached
+        CHECK(!credentials_move_storage("org-bucket", unreachable),
+              "an unreachable collector does not: last-good carries on");
+        CHECK(!credentials_move_storage("", unreachable),
+              "not even before the first bucket — there is nothing new to read");
+        CredentialsReply refused;
+        refused.unpaired = true;
+        CHECK(!credentials_move_storage("org-bucket", refused),
+              "an unpairing does not rebuild; the event runs out on last-good");
+        CredentialsReply empty_ok;
+        empty_ok.ok = true;
+        CHECK(!credentials_move_storage("org-bucket", empty_ok),
+              "an accepted reply naming no bucket moves nothing");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL CLOUD IDENTITY TESTS PASSED"
                                       : "SOME CLOUD IDENTITY TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

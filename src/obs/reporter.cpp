@@ -567,8 +567,8 @@ void serve_cloud_credentials(multisite::CloudRole role) {
     //
     // The DECODER's identity only: the encoder output reads its identity when
     // Go Live builds the session, so there is nothing running to wake.
-    if (role == multisite::CloudRole::Decoder && reply.ok &&
-        reply.creds.bucket != ri.last_bucket) {
+    if (role == multisite::CloudRole::Decoder &&
+        multisite::credentials_move_storage(ri.last_bucket, reply)) {
         const bool first = ri.last_bucket.empty();
         ri.last_bucket = reply.creds.bucket;
         mlog_info("cloud credentials (decoder): bucket %s '%s' — asking live "
