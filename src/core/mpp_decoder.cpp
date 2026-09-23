@@ -75,7 +75,7 @@ struct MppVideoDecoder::Impl {
     MppCodingType coding = MPP_VIDEO_CodingUnused;
     std::string name;
     bool opened = false;
-    bool logged = false;   // the first frame's shape, said once
+    int logged = 0;        // frames seen, for the first few diagnostics
     int width = 0, height = 0;
 };
 
@@ -126,7 +126,7 @@ bool MppVideoDecoder::open(const std::string& codec, std::string& error) {
 // Pull whatever frames are ready and append them as I420.
 static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                   std::vector<DecodedVideoFrame>& out,
-                  int64_t pts_ns, uint64_t seq, bool& logged) {
+                  int64_t pts_ns, uint64_t seq, int& logged) {
     for (;;) {
         MppFrame frame = nullptr;
         if (mpi->decode_get_frame(ctx, &frame) != MPP_OK || !frame) break;
@@ -149,9 +149,8 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             const int vs = (int)mpp_frame_get_ver_stride(frame);
             const auto* base = static_cast<const uint8_t*>(mpp_buffer_get_ptr(buf));
             if (base && w > 0 && h > 0) {
-                const bool first = !logged;
+                const bool first = (logged == 0);
                 if (first) {
-                    logged = true;
                     // Said once, because the shape of MPP's output buffer is the
                     // one thing a green or torn picture needs explaining: the
                     // format, the strides, the buffer size, and whether the
@@ -189,6 +188,15 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                         std::fclose(df);
                     }
                 }
+                // Temporary: the first frames' timestamps, which is what the
+                // playout clock paces on. If these are zero or flat, the picture
+                // races and the identity screen flashes between bursts.
+                if (logged < 12) {
+                    std::fprintf(stderr, "mpp: frame %d pts=%.3fs seq=%llu\n",
+                                 logged, (double)f.pts_ns / 1e9,
+                                 (unsigned long long)f.seq);
+                }
+                ++logged;
                 out.push_back(std::move(f));
             }
         }
