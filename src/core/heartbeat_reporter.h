@@ -161,6 +161,11 @@ struct PairPollReply {
     std::string appliance_id;
     std::string appliance_token;
     std::string collector_url;
+    // Optional, and only ever for appliance hardware: a second token the
+    // collector scopes to fetching that hardware's software updates. The
+    // player never uses it; it hands it to whatever installed it there
+    // (Config::update_token_file) and forgets it.
+    std::string update_token;
     int         interval_s = 30;
 };
 PairPollReply heartbeat_parse_pair_poll(const std::string& body, int http_code);
@@ -207,6 +212,7 @@ public:
     const std::string& appliance_id() const { return m_appliance_id; }
     const std::string& appliance_token() const { return m_appliance_token; }
     const std::string& collector_url() const { return m_collector_url; }
+    const std::string& update_token() const { return m_update_token; }
     int heartbeat_interval_s() const { return m_heartbeat_interval_s; }
 
 private:
@@ -216,7 +222,7 @@ private:
     long long m_deadline_s = 0;
     long long m_next_poll_s = 0;
     std::string m_error;
-    std::string m_appliance_id, m_appliance_token, m_collector_url;
+    std::string m_appliance_id, m_appliance_token, m_collector_url, m_update_token;
     int m_heartbeat_interval_s = 30;
 };
 

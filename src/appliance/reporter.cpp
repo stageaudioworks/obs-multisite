@@ -11,11 +11,13 @@
 
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <ctime>
 #include <mutex>
 #include <thread>
+#include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -132,9 +134,32 @@ struct Reporter::Worker {
     multisite::Pairing pairing;
     bool begin_pending = false;
     bool claim_saved = true;
-    std::string claimed_id, claimed_token, claimed_url;
+    std::string claimed_id, claimed_token, claimed_url, claimed_update_token;
     std::string note;
 };
+
+namespace {
+
+// Write a secret to a file only root can read, whole or not at all: written
+// beside it and renamed over, so a reader never sees half a token.
+bool write_private_file(const std::string& path, const std::string& content,
+                        std::string& err) {
+    const std::string tmp = path + ".tmp";
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) { err = std::strerror(errno); return false; }
+    const bool wrote = ::write(fd, content.data(), content.size()) ==
+                       (ssize_t)content.size();
+    const bool synced = ::fsync(fd) == 0;
+    ::close(fd);
+    if (!wrote || !synced || ::rename(tmp.c_str(), path.c_str()) != 0) {
+        err = std::strerror(errno);
+        ::unlink(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 Reporter::Reporter() : m_worker(new Worker()) {}
 Reporter::~Reporter() { stop(); }
@@ -338,6 +363,7 @@ void Reporter::serve_pairing() {
             m_worker->claimed_id = m_worker->pairing.appliance_id();
             m_worker->claimed_token = m_worker->pairing.appliance_token();
             m_worker->claimed_url = m_worker->pairing.collector_url();
+            m_worker->claimed_update_token = m_worker->pairing.update_token();
         }
         return;
     }
@@ -345,8 +371,10 @@ void Reporter::serve_pairing() {
     // SaveClaim: persist the captured claim. Retried every tick until it
     // lands, independent of the pairing's phase.
     Config claimed = cfg;
+    std::string update_token;
     {
         std::lock_guard<std::mutex> lk(m_worker->mtx);
+        update_token = m_worker->claimed_update_token;
         if (claimed.reporter_device_id.empty())
             claimed.reporter_device_id = multisite::heartbeat_mint_device_id(
                 hostname(), multisite::heartbeat_player_kind(cfg.reporter_kind),
@@ -356,10 +384,23 @@ void Reporter::serve_pairing() {
         if (!m_worker->claimed_url.empty())
             claimed.reporter_url = m_worker->claimed_url;
     }
+    // The update token, when there is one and somewhere to put it. Never a
+    // reason to hold the claim back: a box that paired but could not hand its
+    // update token over still plays, and pairing again writes it again.
+    if (!update_token.empty() && !cfg.update_token_file.empty()) {
+        std::string uerr;
+        if (write_private_file(cfg.update_token_file, update_token + "\n", uerr))
+            plog_info("pairing: update token handed over to %s",
+                      cfg.update_token_file.c_str());
+        else
+            plog_warn("pairing: could not write the update token to %s: %s",
+                      cfg.update_token_file.c_str(), uerr.c_str());
+    }
     std::string err;
     if (player.store_config(claimed, err)) {
         std::lock_guard<std::mutex> lk(m_worker->mtx);
         m_worker->claim_saved = true;
+        m_worker->claimed_update_token.clear();
     } else {
         plog_warn("pairing: approved, but the claim would not save: %s",
                   err.c_str());
@@ -400,6 +441,7 @@ bool Reporter::pair_begin() {
     m_worker->claimed_id.clear();
     m_worker->claimed_token.clear();
     m_worker->claimed_url.clear();
+    m_worker->claimed_update_token.clear();
     m_worker->note.clear();
     return true;
 }

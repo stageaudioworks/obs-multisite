@@ -238,6 +238,12 @@ int main() {
         CHECK(done.ok && !done.pending, "200 with credentials resolves");
         CHECK(done.appliance_id == "apl_1", "id carried");
         CHECK(done.collector_url == "https://c", "a real API base is taken");
+        CHECK(done.update_token.empty(), "no update token unless the collector sends one");
+        const PairPollReply withu = heartbeat_parse_pair_poll(
+            "{\"appliance_id\":\"apl_1\",\"appliance_token\":\"t\","
+            "\"collector_url\":\"https://c\",\"update_token\":\"u1\"}",
+            200);
+        CHECK(withu.ok && withu.update_token == "u1", "an update token is carried when sent");
         CHECK(!heartbeat_parse_pair_poll("{}", 200).ok, "200 without credentials refused");
 
         // The verification page is NOT an API base. Seen on a real collector

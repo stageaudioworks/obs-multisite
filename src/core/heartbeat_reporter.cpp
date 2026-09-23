@@ -234,6 +234,7 @@ PairPollReply heartbeat_parse_pair_poll(const std::string& body, int http_code) 
         r.appliance_id = str_field(j, "appliance_id");
         r.appliance_token = str_field(j, "appliance_token");
         r.collector_url = str_field(j, "collector_url");
+        r.update_token = str_field(j, "update_token");
         // A collector_url that IS the verification page is not an API base, and
         // adopting it breaks every later call: the host appends /v1/pair/poll
         // and /v1/credentials, so ".../pair" becomes ".../pair/v1/pair/poll" —
@@ -355,6 +356,7 @@ void Pairing::on_poll_reply(const std::string& body, int http_code,
         m_appliance_id = r.appliance_id;
         m_appliance_token = r.appliance_token;
         m_collector_url = r.collector_url;
+        m_update_token = r.update_token;
         m_heartbeat_interval_s = r.interval_s;
         return;
     }
@@ -387,6 +389,7 @@ void Pairing::cancel() {
     m_appliance_id.clear();
     m_appliance_token.clear();
     m_collector_url.clear();
+    m_update_token.clear();
 }
 
 } // namespace multisite

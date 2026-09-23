@@ -73,6 +73,11 @@ struct Config {
     // The collector records the kind at pairing, so changing it applies to the
     // heartbeat at once and to the pairing record only after pairing again.
     std::string reporter_kind = "pi-player";
+    // Where to hand over an update token, if the collector issues one at
+    // pairing (it does only for appliance hardware). Empty — the default, and
+    // every Pi — writes nothing. The player never reads the token back: it is
+    // for whatever installed the player on that hardware.
+    std::string update_token_file;
 
     // ── What to receive ──────────────────────────────────────────────────────
     std::string room_id = "main-auditorium";
