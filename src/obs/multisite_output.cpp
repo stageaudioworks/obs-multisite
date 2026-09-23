@@ -686,9 +686,14 @@ static bool complete_start(OutputCtx* ctx) {
             // Chosen, but not usable yet: no pairing, or no credentials fetched.
             // Refuse plainly rather than falling back to typed keys the operator
             // did not choose — silence here is how a box reads the wrong bucket.
-            mlog_error("storage is set to Multisite Cloud but the machine is "
-                       "not paired yet (or has no credentials) — pair it in "
-                       "the Cloud section, or choose a different provider");
+            if (identity && identity->paired())
+                mlog_error("storage: paired to Multisite Cloud, but the bucket "
+                           "and credentials have not arrived yet — check this "
+                           "machine can reach the Cloud service");
+            else
+                mlog_error("storage is set to Multisite Cloud but the machine is "
+                           "not paired yet — pair it in the Cloud section, or "
+                           "choose a different provider");
             return false;
         } else {
             auto s3 = std::make_unique<S3Transport>(ctx->pending_s3);
@@ -961,9 +966,14 @@ static bool out_start(void* data) {
             provider == "multisite_cloud" && identity && identity->paired() &&
             identity->credentials().present();
         if (provider == "multisite_cloud" && !paired_ok) {
-            mlog_error("storage is set to Multisite Cloud but this machine is "
-                       "not paired yet (or has no credentials) — pair it in "
-                       "the Cloud section, or choose a different provider");
+            if (identity && identity->paired())
+                mlog_error("storage: paired to Multisite Cloud, but the bucket "
+                           "and credentials have not arrived yet — check this "
+                           "machine can reach the Cloud service");
+            else
+                mlog_error("storage is set to Multisite Cloud but this machine is "
+                           "not paired yet — pair it in the Cloud section, or "
+                           "choose a different provider");
             return false;
         }
         if (!paired_ok &&

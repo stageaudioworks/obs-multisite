@@ -2280,10 +2280,18 @@ static void src_update(void* data, obs_data_t* s) {
                 *identity, multisite::CloudRole::Decoder, csc);
             mlog_info("source: storage is Multisite Cloud — bucket '%s'",
                       cloud_tx->bucket().c_str());
+        } else if (provider == "multisite_cloud" && identity && identity->paired()) {
+            // Paired, credentials not fetched yet — the normal state for the
+            // first second after every launch. The fetch reconfigures every
+            // source when the bucket arrives, so this is a wait, not a fault;
+            // logging it as the error below put a false alarm in every log.
+            mlog_info("source: paired to Multisite Cloud — waiting for the "
+                      "bucket and credentials before reading");
+            return;
         } else if (provider == "multisite_cloud") {
             mlog_error("source: storage is set to Multisite Cloud but this "
-                       "machine is not paired yet (or has no credentials) — "
-                       "pair it in the Cloud section, or choose a provider");
+                       "machine is not paired yet — pair it in the Cloud "
+                       "section, or choose a provider");
             return;
         } else if (shared.cloud_configured()) {
             tx = std::make_shared<S3Transport>(s3);
