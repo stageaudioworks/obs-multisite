@@ -30,11 +30,20 @@
 #
 # Safe to run again: it updates an existing installation in place and keeps the
 # settings and the segment cache.
+#
+# It builds the tip of main. To build a release, or any one commit, instead:
+#
+#   REF=v0.1.24-alpha sudo -E bash scripts/player/install.sh
 
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/stageaudioworks/obs-multisite.git}"
 BRANCH="${BRANCH:-main}"
+# A tag or a full 40-character commit to build instead of the branch's tip, so
+# whatever installs the player can pin exactly what it gets. Empty builds the
+# branch, as always. A short hash cannot be fetched from GitHub by itself, so
+# it is refused rather than half-honoured.
+REF="${REF:-}"
 SRC_DIR="${SRC_DIR:-/opt/multisite-player/src}"
 PREFIX="${PREFIX:-/usr/local}"
 CONFIG_DIR="/etc/multisite-player"
@@ -217,7 +226,27 @@ else
   mkdir -p "$(dirname "$SRC_DIR")"
   git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$SRC_DIR"
 fi
-note "$(git -C "$SRC_DIR" log -1 --format='%h %s')"
+if [ -n "$REF" ] && [ "${SKIP_GIT_UPDATE:-0}" != "1" ]; then
+  case "$REF" in
+    *[!0-9a-f]*) ;;   # not a hash: a tag
+    *) [ "${#REF}" -eq 40 ] \
+         || die "REF=$REF looks like a short commit hash — give the full 40 characters, or a tag" ;;
+  esac
+  say "Pinning the source to $REF"
+  fetched=""
+  for attempt in 1 2 3 4 5; do
+    if git -C "$SRC_DIR" fetch --quiet --depth 1 origin "$REF"; then
+      fetched=1
+      break
+    fi
+    warn "could not fetch $REF (attempt $attempt of 5) — retrying in ${attempt}s"
+    sleep "$attempt"
+  done
+  [ -n "$fetched" ] \
+    || die "could not fetch '$REF' from GitHub — check the tag or commit exists, and this box's internet"
+  git -C "$SRC_DIR" reset --quiet --hard FETCH_HEAD
+fi
+note "building $(git -C "$SRC_DIR" log -1 --format='%H %s')"
 
 # ── Build ────────────────────────────────────────────────────────────────────
 say "Building $JOBS at a time (this takes a few minutes on a Pi)"
