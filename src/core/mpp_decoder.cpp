@@ -6,8 +6,13 @@
 #ifdef MULTISITE_HAVE_MPP
 // POSIX-only, and MPP only exists on Linux — so this stays inside the guard and
 // the core still builds on Windows without it.
+//
+// The header lives under a rockchip/ subdirectory of the include prefix
+// (/usr/local/include/rockchip/rk_mpi.h), which is where librockchip_mpp
+// installs it and what its pkg-config Cflags point above — so it is included by
+// that path, not as a bare rk_mpi.h.
 #include <unistd.h>
-#include <rk_mpi.h>
+#include <rockchip/rk_mpi.h>
 #endif
 
 namespace multisite {
