@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mpp_decoder.h"
 
+#include <cstdio>
 #include <cstring>
 
 #ifdef MULTISITE_HAVE_MPP
@@ -74,6 +75,7 @@ struct MppVideoDecoder::Impl {
     MppCodingType coding = MPP_VIDEO_CodingUnused;
     std::string name;
     bool opened = false;
+    bool logged = false;   // the first frame's shape, said once
     int width = 0, height = 0;
 };
 
@@ -124,7 +126,7 @@ bool MppVideoDecoder::open(const std::string& codec, std::string& error) {
 // Pull whatever frames are ready and append them as I420.
 static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                   std::vector<DecodedVideoFrame>& out,
-                  int64_t pts_ns, uint64_t seq) {
+                  int64_t pts_ns, uint64_t seq, bool& logged) {
     for (;;) {
         MppFrame frame = nullptr;
         if (mpi->decode_get_frame(ctx, &frame) != MPP_OK || !frame) break;
@@ -147,11 +149,25 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             const int vs = (int)mpp_frame_get_ver_stride(frame);
             const auto* base = static_cast<const uint8_t*>(mpp_buffer_get_ptr(buf));
             if (base && w > 0 && h > 0) {
+                if (!logged) {
+                    logged = true;
+                    // Said once, because the shape of MPP's output buffer is the
+                    // one thing a green or torn picture needs explaining.
+                    std::fprintf(stderr,
+                                 "mpp: first frame %dx%d fmt=%d stride=%dx%d\n",
+                                 w, h, (int)mpp_frame_get_fmt(frame), hs, vs);
+                }
                 DecodedVideoFrame f;
                 f.width = w;
                 f.height = h;
                 f.seq = seq;
-                f.pts_ns = pts_ns;
+                // MPP carries the packet's pts back on the frame. Use the
+                // frame's own, not the one just fed: MPP pipelines, so frames
+                // come back a packet or two behind, and stamping them with the
+                // current packet's time is what pulls the picture off the
+                // playout clock.
+                const int64_t fp = (int64_t)mpp_frame_get_pts(frame);
+                f.pts_ns = (fp != 0) ? fp : pts_ns;
                 f.full_range = false;
                 // NV12: Y plane, then interleaved UV. The vertical stride
                 // (1088 for 1080) is why the conversion is told both strides.
@@ -182,7 +198,7 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
     for (int guard = 0; guard < 64; ++guard) {
         ret = d->mpi->decode_put_packet(d->ctx, packet);
         if (ret == MPP_OK) break;
-        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq);
+        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged);
     }
     mpp_packet_deinit(&packet);
 
@@ -202,7 +218,7 @@ void MppVideoDecoder::flush(std::vector<DecodedVideoFrame>& out) {
         d->mpi->decode_put_packet(d->ctx, packet);
         mpp_packet_deinit(&packet);
     }
-    drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0);
+    drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged);
 }
 
 const std::string& MppVideoDecoder::name() const { return d->name; }
