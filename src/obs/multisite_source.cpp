@@ -499,6 +499,14 @@ struct SourceCtx : DecoderControls {
     // When the delivery loop last handed a frame to OBS, so a drop can say
     // whether delivery was merely behind or had stopped entirely.
     std::atomic<uint64_t> last_delivery_ns{0};
+    // MEASUREMENT, #10 (2026-09-23). The previous pts stamped on each stream,
+    // so a frame stamped far in the future can be told apart as a pts JUMP (a
+    // later segment's frames reached the decoder's output) or an ANCHOR fault
+    // (continuous pts, wrong origin). Written only by the decode thread.
+    std::atomic<long long> stamp_last_pts_v{INT64_MIN};
+    std::atomic<long long> stamp_last_pts_a{INT64_MIN};
+    std::atomic<uint64_t>  stamp_farfuture_log_ns{0};
+    std::atomic<uint64_t>  stamp_ptsjump_log_ns{0};
     std::atomic<uint64_t> last_drop_log_ns{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
@@ -622,7 +630,8 @@ struct SourceCtx : DecoderControls {
     // frames here makes pause and resume take effect immediately, and nothing
     // is discarded — the queue is simply not drained while paused.
     std::atomic<bool> paused{false};
-    uint64_t feed_start_ns = 0;      // wall clock when this decoder started
+    // Atomic: the decode thread reads it for the #10 measurement.
+    std::atomic<uint64_t> feed_start_ns{0};   // wall clock when this decoder started
     uint64_t pushed_media_ns = 0;    // media duration handed over so far
 
     // Ordered delivery queue (see the note above kMaxQueuedNs).
@@ -1023,6 +1032,12 @@ static void deliver_loop(SourceCtx* ctx) {
         // drain and enqueue_frame drops every frame at the cap. Logged once
         // per second at most, and only when the wait is long enough to matter.
         const uint64_t wait_start = os_gettime_ns();
+        // Where the frame was when the wait BEGAN. The line below used to report
+        // only the distance after the wait returned — which by construction is
+        // always ~kMaxDeliveryLeadNs — and so read as though a 5.9 s wait had
+        // been for a frame 395 ms away (#10).
+        const long long enter_ahead_ms =
+            ((long long)item.timestamp - (long long)wait_start) / 1000000LL;
         ctx->dl_wait_start_ns = wait_start;
         ctx->dl_wait_frame_ts = item.timestamp;
         ctx->dl_in_wait = true;
@@ -1043,13 +1058,18 @@ static void deliver_loop(SourceCtx* ctx) {
             if (waited > 300000000ULL &&      // 300 ms: far beyond a frame interval
                 os_gettime_ns() - lastlog > 1000000000ULL) {
                 ctx->dl_wait_log_ns = os_gettime_ns();
-                mlog_warn("source: deliver loop waited %llu ms for one frame "
-                          "(its timestamp was %+lld ms from now, %s) — while "
-                          "parked it pops nothing, so the queue cannot drain",
+                mlog_warn("source: deliver loop waited %llu ms for one %s "
+                          "frame, pts %.3fs — it was %+lld ms from due when the "
+                          "wait began (%+lld ms when it ended, which is always "
+                          "about the delivery lead) — while parked it pops "
+                          "nothing, so the queue cannot drain",
                           (unsigned long long)(waited / 1000000ULL),
+                          item.is_video ? "video" : "audio",
+                          (item.is_video ? item.video.pts_ns
+                                         : item.audio.pts_ns) / 1e9,
+                          enter_ahead_ms,
                           (long long)((int64_t)item.timestamp -
-                                      (int64_t)os_gettime_ns()) / 1000000LL,
-                          item.is_video ? "video" : "audio");
+                                      (int64_t)os_gettime_ns()) / 1000000LL);
             }
         }
 
@@ -1318,6 +1338,82 @@ static bool dropped_by_skip(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
     return ctx->skip.drops(pts_ns, is_video);
 }
 
+// MEASUREMENT for #10 — no behaviour change. Called with every timestamp the
+// moment it is made, on the decode thread.
+//
+// The stall is the deliver loop waiting ~6 s for an audio frame stamped ~6.3 s
+// ahead. (The loop's own "its timestamp was +395 ms from now" is printed AFTER
+// the wait returns, when by construction the frame is ~400 ms away; it never
+// described where the wait began, and reading it as though it did is what led
+// to "the thread stops running" and its withdrawal.) So the question is on the
+// stamping side, and it has two possible answers that call for different fixes:
+//
+//   * the frame's PTS jumped by ~a segment from the previous one on its stream
+//     — a later segment's frames reached the decoder's output (a feed or
+//     decoder fault; the push_fragment wedge watchdog firing on a deliberate
+//     hold is the leading suspect);
+//   * the pts is continuous but pts - anchor is ~6 s — the clock was anchored
+//     on the wrong frame (an anchor fault).
+//
+// Both lines carry enough to decide between them from one reproduction.
+static void note_stamp(SourceCtx* ctx, bool is_video, int track,
+                       long long pts, long long first, uint64_t ts,
+                       uint64_t epoch) {
+    const uint64_t now = os_gettime_ns();
+    std::atomic<long long>& last_slot =
+        is_video ? ctx->stamp_last_pts_v : ctx->stamp_last_pts_a;
+    const long long prev = last_slot.exchange(pts);
+    const auto since = [now](uint64_t t) -> long long {
+        return (t && now > t) ? (long long)((now - t) / 1000000ULL) : -1LL;
+    };
+    const long long ahead_ms = ((long long)ts - (long long)now) / 1000000LL;
+
+    // Normal stamps sit ~0.4-1.9 s ahead: the delivery lead, plus at most the
+    // 1 s queue bound, plus the 0.5 s cushion right after an anchor.
+    if (ahead_ms > 3000) {
+        const uint64_t last = ctx->stamp_farfuture_log_ns.load();
+        if (now - last > 1000000000ULL) {
+            ctx->stamp_farfuture_log_ns = now;
+            mlog_warn("source: FAR-FUTURE stamp — %s track %d stamped %+lld ms "
+                      "ahead: pts %.3fs, previous on this stream %s%.3fs "
+                      "(jump %+lld ms), anchor %.3fs (pts-anchor %+lld ms), "
+                      "base %+lld ms from now, epoch %llu (current %llu), "
+                      "%lld ms after resume, %lld ms after decoder start",
+                      is_video ? "video" : "audio", track, ahead_ms,
+                      pts / 1e9, prev == INT64_MIN ? "(none) " : "",
+                      prev == INT64_MIN ? 0.0 : prev / 1e9,
+                      prev == INT64_MIN ? 0LL : (pts - prev) / 1000000LL,
+                      first / 1e9, (pts - first) / 1000000LL,
+                      ((long long)ctx->playout_base_ns.load() - (long long)now) / 1000000LL,
+                      (unsigned long long)epoch,
+                      (unsigned long long)ctx->timeline_epoch.load(),
+                      since(ctx->resumed_at_ns.load()),
+                      since(ctx->feed_start_ns.load()));
+        }
+    }
+
+    // A pts that moves by more than 2 s between consecutive frames of one
+    // stream. A seek does this legitimately (and logs "went to" beside it); a
+    // resume should not.
+    if (prev != INT64_MIN) {
+        const long long jump_ms = (pts - prev) / 1000000LL;
+        if (jump_ms > 2000 || jump_ms < -2000) {
+            const uint64_t last = ctx->stamp_ptsjump_log_ns.load();
+            if (now - last > 1000000000ULL) {
+                ctx->stamp_ptsjump_log_ns = now;
+                mlog_warn("source: PTS JUMP — %s track %d went %.3fs -> %.3fs "
+                          "(%+lld ms) between consecutive frames, stamped %+lld "
+                          "ms ahead, %lld ms after resume, %lld ms after "
+                          "decoder start",
+                          is_video ? "video" : "audio", track, prev / 1e9,
+                          pts / 1e9, jump_ms, ahead_ms,
+                          since(ctx->resumed_at_ns.load()),
+                          since(ctx->feed_start_ns.load()));
+            }
+        }
+    }
+}
+
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load() || !ctx->playing.load()) return;
     if (ctx->jump_first_decode_ns.load() == 0)
@@ -1339,6 +1435,7 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     item.epoch     = epoch;
     item.timestamp = multisite::playout_due_ns(
         ctx->playout_base_ns.load(), f.pts_ns, first);
+    note_stamp(ctx, true, 0, f.pts_ns, first, item.timestamp, epoch);
     item.video     = f;              // owns its plane buffer (deep copy)
 
     ctx->width  = (uint32_t)f.width;
@@ -1398,6 +1495,7 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
 
     const uint64_t ts = multisite::playout_due_ns(
         ctx->playout_base_ns.load(), f.pts_ns, first);
+    note_stamp(ctx, false, f.track_index, f.pts_ns, first, ts, epoch);
 
     for (obs_source_t* dest : companions) {
         PendingFrame item;
