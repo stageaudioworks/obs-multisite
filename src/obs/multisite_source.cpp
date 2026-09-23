@@ -796,32 +796,44 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     // by the flag that was always the real defence. Re-checking every 100 ms
     // means even a missed notification cannot wedge the decoder, and a wedged
     // decoder here is a frozen OBS.
-    while (ctx->paused.load() && ctx->running.load() && !ctx->flushing.load())
-        ctx->dq_cv.wait_for(lk, std::chrono::milliseconds(100));
-    if (!ctx->running.load() || ctx->flushing.load()) return;
-    // Bounded wait. This used to wait indefinitely for space, which meant the
-    // decoder's worker thread could block inside this callback whenever
-    // delivery stopped draining — after Stop, or while a seek tore the decoder
-    // down. CmafDecoder::stop() then joined a thread that could never finish,
-    // and because stop runs on the UI thread, OBS froze solid.
     //
-    // Dropping a frame is vastly preferable to hanging the application: the
-    // decoder always makes progress, so join always returns.
-    // Counted on demand rather than tracked in parallel counters. The queue is
-    // at most 60 items and this runs a few hundred times a second, so the scan
-    // is free — and counters would have to be kept in step with the delivery
-    // loop's erase, every flush, and every dq.clear() on seek, which is how
-    // they drift out of step and stall the decoder against a phantom full
-    // queue.
-    const bool want_video = item.is_video;
-    const uint64_t block_t0 = os_gettime_ns();
-    const bool space = ctx->dq_cv.wait_for(
-        lk, std::chrono::milliseconds(250), [ctx, want_video] {
-            if (!ctx->running.load() || ctx->flushing.load()) return true;
-            return queued_span_ns(ctx, want_video) < kMaxQueuedNs;
-        });
-    ctx->enqueue_blocked_ns += (os_gettime_ns() - block_t0);
-    if (!ctx->running.load() || ctx->flushing.load()) return;
+    // A loop, because a hold can also begin DURING the wait for space below.
+    // That wait used to ignore it: delivery stopped draining the moment the
+    // hold began, the 250 ms ran out, and the frame in hand was dropped — the
+    // one frame lost at the start of a hold that the `PAUSED` drop line was
+    // reporting. The space predicate now wakes for a hold, and the frame comes
+    // back up here to be held with the rest.
+    bool space = false;
+    for (;;) {
+        while (ctx->paused.load() && ctx->running.load() && !ctx->flushing.load())
+            ctx->dq_cv.wait_for(lk, std::chrono::milliseconds(100));
+        if (!ctx->running.load() || ctx->flushing.load()) return;
+        // Bounded wait. This used to wait indefinitely for space, which meant the
+        // decoder's worker thread could block inside this callback whenever
+        // delivery stopped draining — after Stop, or while a seek tore the decoder
+        // down. CmafDecoder::stop() then joined a thread that could never finish,
+        // and because stop runs on the UI thread, OBS froze solid.
+        //
+        // Dropping a frame is vastly preferable to hanging the application: the
+        // decoder always makes progress, so join always returns.
+        // Counted on demand rather than tracked in parallel counters. The queue is
+        // at most 60 items and this runs a few hundred times a second, so the scan
+        // is free — and counters would have to be kept in step with the delivery
+        // loop's erase, every flush, and every dq.clear() on seek, which is how
+        // they drift out of step and stall the decoder against a phantom full
+        // queue.
+        const bool want_video = item.is_video;
+        const uint64_t block_t0 = os_gettime_ns();
+        space = ctx->dq_cv.wait_for(
+            lk, std::chrono::milliseconds(250), [ctx, want_video] {
+                if (!ctx->running.load() || ctx->flushing.load()) return true;
+                if (ctx->paused.load()) return true;
+                return queued_span_ns(ctx, want_video) < kMaxQueuedNs;
+            });
+        ctx->enqueue_blocked_ns += (os_gettime_ns() - block_t0);
+        if (!ctx->running.load() || ctx->flushing.load()) return;
+        if (!ctx->paused.load()) break;
+    }
     if (!space) {
         // Delivery is not keeping up (or is stopped). Drop this frame.
         ctx->frames_dropped++;
@@ -2464,6 +2476,9 @@ void SourceCtx::pause() {
     // then stop pulling new segments.
     paused = true;
     pause_started_ns = os_gettime_ns();
+    // Wake a producer waiting for queue space, so it parks for the hold rather
+    // than timing out on a queue that has just stopped draining.
+    dq_cv.notify_all();
     sess->pause();
     // The pts on screen, and what the session is serving. On resume the log
     // already prints the pts of the first frame after the hold, so the two
