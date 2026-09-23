@@ -89,6 +89,17 @@ public:
     StorageProbe probe(const std::string& key);
     std::string host() const;
 
+    // Observations from ordinary traffic — which PoP and server answered, and
+    // the download rate — for a status page. Taken from the CURRENT inner, as
+    // server_clock_skew_ms() is; a refresh rebuilds it about every 7.5 minutes
+    // at a 900 s TTL. Empty/0
+    // before any inner exists. The previous inner stands in until the new one
+    // has seen traffic (see m_prev_inner).
+    std::string last_colo() const;
+    std::string last_server() const;
+    double      observed_download_bytes_per_s() const;
+    uint64_t    download_samples() const;
+
 private:
     // The inner transport for the identity's CURRENT credentials, rebuilt when
     // the credential set changes (a refresh, or a fall to last-good). Returns
@@ -105,6 +116,15 @@ private:
     // change. Cached so a per-frame or per-segment call is not re-signing a
     // fresh S3Transport on every request.
     mutable std::shared_ptr<S3Transport> m_inner;
+    // The inner a refresh replaced, kept for two reasons. A request already in
+    // flight is still running on it, so cancel_pending() must reach it too —
+    // otherwise stopping a source in the moment after a refresh waited out
+    // that request's whole timeout. And its observations stand in until the
+    // new inner has seen traffic of its own, so a status page does not read
+    // "unreachable" for the seconds after every refresh.
+    mutable std::shared_ptr<S3Transport> m_prev_inner;
+    // Caller holds m_mtx: the inner whose observations to report.
+    const S3Transport* observed_locked() const;
     // What m_inner was built from, so a refresh is detected by comparing rather
     // than by trusting a flag the identity would have to remember to set.
     mutable std::string m_built_expiry;

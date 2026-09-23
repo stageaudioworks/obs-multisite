@@ -83,6 +83,7 @@ std::shared_ptr<S3Transport> CloudTransport::inner_for(std::string& why) const {
     s3.connect_timeout_ms = m_cfg.connect_timeout_ms;
     s3.request_timeout_ms = m_cfg.request_timeout_ms;
 
+    m_prev_inner = m_inner;   // may still be carrying a request — see the header
     m_inner = std::make_shared<S3Transport>(s3);
     m_built_expiry = key;
     m_built_stale = c.from_last_good;
@@ -196,17 +197,28 @@ DeleteResult CloudTransport::remove(const std::string& key) {
 }
 
 void CloudTransport::cancel_pending() {
-    // Cancel the CURRENT inner. A transport rebuilt after this call has its own
-    // flag and starts uncancelled, which is correct: the thing being cancelled
-    // is the request in flight, and that one belongs to the inner that exists
-    // now.
+    // Cancel the CURRENT inner and the one a refresh replaced: a request that
+    // began before the refresh is still running on the old one, and it is as
+    // much "the request in flight" as anything on the new. A transport rebuilt
+    // after this call has its own flag and starts uncancelled.
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_inner) m_inner->cancel_pending();
+    if (m_prev_inner) m_prev_inner->cancel_pending();
 }
 
 void CloudTransport::resume_pending() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_inner) m_inner->resume_pending();
+    if (m_prev_inner) m_prev_inner->resume_pending();
+}
+
+const S3Transport* CloudTransport::observed_locked() const {
+    if (m_inner && (m_inner->download_samples() > 0 ||
+                    !m_inner->last_colo().empty() ||
+                    !m_inner->last_server().empty()))
+        return m_inner.get();
+    if (m_prev_inner) return m_prev_inner.get();
+    return m_inner.get();
 }
 
 bool CloudTransport::last_request_reached_server() const {
@@ -217,6 +229,30 @@ bool CloudTransport::last_request_reached_server() const {
 bool CloudTransport::last_request_cancelled() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return m_inner ? m_inner->last_request_cancelled() : false;
+}
+
+std::string CloudTransport::last_colo() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->last_colo() : std::string();
+}
+
+std::string CloudTransport::last_server() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->last_server() : std::string();
+}
+
+double CloudTransport::observed_download_bytes_per_s() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->observed_download_bytes_per_s() : 0.0;
+}
+
+uint64_t CloudTransport::download_samples() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->download_samples() : 0;
 }
 
 int64_t CloudTransport::server_clock_skew_ms() const {

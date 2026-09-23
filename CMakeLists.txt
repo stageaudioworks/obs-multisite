@@ -516,6 +516,11 @@ if(CURL_FOUND)
         add_executable(test_s3_cancel tests/test_s3_cancel.cpp)
         target_link_libraries(test_s3_cancel PRIVATE multisite_s3)
         add_test(NAME s3_cancel COMMAND test_s3_cancel)
+        # The same stalled listener, one layer up: a stop after a credential
+        # refresh must reach the request begun on the inner it replaced.
+        add_executable(test_cloud_cancel tests/test_cloud_cancel.cpp)
+        target_link_libraries(test_cloud_cancel PRIVATE multisite_s3)
+        add_test(NAME cloud_cancel COMMAND test_cloud_cancel)
     endif()
 else()
     message(STATUS "libcurl not found — skipping S3 transport")

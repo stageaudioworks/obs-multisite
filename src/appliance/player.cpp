@@ -179,9 +179,46 @@ PairView Player::reporter_pair_view() const {
 }
 
 long long Player::clock_skew_ms() const {
+    // Whichever cloud leg this box reads through. Asking the typed-key one
+    // alone read 0 — "nothing observed" — on every paired box, so the clock
+    // warning could never appear there.
     std::shared_ptr<S3Transport> tx;
-    { std::lock_guard<std::mutex> lk(m_obj_mtx); tx = m_transport; }
+    std::shared_ptr<CloudTransport> ctx;
+    { std::lock_guard<std::mutex> lk(m_obj_mtx); tx = m_transport; ctx = m_cloud_transport; }
+    if (ctx) return (long long)ctx->server_clock_skew_ms();
     return tx ? (long long)tx->server_clock_skew_ms() : 0;
+}
+
+// The cloud-leg half of storage_health(), for either producer of the leg. The
+// two classes share these calls by name, not by base class — Transport has no
+// notion of a PoP or a probe — so this is a template rather than a virtual.
+template <class Tx>
+static void fill_cloud_health(Player::StorageHealth& h, Tx& tx, bool probe,
+                              const std::string& probe_key) {
+    // Always cheap: these come from the segment traffic already flowing, so
+    // they cost nothing and describe the link actually carrying the event.
+    h.endpoint     = tx.host();
+    h.colo         = tx.last_colo();
+    h.server       = tx.last_server();
+    h.bytes_per_s  = tx.observed_download_bytes_per_s();
+    h.rate_samples = tx.download_samples();
+
+    if (!probe) {
+        // Traffic having been observed at all is itself evidence the bucket is
+        // reachable, without spending a request to prove it again.
+        h.reachable = h.rate_samples > 0 || !h.colo.empty() || !h.server.empty();
+        h.readable  = h.reachable;
+        return;
+    }
+
+    const StorageProbe p = tx.probe(probe_key);
+    h.reachable     = p.reachable;
+    h.readable      = p.readable;
+    h.http_status   = p.http_status;
+    h.error         = p.error;
+    h.round_trip_ms = p.round_trip_ms;
+    if (!p.colo.empty())   h.colo   = p.colo;
+    if (!p.server.empty()) h.server = p.server;
 }
 
 Player::StorageHealth Player::storage_health(bool probe) {
@@ -194,10 +231,12 @@ Player::StorageHealth Player::storage_health(bool probe) {
     h.configured = cfg.configured();
 
     std::shared_ptr<S3Transport> tx;
+    std::shared_ptr<CloudTransport> ctx;
     std::shared_ptr<LanTransport> lan_tx;
     std::shared_ptr<FallbackTransport> fb;
     { std::lock_guard<std::mutex> lk(m_obj_mtx);
-      tx = m_transport; lan_tx = m_lan_transport; fb = m_fallback_transport; }
+      tx = m_transport; ctx = m_cloud_transport;
+      lan_tx = m_lan_transport; fb = m_fallback_transport; }
 
     h.lan_configured = (lan_tx != nullptr);
     // With both configured, FallbackTransport tracks which path the most
@@ -208,6 +247,15 @@ Player::StorageHealth Player::storage_health(bool probe) {
     h.lan_active = fb ? fb->last_get_was_primary()
                        : (lan_tx && lan_tx->last_request_reached_server());
 
+    // PAIRED: the leg is the CloudTransport, and the bucket is the broker's,
+    // not the (empty) typed field. This answered "the player is not running"
+    // on every paired box without LAN, because it only looked for typed keys.
+    if (ctx) {
+        h.bucket = ctx->bucket();
+        fill_cloud_health(h, *ctx, probe, live_pointer_key(cfg.room_id));
+        return h;
+    }
+
     if (!tx) {
         // No cloud leg at all — either genuinely unconfigured, or a LAN-only
         // box working exactly as intended. The figures below (colo, server,
@@ -217,30 +265,7 @@ Player::StorageHealth Player::storage_health(bool probe) {
         return h;
     }
 
-    // Always cheap: these come from the segment traffic already flowing, so
-    // they cost nothing and describe the link actually carrying the event.
-    h.endpoint     = tx->host();
-    h.colo         = tx->last_colo();
-    h.server       = tx->last_server();
-    h.bytes_per_s  = tx->observed_download_bytes_per_s();
-    h.rate_samples = tx->download_samples();
-
-    if (!probe) {
-        // Traffic having been observed at all is itself evidence the bucket is
-        // reachable, without spending a request to prove it again.
-        h.reachable = h.rate_samples > 0 || !h.colo.empty() || !h.server.empty();
-        h.readable  = h.reachable;
-        return h;
-    }
-
-    const StorageProbe p = tx->probe(live_pointer_key(cfg.room_id));
-    h.reachable     = p.reachable;
-    h.readable      = p.readable;
-    h.http_status   = p.http_status;
-    h.error         = p.error;
-    h.round_trip_ms = p.round_trip_ms;
-    if (!p.colo.empty())   h.colo   = p.colo;
-    if (!p.server.empty()) h.server = p.server;
+    fill_cloud_health(h, *tx, probe, live_pointer_key(cfg.room_id));
     return h;
 }
 
@@ -555,17 +580,29 @@ void Player::rebuild_session() {
     // ever knows about whichever one is live right now. No catalog at all
     // when cloud isn't configured, rather than one that can only ever come
     // back empty and reads as a room with no history.
-    if (m_transport) {
+    //
+    // Either producer of the cloud leg. This asked for the typed-key transport
+    // alone, so a PAIRED box had no catalog and its page could not list a
+    // single recording — the broker's bucket holds them just the same.
+    Transport* catalog_tx = m_cloud_transport
+        ? static_cast<Transport*>(m_cloud_transport.get())
+        : static_cast<Transport*>(m_transport.get());
+    if (catalog_tx) {
         CatalogConfig cc;
         cc.room_id        = cfg.room_id;
         cc.stale_after_ms = cfg.stale_after_ms;
-        m_catalog = std::make_shared<EventCatalog>(cc, *m_transport);
+        m_catalog = std::make_shared<EventCatalog>(cc, *catalog_tx);
     }
 
     if (m_transport && m_lan_transport)
         plog_info("receiving room '%s' — LAN preferred (%s:%d), cloud fallback at %s",
                   cfg.room_id.c_str(), cfg.lan_host.c_str(), cfg.lan_port,
                   m_transport->base_url().c_str());
+    else if (m_cloud_transport && m_lan_transport)
+        plog_info("receiving room '%s' — LAN preferred (%s:%d), Multisite Cloud "
+                  "fallback, bucket '%s'", cfg.room_id.c_str(),
+                  cfg.lan_host.c_str(), cfg.lan_port,
+                  m_cloud_transport->bucket().c_str());
     else if (m_lan_transport)
         plog_info("receiving room '%s' — LAN only (%s:%d), no cloud storage configured",
                   cfg.room_id.c_str(), cfg.lan_host.c_str(), cfg.lan_port);
@@ -665,6 +702,7 @@ void Player::stop() {
         m_fallback_transport.reset();
         m_lan_transport.reset();
         m_transport.reset();
+        m_cloud_transport.reset();
     }
     // Never leave the last frame of an event on a screen in an empty room.
     m_video.blank();
