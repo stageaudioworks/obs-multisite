@@ -51,11 +51,27 @@ inline constexpr int kHeartbeatIdleIntervalS = 300;
 
 // Appliance kinds on the wire. This pass wires obs-encoder, obs-decoder and
 // pi-player; x86-player and relay are accepted strings with no host yet, so a
-// future host adds wiring rather than a protocol change.
+// future host adds wiring rather than a protocol change. The campus player
+// sends pi-player unless its config names another player kind: outpost-light
+// and outpost-pro are the same player on other hardware, set by whatever
+// installed it there.
 inline constexpr const char* kReporterKinds[] = {
     "obs-encoder", "obs-decoder", "pi-player", "x86-player", "relay",
+    "outpost-light", "outpost-pro",
 };
 bool heartbeat_kind_known(const std::string& kind);
+
+// The kind the campus player reports: `configured` when it is a known kind the
+// player can be, otherwise pi-player. The OBS kinds and relay are refused
+// because the player is neither, and a typo must not pair a box as something
+// it is not.
+std::string heartbeat_player_kind(const std::string& configured);
+
+// A board serial as read from the device tree (NUL-terminated, sometimes with
+// a trailing newline), cleaned to what may go on the wire: letters, digits,
+// '-' and '_', at most 64 characters. Anything else yields "", which the
+// pairing body then omits — no serial is better than a mangled one.
+std::string heartbeat_clean_serial(const std::string& raw);
 
 // The verbatim field selections from the brief. Encoder names come from
 // encoder_status_json, decoder names from decoder_status_json
@@ -157,9 +173,11 @@ PairPollReply heartbeat_parse_pair_poll(const std::string& body, int http_code);
 std::string heartbeat_mint_device_id(const std::string& hostname,
                                      const std::string& kind,
                                      long long now_ns, long long pid);
+// `serial` is omitted from the body when empty rather than sent as "".
 std::string heartbeat_pair_start_body(const std::string& device_id,
                                       const std::string& kind,
-                                      const std::string& hostname);
+                                      const std::string& hostname,
+                                      const std::string& serial = std::string());
 std::string heartbeat_pair_poll_body(const std::string& poll_token);
 
 class Pairing {

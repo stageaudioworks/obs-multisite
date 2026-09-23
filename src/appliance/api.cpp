@@ -8,6 +8,7 @@
 #include "update_check.h"
 #include "preview.h"
 #include "../core/storage_providers.h"
+#include "../core/heartbeat_reporter.h"
 
 #include "../vendor/nlohmann/json.hpp"
 
@@ -165,6 +166,7 @@ json config_json(const Config& c) {
     j["reporter_enabled"]      = c.reporter_enabled;
     j["reporter_url"]          = c.reporter_url;
     j["reporter_appliance_id"] = c.reporter_appliance_id;
+    j["reporter_kind"]         = multisite::heartbeat_player_kind(c.reporter_kind);
     // Same placeholder convention as the secrets above: dots mean
     // "unchanged", so the token never travels to a browser to come back.
     j["reporter_token"] = c.reporter_token.empty()
@@ -314,6 +316,7 @@ Config apply_edit(Config c, const json& j) {
     take(j, "reporter_enabled", c.reporter_enabled);
     take(j, "reporter_url", c.reporter_url);
     take(j, "reporter_appliance_id", c.reporter_appliance_id);
+    take(j, "reporter_kind", c.reporter_kind);
     {
         std::string token;
         take(j, "reporter_token", token);

@@ -89,6 +89,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "reporter_appliance_id", reporter_appliance_id);
     take(j, "reporter_token",       reporter_token);
     take(j, "reporter_device_id",   reporter_device_id);
+    take(j, "reporter_kind",        reporter_kind);
 
     take(j, "room_id",              room_id);
     take(j, "site_name",            site_name);
@@ -161,6 +162,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["reporter_appliance_id"] = reporter_appliance_id;
     j["reporter_token"]        = reporter_token;
     j["reporter_device_id"]    = reporter_device_id;
+    j["reporter_kind"]         = reporter_kind;
 
     j["room_id"]              = room_id;
     j["site_name"]            = site_name;

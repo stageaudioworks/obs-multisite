@@ -279,8 +279,33 @@ int main() {
         CHECK(start["device_id"] == "dev_x", "start names the device");
         CHECK(start["kind"] == "pi-player", "start names the kind");
         CHECK(start["hostname"] == "box", "start names the host");
+        CHECK(!start.contains("serial"), "no serial is omitted, not sent empty");
+        const json with_serial = json::parse(
+            heartbeat_pair_start_body("dev_x", "outpost-light", "box", "abc123"));
+        CHECK(with_serial["serial"] == "abc123", "a serial is sent when known");
+        CHECK(with_serial["kind"] == "outpost-light", "the configured kind is sent");
         const json poll = json::parse(heartbeat_pair_poll_body("p"));
         CHECK(poll["poll_token"] == "p", "poll carries the token");
+    }
+
+    std::printf("Player kind and board serial\n");
+    {
+        CHECK(heartbeat_player_kind("") == "pi-player", "unset kind is pi-player");
+        CHECK(heartbeat_player_kind("outpost-light") == "outpost-light",
+              "a player kind is kept");
+        CHECK(heartbeat_player_kind("obs-encoder") == "pi-player",
+              "the player never reports an OBS kind");
+        CHECK(heartbeat_player_kind("Outpost-Light") == "pi-player",
+              "a typo falls back rather than pairing as something else");
+        CHECK(heartbeat_kind_known("outpost-light"), "outpost-light is on the wire list");
+
+        CHECK(heartbeat_clean_serial(std::string("a1b2c3d4\0", 9)) == "a1b2c3d4",
+              "the device tree's trailing NUL is stripped");
+        CHECK(heartbeat_clean_serial("a1b2\n") == "a1b2", "a trailing newline is stripped");
+        CHECK(heartbeat_clean_serial("") == "", "nothing stays nothing");
+        CHECK(heartbeat_clean_serial("ab cd").empty(), "an inner space is refused");
+        CHECK(heartbeat_clean_serial("ab\"}").empty(), "punctuation is refused");
+        CHECK(heartbeat_clean_serial(std::string(65, 'a')).empty(), "over 64 is refused");
     }
 
     std::printf("Pairing state: waiting, polling, claimed, expired, failed\n");

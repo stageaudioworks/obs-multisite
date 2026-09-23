@@ -169,9 +169,9 @@ void Reporter::serve_once() {
         wait_s = 5;
     } else {
         const SystemInfo sys = system_info();
-        multisite::HeartbeatIdentity ident{en.id,
-                                           "pi-player", player_version(),
-                                           sys.uptime_s};
+        multisite::HeartbeatIdentity ident{
+            en.id, multisite::heartbeat_player_kind(cfg.reporter_kind),
+            player_version(), sys.uptime_s};
         const multisite::HeartbeatHost host = host_block(cfg);
         const std::string body = multisite::heartbeat_build(
             ident, &host,
@@ -229,7 +229,9 @@ void Reporter::serve_once() {
         m_worker->last_result = outcome;
         // Said once per change (standards §8): a dead collector must not fill
         // the journal at heartbeat cadence.
-        plog_info("heartbeat pi-player: %s", outcome.c_str());
+        plog_info("heartbeat %s: %s",
+                  multisite::heartbeat_player_kind(cfg.reporter_kind).c_str(),
+                  outcome.c_str());
     }
 }
 
@@ -287,8 +289,9 @@ void Reporter::serve_pairing() {
         // mints again for the next attempt.
         std::string dev = cfg.reporter_device_id;
         if (dev.empty()) {
-            dev = multisite::heartbeat_mint_device_id(hostname(), "pi-player",
-                                                      now_ns(), proc_id());
+            dev = multisite::heartbeat_mint_device_id(
+                hostname(), multisite::heartbeat_player_kind(cfg.reporter_kind),
+                now_ns(), proc_id());
             Config with_dev = cfg;
             with_dev.reporter_device_id = dev;
             std::string err;
@@ -299,8 +302,9 @@ void Reporter::serve_pairing() {
         const multisite::HttpResult r = multisite::http_post_json(
             multisite::collector_url(cfg.reporter_url, multisite::kPairStartPath),
             std::string(),
-            multisite::heartbeat_pair_start_body(dev, "pi-player",
-                                                 hostname()));
+            multisite::heartbeat_pair_start_body(
+                dev, multisite::heartbeat_player_kind(cfg.reporter_kind),
+                hostname(), board_serial()));
         std::lock_guard<std::mutex> lk(m_worker->mtx);
         m_worker->begin_pending = false;
         if (!r.reached) {
@@ -345,7 +349,8 @@ void Reporter::serve_pairing() {
         std::lock_guard<std::mutex> lk(m_worker->mtx);
         if (claimed.reporter_device_id.empty())
             claimed.reporter_device_id = multisite::heartbeat_mint_device_id(
-                hostname(), "pi-player", now_ns(), proc_id());
+                hostname(), multisite::heartbeat_player_kind(cfg.reporter_kind),
+                now_ns(), proc_id());
         claimed.reporter_appliance_id = m_worker->claimed_id;
         claimed.reporter_token = m_worker->claimed_token;
         if (!m_worker->claimed_url.empty())

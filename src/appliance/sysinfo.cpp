@@ -2,6 +2,7 @@
 #include "sysinfo.h"
 #include "log.h"
 #include "../core/disk_health.h"
+#include "../core/heartbeat_reporter.h"
 
 #include <algorithm>
 #include <array>
@@ -195,6 +196,14 @@ std::string hostname() {
     char buf[256] = {};
     if (::gethostname(buf, sizeof(buf) - 1) != 0) return "multisite-player";
     return buf;
+}
+
+std::string board_serial() {
+    std::ifstream f("/proc/device-tree/serial-number", std::ios::binary);
+    if (!f) return std::string();
+    std::string raw((std::istreambuf_iterator<char>(f)),
+                    std::istreambuf_iterator<char>());
+    return multisite::heartbeat_clean_serial(raw);
 }
 
 // ── Time ─────────────────────────────────────────────────────────────────────

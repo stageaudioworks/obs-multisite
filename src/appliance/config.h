@@ -67,6 +67,12 @@ struct Config {
     std::string reporter_token;
     // Local device id for pairing — minted once, persisted, never shown.
     std::string reporter_device_id;
+    // What this box reports itself as. pi-player unless whatever installed the
+    // player on other hardware says otherwise (outpost-light, outpost-pro,
+    // x86-player). An unknown word reads as pi-player (heartbeat_player_kind).
+    // The collector records the kind at pairing, so changing it applies to the
+    // heartbeat at once and to the pairing record only after pairing again.
+    std::string reporter_kind = "pi-player";
 
     // ── What to receive ──────────────────────────────────────────────────────
     std::string room_id = "main-auditorium";

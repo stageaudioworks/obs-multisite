@@ -283,13 +283,37 @@ std::string heartbeat_mint_device_id(const std::string& hostname,
 
 std::string heartbeat_pair_start_body(const std::string& device_id,
                                       const std::string& kind,
-                                      const std::string& hostname) {
+                                      const std::string& hostname,
+                                      const std::string& serial) {
     json j;
     j["device_id"] = device_id;
     j["kind"] = kind;
     j["hostname"] = hostname;
-    j["serial"] = "";   // no reliable source; honest empty, not invented
+    if (!serial.empty()) j["serial"] = serial;
     return j.dump();
+}
+
+std::string heartbeat_player_kind(const std::string& configured) {
+    static const char* const kPlayerKinds[] = {
+        "pi-player", "x86-player", "outpost-light", "outpost-pro",
+    };
+    for (const char* k : kPlayerKinds)
+        if (configured == k) return configured;
+    return "pi-player";
+}
+
+std::string heartbeat_clean_serial(const std::string& raw) {
+    std::string s = raw;
+    while (!s.empty() && (s.back() == '\0' || s.back() == '\n' ||
+                          s.back() == '\r' || s.back() == ' '))
+        s.pop_back();
+    if (s.empty() || s.size() > 64) return std::string();
+    for (char c : s) {
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '-' || c == '_';
+        if (!ok) return std::string();
+    }
+    return s;
 }
 
 std::string heartbeat_pair_poll_body(const std::string& poll_token) {

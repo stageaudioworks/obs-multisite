@@ -29,6 +29,11 @@ std::vector<NetInterface> network_interfaces();
 
 std::string hostname();
 
+// The board's serial number from the device tree, or "" where the board has
+// none (or none that is safe to put on the wire). Sent when pairing, so the
+// collector can tell two boxes apart that share a hostname.
+std::string board_serial();
+
 struct TimeInfo {
     long long   now_ms = 0;
     std::string timezone;
