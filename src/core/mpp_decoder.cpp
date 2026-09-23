@@ -76,6 +76,7 @@ struct MppVideoDecoder::Impl {
     std::string name;
     bool opened = false;
     int logged = 0;        // frames seen, for the first few diagnostics
+    int errored = 0;       // frames MPP flagged as errored and we dropped
     int width = 0, height = 0;
 };
 
@@ -126,7 +127,7 @@ bool MppVideoDecoder::open(const std::string& codec, std::string& error) {
 // Pull whatever frames are ready and append them as I420.
 static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                   std::vector<DecodedVideoFrame>& out,
-                  int64_t pts_ns, uint64_t seq, int& logged) {
+                  int64_t pts_ns, uint64_t seq, int& logged, int& errored) {
     for (;;) {
         MppFrame frame = nullptr;
         if (mpi->decode_get_frame(ctx, &frame) != MPP_OK || !frame) break;
@@ -137,6 +138,18 @@ static void drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             width = (int)mpp_frame_get_width(frame);
             height = (int)mpp_frame_get_height(frame);
             mpi->control(ctx, MPP_DEC_SET_INFO_CHANGE_READY, nullptr);
+            mpp_frame_deinit(&frame);
+            continue;
+        }
+
+        // A frame MPP flagged as errored carries a blank buffer — all-zero
+        // YUV, which renders as a green field. Drop it, exactly as MPP's own
+        // decoder test does, rather than painting the error on the screen.
+        const RK_U32 err_info = mpp_frame_get_errinfo(frame);
+        if (err_info) {
+            if (errored < 24)
+                std::fprintf(stderr, "mpp: errored frame dropped (err=0x%x)\n", err_info);
+            ++errored;
             mpp_frame_deinit(&frame);
             continue;
         }
@@ -228,7 +241,8 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
     for (int guard = 0; guard < 64; ++guard) {
         ret = d->mpi->decode_put_packet(d->ctx, packet);
         if (ret == MPP_OK) break;
-        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged);
+        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged,
+              d->errored);
     }
     mpp_packet_deinit(&packet);
 
@@ -248,7 +262,7 @@ void MppVideoDecoder::flush(std::vector<DecodedVideoFrame>& out) {
         d->mpi->decode_put_packet(d->ctx, packet);
         mpp_packet_deinit(&packet);
     }
-    drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged);
+    drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged, d->errored);
 }
 
 const std::string& MppVideoDecoder::name() const { return d->name; }
