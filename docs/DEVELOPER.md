@@ -175,6 +175,19 @@ a machine other than the one that built it: package type `BNDL`, arm64, the
 module entry points exported, exactly one rpath, no OpenSSL, and no absolute
 path outside `/System` and `/usr/lib`.
 
+**What a push to `main` runs** depends on what it touches. A push that changes
+only documentation (`*.md`, `docs/`) runs nothing, and one to `site/` only
+redeploys the site. The
+plugin build runs only when the plugin's own inputs change — `src/obs`,
+`src/core`, `src/vendor`, `data`, `cmake`, `CMakeLists.txt` — so a change to the
+Pi player alone runs the core tests and analysis, not three plugin builds. A
+newer push to `main` cancels the build it supersedes, so a burst builds once,
+for its last commit; if a burst breaks, CI names the burst, not the commit.
+Pull requests and `v*` tags are never filtered or cancelled — a tag always
+builds and publishes everything — and **Actions → Run workflow** builds any
+branch on demand. The site redeploys after a release's build, not after every
+build.
+
 ### Checking the appliance's code on a machine that cannot build it
 
 `alsa_output.cpp` and `aes67.cpp` are compiled only where ALSA and libcurl exist,

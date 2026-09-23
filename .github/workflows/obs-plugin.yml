@@ -7,8 +7,28 @@ on:
     # the binaries people download are provably the tagged commit rather than
     # something uploaded by hand.
     tags: [ 'v*' ]
+    # Only what the plugin is built from. The Pi player (src/appliance), the
+    # relay and the docs are not, and a push touching only those used to
+    # build it on three platforms anyway. Path filters are NOT evaluated for
+    # tag pushes, so a v* tag always builds and publishes, whatever changed.
+    paths:
+      - 'src/obs/**'
+      - 'src/core/**'
+      - 'src/vendor/**'
+      - 'data/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/obs-plugin.yml'
   pull_request:
   workflow_dispatch:
+
+# One build per ref at a time. On main a newer push cancels the build it
+# supersedes, so a burst of commits builds once, for the last of them — at the
+# cost that CI does not say which commit in a burst broke it. Tags and pull
+# requests are never cancelled: each is its own ref, and a tag is a release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 env:
   # Match the OBS version you actually run. The obs-deps version is read from

@@ -14,8 +14,28 @@ name: sanitizers and static analysis
 on:
   push:
     branches: [ main, master ]
+    # Documentation cannot change a build or a test result, and it is about
+    # four commits in ten here. Ignored rather than listed-in, so a new source
+    # folder is covered by default. A tag is never filtered: GitHub does not
+    # evaluate path filters for tag pushes.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'site/**'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'COPYRIGHT'
+      - 'DCO'
   pull_request:
   workflow_dispatch:
+
+# One build per ref at a time. On main a newer push cancels the build it
+# supersedes, so a burst of commits builds once, for the last of them — at the
+# cost that CI does not say which commit in a burst broke it. Tags and pull
+# requests are never cancelled: each is its own ref, and a tag is a release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   sanitizers:

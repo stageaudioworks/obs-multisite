@@ -41,10 +41,16 @@ concurrency:
 
 jobs:
   build:
-    # A workflow_run fires on every conclusion, including a failed build —
-    # only rebuild the site if the release job actually succeeded, so a
-    # broken CI run doesn't spend a deploy pointing at nothing new.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # A workflow_run fires on every conclusion of every plugin build — every
+    # push to main, not only releases — and redeployed an unchanged site each
+    # time. Only a successful build of a TAG publishes anything the site
+    # shows, so only that one rebuilds it. A tag-triggered run reports the
+    # tag as its head_branch (checked on the v0.1.24-alpha run); a push to
+    # main reports "main". Page edits still deploy through `push` above.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
