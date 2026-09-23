@@ -2656,9 +2656,13 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         // This box's clock against the store's, from the Date header on traffic
         // we are already making. Reported so the dock can warn before a skewed
         // clock causes confusion; 0 means "not observed yet".
+        // Whichever cloud leg the source reads through: asking the typed-key
+        // one alone read 0 on every paired source.
         std::shared_ptr<S3Transport> tx;
-        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
-        if (tx) out.clock_skew_ms = (long long)tx->server_clock_skew_ms();
+        std::shared_ptr<multisite::CloudTransport> ctx;
+        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; ctx = cloud_transport; }
+        if (ctx)     out.clock_skew_ms = (long long)ctx->server_clock_skew_ms();
+        else if (tx) out.clock_skew_ms = (long long)tx->server_clock_skew_ms();
     }
     std::shared_ptr<DecoderSession> sess;
     { std::lock_guard<std::mutex> lk(obj_mtx); sess = session; }
@@ -2728,11 +2732,21 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         // release it before doing anything with it, so the UI thread never
         // holds that lock while the download thread wants it.
         std::shared_ptr<S3Transport> tx;
+        std::shared_ptr<multisite::CloudTransport> ctx;
         std::shared_ptr<LanTransport> lan_tx;
         std::shared_ptr<FallbackTransport> fb;
         { std::lock_guard<std::mutex> lk(obj_mtx);
-          tx = transport; lan_tx = lan_transport; fb = fallback; }
-        if (tx) {
+          tx = transport; ctx = cloud_transport;
+          lan_tx = lan_transport; fb = fallback; }
+        // PAIRED: the figures come from the CloudTransport. This asked the
+        // typed-key transport alone, so a source reading Multisite Cloud showed
+        // no PoP, no host and no download rate.
+        if (ctx) {
+            out.colo                 = ctx->last_colo();
+            out.storage_host         = ctx->host();
+            out.download_bytes_per_s = ctx->observed_download_bytes_per_s();
+            out.download_samples     = ctx->download_samples();
+        } else if (tx) {
             out.colo                 = tx->last_colo();
             out.storage_host         = tx->host();
             out.download_bytes_per_s = tx->observed_download_bytes_per_s();

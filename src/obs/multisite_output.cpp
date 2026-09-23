@@ -442,6 +442,15 @@ EncoderStats OutputCtx::stats() const {
         es.upload_bytes_per_s = s3->observed_upload_bytes_per_s();
         es.upload_samples     = s3->upload_samples();
         es.clock_skew_ms      = (long long)s3->server_clock_skew_ms();
+    } else if (auto* ct = dynamic_cast<multisite::CloudTransport*>(transport.get())) {
+        // PAIRED: the same figures, from the CloudTransport. Only the typed-key
+        // cast was here, so an encoder recording to Multisite Cloud showed no
+        // PoP, no host, no upload rate and no clock check.
+        es.colo               = ct->last_colo();
+        es.storage_host       = ct->host();
+        es.upload_bytes_per_s = ct->observed_upload_bytes_per_s();
+        es.upload_samples     = ct->upload_samples();
+        es.clock_skew_ms      = (long long)ct->server_clock_skew_ms();
     }
     return es;
 }

@@ -214,6 +214,7 @@ void CloudTransport::resume_pending() {
 
 const S3Transport* CloudTransport::observed_locked() const {
     if (m_inner && (m_inner->download_samples() > 0 ||
+                    m_inner->upload_samples() > 0 ||
                     !m_inner->last_colo().empty() ||
                     !m_inner->last_server().empty()))
         return m_inner.get();
@@ -255,9 +256,24 @@ uint64_t CloudTransport::download_samples() const {
     return t ? t->download_samples() : 0;
 }
 
+double CloudTransport::observed_upload_bytes_per_s() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->observed_upload_bytes_per_s() : 0.0;
+}
+
+uint64_t CloudTransport::upload_samples() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const S3Transport* t = observed_locked();
+    return t ? t->upload_samples() : 0;
+}
+
 int64_t CloudTransport::server_clock_skew_ms() const {
     std::lock_guard<std::mutex> lk(m_mtx);
-    return m_inner ? m_inner->server_clock_skew_ms() : 0;
+    // Same stand-in as the other observations: read off the current inner
+    // alone, this went to 0 — "nothing observed" — after every refresh.
+    const S3Transport* t = observed_locked();
+    return t ? t->server_clock_skew_ms() : 0;
 }
 
 } // namespace multisite

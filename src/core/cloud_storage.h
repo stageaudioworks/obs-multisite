@@ -90,7 +90,7 @@ public:
     std::string host() const;
 
     // Observations from ordinary traffic — which PoP and server answered, and
-    // the download rate — for a status page. Taken from the CURRENT inner, as
+    // the download and upload rates — for a status page or a dock. Taken from the CURRENT inner, as
     // server_clock_skew_ms() is; a refresh rebuilds it about every 7.5 minutes
     // at a 900 s TTL. Empty/0
     // before any inner exists. The previous inner stands in until the new one
@@ -99,6 +99,8 @@ public:
     std::string last_server() const;
     double      observed_download_bytes_per_s() const;
     uint64_t    download_samples() const;
+    double      observed_upload_bytes_per_s() const;
+    uint64_t    upload_samples() const;
 
 private:
     // The inner transport for the identity's CURRENT credentials, rebuilt when
