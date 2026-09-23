@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-
-#include "caption_bridge.h"
 //
 // broadcast_controller.h — owns the encoder-side broadcast.
 //
@@ -75,16 +73,6 @@ struct BroadcastSettings {
     // a 3840x1080 frame is a legitimate ultrawide picture as well as a
     // plausible pair, and nothing in the video distinguishes them.
     std::string tile_layout = "1x1";
-
-    // Captions (see caption_bridge.h). "\x01auto" — the default — listens to
-    // every source for captions that are already in the feed, whichever plugin
-    // put them there. A source NAME instead takes that source's text, for a
-    // captioner that cannot emit CEA-708. Empty means no captions at all.
-    //
-    // Automatic by default because passing on captions a feed already carries
-    // is what an operator would expect, and because the alternative is that an
-    // SDI feed's captions are silently dropped by us.
-    std::string caption_source = "\x01auto";
 
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — off by default: this
     // opens a port, and doing that without being asked is exactly the kind
@@ -261,7 +249,6 @@ private:
     // half-copied string.
     mutable std::mutex m_cfg_mtx;
     obs_output_t*  m_output = nullptr;
-    CaptionBridge  m_captions;
     obs_encoder_t* m_venc = nullptr;
     std::vector<obs_encoder_t*> m_aencs;
     uint64_t m_started_ns = 0;
