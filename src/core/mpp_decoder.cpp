@@ -75,7 +75,6 @@ struct MppVideoDecoder::Impl {
     MppCodingType coding = MPP_VIDEO_CodingUnused;
     std::string name;
     bool opened = false;
-    int logged = 0;        // frames seen, for the first few diagnostics
     int errored = 0;       // frames MPP flagged as errored and we dropped
     int refused = 0;       // packets MPP would not take before the deadline
     int width = 0, height = 0;
@@ -134,7 +133,7 @@ bool MppVideoDecoder::open(const std::string& codec, std::string& error) {
 // end-of-stream frame has come out, which is what flush() waits for.
 static bool drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                   std::vector<DecodedVideoFrame>& out,
-                  int64_t pts_ns, uint64_t seq, int& logged, int& errored) {
+                  int64_t pts_ns, uint64_t seq, int& errored) {
     bool saw_eos = false;
     for (;;) {
         MppFrame frame = nullptr;
@@ -174,21 +173,6 @@ static bool drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
             const int vs = (int)mpp_frame_get_ver_stride(frame);
             const auto* base = static_cast<const uint8_t*>(mpp_buffer_get_ptr(buf));
             if (base && w > 0 && h > 0) {
-                const bool first = (logged == 0);
-                if (first) {
-                    // Said once, because the shape of MPP's output buffer is the
-                    // one thing a green or torn picture needs explaining: the
-                    // format, the strides, the buffer size, and whether the
-                    // chroma is actually where the conversion reads it.
-                    const uint8_t* uv = base + (size_t)hs * (size_t)vs;
-                    unsigned uvs = 0;
-                    for (int k = 0; k < 64; ++k) uvs += uv[k];
-                    std::fprintf(stderr,
-                                 "mpp: first frame %dx%d fmt=%d stride=%dx%d buf=%zu"
-                                 " uv@%zu first64sum=%u\n",
-                                 w, h, (int)mpp_frame_get_fmt(frame), hs, vs,
-                                 mpp_buffer_get_size(buf), (size_t)hs * (size_t)vs, uvs);
-                }
                 DecodedVideoFrame f;
                 f.width = w;
                 f.height = h;
@@ -205,29 +189,6 @@ static bool drain(MppCtx ctx, MppApi* mpi, int& width, int& height,
                 // (1088 for 1080) is why the conversion is told both strides.
                 nv12_to_i420(base, hs, base + (size_t)hs * (size_t)vs, hs,
                              w, h, f.data, f.plane, f.stride);
-                if (logged < 4) {
-                    // Temporary: the first few converted frames, written where
-                    // they can be looked at off the box. Remove once the picture
-                    // is right.
-                    char path[64];
-                    std::snprintf(path, sizeof(path), "/tmp/mpp-frame-%d.i420", logged);
-                    if (FILE* df = std::fopen(path, "wb")) {
-                        std::fwrite(f.data.data(), 1, f.data.size(), df);
-                        std::fclose(df);
-                    }
-                }
-                // Temporary: the first frames' timestamps, which is what the
-                // playout clock paces on. If these are zero or flat, the picture
-                // races and the identity screen flashes between bursts.
-                if (logged < 24) {
-                    size_t nz = 0;
-                    for (uint8_t b : f.data) if (b) ++nz;
-                    std::fprintf(stderr,
-                                 "mpp: frame %d pts=%.3fs seq=%llu nonzero=%zu\n",
-                                 logged, (double)f.pts_ns / 1e9,
-                                 (unsigned long long)f.seq, nz);
-                }
-                ++logged;
                 out.push_back(std::move(f));
             }
         }
@@ -258,8 +219,7 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
         ret = d->mpi->decode_put_packet(d->ctx, packet);
         if (ret == MPP_OK) break;
         const size_t before = out.size();
-        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged,
-              d->errored);
+        drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->errored);
         if (out.size() == before) {
             if (waited_ms >= kPutWaitMs) break;
             ::usleep(1000);
@@ -276,8 +236,7 @@ bool MppVideoDecoder::decode(const uint8_t* data, size_t size, int64_t pts_ns,
         error = "mpp decode_put_packet refused the packet";
         return false;
     }
-    drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->logged,
-          d->errored);
+    drain(d->ctx, d->mpi, d->width, d->height, out, pts_ns, seq, d->errored);
     return true;
 }
 
@@ -289,7 +248,7 @@ void MppVideoDecoder::flush(std::vector<DecodedVideoFrame>& out) {
     bool put = false;
     for (int waited_ms = 0; waited_ms < kPutWaitMs; ++waited_ms) {
         if (d->mpi->decode_put_packet(d->ctx, packet) == MPP_OK) { put = true; break; }
-        drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged, d->errored);
+        drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->errored);
         ::usleep(1000);
     }
     mpp_packet_deinit(&packet);
@@ -299,8 +258,7 @@ void MppVideoDecoder::flush(std::vector<DecodedVideoFrame>& out) {
     // the hardware when EOS goes in. Wait for the EOS frame itself, or the
     // decoder is destroyed with them inside and every fragment loses its tail.
     for (int waited_ms = 0; waited_ms < kPutWaitMs; ++waited_ms) {
-        if (drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->logged,
-                  d->errored))
+        if (drain(d->ctx, d->mpi, d->width, d->height, out, 0, 0, d->errored))
             return;
         ::usleep(1000);
     }
