@@ -193,6 +193,25 @@ each, so the history is findable without being 1,100 lines in the way.
 - **Phase 10 tiles**, the AES67 stream controls, the open AES67 stack replacing
   the licensed card, the decoder seek/timeline readout, resume-stale dialog,
   orphaned cache sweep, idle keep-alive fix, and the monitoring heartbeat.
+- **2026-09-23 sweep, on `main`, not released.** Seven small faults found
+  reading the logs after #10:
+  - A clean End Broadcast logged a failed upload and a retry. The upload
+    `stop()` aborts is no longer counted (`test_retry_cancel`).
+  - Every launch logged an ERROR, "not paired yet", on a paired machine. That
+    was only the wait for credentials, and is now an info line.
+  - After a hold, the feed ran four fragments (about 24 s) ahead until the next
+    seek, because held time counted as falling behind
+    (`feed_start_after_hold`, `test_feed_wait`). Fixed on OBS and the Pi.
+  - The Pi pushed the fragment in hand when a hold began. It now keeps it, the
+    same rule as #10.
+  - Caption bridge: a source created during Go Live could be missed, a callback
+    could be added that could never be removed, and one could arrive after
+    `stop()`.
+  - One frame was dropped at the start of every hold.
+  - Tests used fixed temp directories, so parallel runs broke each other
+    (`tests/test_tmpdir.h`).
+
+  None of the OBS-side changes is verified live yet.
 
 ---
 
