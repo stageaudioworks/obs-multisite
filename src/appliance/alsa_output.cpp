@@ -19,11 +19,13 @@
 #include "sysinfo.h"   // to report why sound broke up, rather than guess
 #include "pcm_convert.h"
 #include "idle_keepalive.h"   // the cushion, and the buffer that holds it
+#include "alsa_stall.h"       // the bound on waiting for a card that has stopped
 
 #include <alsa/asoundlib.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -53,8 +55,11 @@ public:
     void close() override;
     bool ok() const override { return m_pcm != nullptr; }
 
+    // Its own lock, not the card's: every status request asks for this, and a
+    // card that has stopped taking samples must not be able to make the page
+    // (and the whole player with it) wait.
     std::string description() const override {
-        std::lock_guard<std::mutex> lk(m_mtx);
+        std::lock_guard<std::mutex> lk(m_desc_mtx);
         return m_description;
     }
 
@@ -64,6 +69,10 @@ public:
     std::vector<AudioDevice> devices() const override;
 
 private:
+    void set_description(std::string d) {
+        std::lock_guard<std::mutex> lk(m_desc_mtx);
+        m_description = std::move(d);
+    }
     bool recover(int err);
     // Hands `frames` of already-formatted samples to the card, recovering from
     // an under-run without losing the rest of the buffer.
@@ -79,6 +88,7 @@ private:
     void keep_fed();
 
     mutable std::mutex m_mtx;
+    mutable std::mutex m_desc_mtx;   // guards m_description only
     snd_pcm_t*  m_pcm = nullptr;
     int         m_rate = 48000;
     int         m_channels = 2;
@@ -90,6 +100,8 @@ private:
     // the log faster than it fills its buffer.
     long long   m_xruns = 0;
     long long   m_logged_xruns = 0;
+    // Times the card stopped taking samples altogether (alsa_stall.h).
+    long long   m_stalls = 0;
     // Channels the feed carries, when the device would not take them all.
     int         m_source_channels = 0;
     // Scratch for the converted samples, kept between writes so the thread that
@@ -265,11 +277,11 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
         const double granted_ms = (double)buffer_size * 1000.0 / (double)rate;
         const double period_ms  = (double)period_size  * 1000.0 / (double)rate;
         const double asked_ms   = (double)buffer_us_asked / 1000.0;
-        m_description = std::string(device) + ", " +
+        set_description(std::string(device) + ", " +
                         std::to_string(m_channels) +
                         (m_channels == 1 ? " channel at " : " channels at ") +
                         std::to_string(m_rate) + " Hz, " +
-                        pcm_format_name(m_format);
+                        pcm_format_name(m_format));
         if (granted_ms < asked_ms / 2.0) {
             plog_warn("%s gave a %.0f ms buffer, not the %.0f ms asked for "
                       "(%.0f ms of it per period, %d periods). The thread that "
@@ -294,9 +306,10 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
         return false;
     }
 
-    m_description += ", " + std::to_string((int)(buffer_size * 1000ULL /
-                                    (unsigned)(m_rate > 0 ? m_rate : 1))) +
-                     " ms buffer";
+    set_description(description() + ", " +
+                    std::to_string((int)(buffer_size * 1000ULL /
+                                         (unsigned)(m_rate > 0 ? m_rate : 1))) +
+                    " ms buffer");
     m_xruns = m_logged_xruns = 0;
     m_bytes.clear();
 
@@ -366,7 +379,7 @@ void AlsaOutput::close() {
     m_buffer_frames = 0;
     m_idle_cushion = 0;
     m_silence.clear();
-    m_description = "no audio output";
+    set_description("no audio output");
 }
 
 bool AlsaOutput::recover(int err) {
@@ -437,6 +450,13 @@ void AlsaOutput::write(const multisite::DecodedAudioFrame& frame) {
         write_frames(m_bytes.data(), m_bytes.size() / frame_bytes);
 }
 
+// Writes only what the card has room for, and waits for room in bounded
+// slices. It used to hand the whole frame to a blocking snd_pcm_writei while
+// holding the card's lock; a card that stopped taking samples (the HDMI audio
+// on a hotplug event) then held that lock for ever, and the status page, the
+// keep-alive thread and the picture all froze behind it. Now a card with no
+// room for kAlsaStallMs is restarted once, and after that the rest of this
+// frame is dropped so the audio thread moves on (alsa_stall.h).
 bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
     if (!m_pcm) return false;
     const size_t frame_bytes = (size_t)m_channels *
@@ -444,9 +464,57 @@ bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
     if (frame_bytes == 0) return false;
 
     snd_pcm_uframes_t remaining = frames;
+    int waited_ms = 0;
+    int restarts = 0;
     while (remaining > 0) {
-        const snd_pcm_sframes_t wrote = snd_pcm_writei(m_pcm, data, remaining);
+        const snd_pcm_sframes_t avail = snd_pcm_avail_update(m_pcm);
+        if (avail < 0) {
+            if (!recover((int)avail)) {
+                snd_pcm_close(m_pcm);
+                m_pcm = nullptr;
+                return false;
+            }
+            continue;
+        }
+        if (avail == 0) {
+            const int w = snd_pcm_wait(m_pcm, kAlsaWaitSliceMs);
+            if (w < 0) {
+                if (!recover(w)) {
+                    snd_pcm_close(m_pcm);
+                    m_pcm = nullptr;
+                    return false;
+                }
+                continue;
+            }
+            if (w == 0) {
+                waited_ms += kAlsaWaitSliceMs;
+                switch (alsa_stall_action(waited_ms, restarts)) {
+                    case StallAction::Wait:
+                        break;
+                    case StallAction::Restart:
+                        ++m_stalls;
+                        ++restarts;
+                        waited_ms = 0;
+                        plog_warn("sound card has taken no samples for %d ms — restarting "
+                                  "its stream (%lld time%s). On HDMI this follows the display "
+                                  "being replugged or re-probed.",
+                                  kAlsaStallMs, m_stalls, m_stalls == 1 ? "" : "s");
+                        snd_pcm_drop(m_pcm);
+                        snd_pcm_prepare(m_pcm);
+                        break;
+                    case StallAction::GiveUp:
+                        plog_warn("sound card still taking no samples after a restart — "
+                                  "dropping this audio so the picture carries on");
+                        return false;
+                }
+            }
+            continue;
+        }
+        const snd_pcm_uframes_t n =
+            std::min(remaining, (snd_pcm_uframes_t)avail);
+        const snd_pcm_sframes_t wrote = snd_pcm_writei(m_pcm, data, n);
         if (wrote < 0) {
+            if (wrote == -EAGAIN) continue;
             if (!recover((int)wrote)) {
                 snd_pcm_close(m_pcm);
                 m_pcm = nullptr;
@@ -454,6 +522,7 @@ bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
             }
             continue;
         }
+        waited_ms = 0;
         data += (size_t)wrote * frame_bytes;
         remaining -= (snd_pcm_uframes_t)wrote;
     }
@@ -549,7 +618,11 @@ void AlsaOutput::keep_fed() {
             1000000000ULL;
         if (!idle) announced = false;
 
-        std::lock_guard<std::mutex> lk(m_mtx);
+        // Only if the lock is free: the delivery thread holding it is writing
+        // real audio, which is the opposite of idle, and waiting behind it is
+        // how this thread once joined a player-wide freeze.
+        std::unique_lock<std::mutex> lk(m_mtx, std::try_to_lock);
+        if (!lk.owns_lock()) continue;
         if (!m_pcm || m_silence.empty()) continue;
 
         const snd_pcm_sframes_t avail = snd_pcm_avail_update(m_pcm);

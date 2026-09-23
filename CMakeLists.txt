@@ -701,6 +701,10 @@ add_executable(test_idle_keepalive tests/test_idle_keepalive.cpp)
 target_include_directories(test_idle_keepalive PRIVATE src/appliance)
 add_test(NAME idle_keepalive COMMAND test_idle_keepalive)
 
+add_executable(test_alsa_stall tests/test_alsa_stall.cpp)
+target_include_directories(test_alsa_stall PRIVATE src/appliance)
+add_test(NAME alsa_stall COMMAND test_alsa_stall)
+
 # The AES67 daemon's REST interface, as shapes: the source body the player
 # sends, the JSON it reads back, and the SDP the daemon publishes. All text, all
 # easy to get quietly wrong — a channel map naming the wrong eight channels is
