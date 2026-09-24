@@ -87,15 +87,21 @@ What remains, with nothing gating it now that the plugin is proven:
 - **#12 — run the Pi paired.** Built; the only unchecked box is the one that
   matters, a paired appliance playing from the broker's bucket. Switching the
   bench Pi's provider to Multisite Cloud is the whole test.
-- **Cue credentials — built, not yet run live.** A decoder on Multisite Cloud
+- **Cue credentials — verified on the OBS plugin (2026-09-24); the Pi is not
+  yet run.** A decoder source on Multisite Cloud fetched its cue permission on
+  joining the event and wrote the collector's key with it:
+  `cue "log test" set — segment 2, written to events/01M371AF…/cues/
+  nathanmacbook-3f7089.json with this event's cue permission`. The first run
+  named the file after the Mac's hostname: the OBS decoder's heartbeat never
+  sent its site name (`3d518b4`). A decoder on Multisite Cloud
   asks `POST /v1/credentials/cue` for its own cue file when it joins an event
   (multisite-cloud `dcb109b`, TELEMETRY.md §4), holds it beside the read-only
   credential, and writes exactly the `object_key` it names; every read stays
   read-only. Both hosts, one core (`cue_credentials.h`, `CueWriter`). Only
   for a box whose storage is Multisite Cloud, not every box with a collector:
   a monitoring-only pairing reads a typed bucket, and its cue belongs there.
-  Done when a paired Pi drops a cue live and it lands at `object_key` and on
-  every site's timeline — which is also the #12 test.
+  Still to see: a paired Pi doing the same, and the cue on the encoder's and
+  other sites' timelines — which is also the #12 test.
 - **#13 — check the Pi page's Cloud section.** The docks' half is proven by use
   (pairing was done from one). The appliance page landed in `2cb63d7`, unseen.
 - **#11 — re-home the heartbeat onto `CloudIdentity`.** Migrated on both hosts
