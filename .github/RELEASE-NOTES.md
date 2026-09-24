@@ -31,6 +31,83 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.25-alpha
+
+**The End broadcast button says "End broadcast" again.** In v0.1.24-alpha it
+read "Dock.End" on US English installs. A missing line break in the
+translation file had glued that entry onto the one before it, which also
+spoiled the message shown while a machine waits for its Multisite Cloud
+credentials. A test now checks every translation file is one entry per line,
+and that every string the plugin asks for exists.
+
+**A campus on Multisite Cloud can drop cues.** A campus reads Multisite Cloud
+with a read-only permission, so until now its cues were refused. It now asks
+Multisite Cloud for a second permission when it joins an event, one that can
+write its own cue file and nothing else, and writes the cue with it. Because
+it is fetched on joining rather than when the button is pressed, cues keep
+working if Multisite Cloud becomes unreachable during the service. A box that
+never got one hands its cue to the main site over the LAN when it can, and
+otherwise says plainly that the cue was not saved. Verified on the OBS plugin;
+the campus player has the same code and is not yet proven on a Pi.
+
+Every cue a site drops now leaves a line in the log, set or not: which
+segment, which file, and how it got there. It used to leave nothing.
+
+**The OBS docks show the link figures on Multisite Cloud.** The data centre,
+host, transfer speed and clock check were blank on a machine storing or
+playing through Multisite Cloud, because the docks only asked the typed-key
+connection. They are filled in on both docks now, and they no longer blank
+for a moment each time the credentials refresh. The decoder's heartbeat also
+sends the site's name now, so the Multisite Cloud dashboard can say which box
+it is. It had only been sending it from the encoder and the Pi.
+
+**The campus player on Multisite Cloud.** Several faults, all on a Pi set to
+Multisite Cloud, which is **built but not yet proven on a Pi**:
+
+- It restarted playback every time its credentials refreshed, about every
+  7.5 minutes, losing its position. While Multisite Cloud was unreachable it
+  rebuilt every five seconds and could not play at all. It now rebuilds only
+  when it is given a different bucket.
+- Changing the storage provider on its page did not take effect until then.
+  It does at once now.
+- Its page could not list recordings, its storage health said "the player is
+  not running", and its clock check always read zero. All three now use the
+  Multisite Cloud connection.
+
+**Stopping just after a credential refresh no longer hangs.** A download that
+began before the refresh was not cancelled by a stop, so the stop could wait
+out that download's full timeout. This affected the OBS plugin too.
+
+**The campus player, on other hardware.**
+
+- **Rockchip hardware decode.** On a Rockchip board running its vendor
+  kernel, a ROCK 5B for example, video now decodes in hardware through MPP
+  for H.264, HEVC, VP9 and AV1. Everywhere else, including every Raspberry
+  Pi and the OBS plugin, decoding is unchanged.
+- **A sound card that stops taking audio no longer freezes the player.** On
+  a ROCK 5B the HDMI audio stopped when the display was re-detected mid-play,
+  and the picture and the page froze behind it. The audio now waits in short
+  slices, restarts the card once, and otherwise drops that audio so the
+  picture carries on.
+- It reports the kind of box it is and the board's serial when pairing,
+  rather than calling everything a Pi, and it passes an update token on to
+  appliance software when Multisite Cloud issues one. Existing Pis are
+  unchanged.
+- The installer can pin an exact tag or commit (`REF=`), so an appliance
+  installs the same player every time.
+
+**The relay can pair with Multisite Cloud**, for its heartbeat and, if you
+choose Multisite Cloud as its storage, for reading. It refuses credentials
+that could write, since it only ever reads and is the component exposed to
+the internet. Off by default; nothing changes for an existing relay.
+
+**For developers.** The core installs as a CMake package another project can
+build against (`MULTISITE_INSTALL_CORE=ON`). CI now builds only what a push
+changed, and builds a burst of pushes once.
+
+**Captions are still not in this release**, for the same reasons as before:
+they have never run end to end, and they would be on by default.
+
 ## What's new in v0.1.24-alpha
 
 **Resuming after a hold no longer freezes the picture.** Hold, then resume, and
