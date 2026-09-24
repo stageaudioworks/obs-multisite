@@ -440,6 +440,12 @@ public:
     int64_t    link_changed_ms() const { return m_link.last_change_ms(); }
 
 private:
+    // add_cue's body. `said` is what happened, for the one log line add_cue
+    // writes — the route and the file, so a log answers "was it set, and
+    // where" without anyone having to open the bucket.
+    bool add_cue_impl(const std::string& label, std::string& error,
+                      uint64_t operator_seq, int64_t operator_at_ms,
+                      std::string& said);
     DecoderConfig m_cfg;
     Transport&    m_tx;
     std::unique_ptr<SegmentCache> m_cache;

@@ -8,6 +8,7 @@
 // and never silently skipping a missing segment.
 #include "../src/core/decoder_session.h"
 #include "../src/core/checksum.h"
+#include "../src/core/log.h"
 #include "test_tmpdir.h"
 
 #include <cstdio>
@@ -1334,7 +1335,16 @@ int main() {
         DecoderSession dec(cfg, ro);
         dec.poll(enc.clock_ms);
         std::string err;
+        std::vector<std::string> logged;
+        set_log_sink([&](LogLevel, const std::string& m) { logged.push_back(m); });
         CHECK(dec.add_cue("From the north", err), "the cue is accepted");
+        set_log_sink(nullptr);
+        bool said = false;
+        for (const auto& m : logged)
+            said = said || (m.find("cue \"From the north\" set") != std::string::npos &&
+                            m.find(key) != std::string::npos &&
+                            m.find("cue permission") != std::string::npos);
+        CHECK(said, "and the log says it was set, where, and with which permission");
         CHECK(asked_for == enc.event, "the writer is asked for for THIS event");
         CHECK(store.objects.count(key) == 1, "it is written at the collector's object_key");
         CHECK(store.objects.count("events/" + enc.event + "/cues/north-campus.json") == 0,
@@ -1375,7 +1385,15 @@ int main() {
             DecoderSession dec(cfg, ro);
             dec.poll(enc.clock_ms);
             std::string err;
+            std::vector<std::string> logged;
+            set_log_sink([&](LogLevel, const std::string& m) { logged.push_back(m); });
             CHECK(!dec.add_cue("Lost", err), "with no hub, the cue is refused");
+            set_log_sink(nullptr);
+            bool said = false;
+            for (const auto& m : logged)
+                said = said || (m.find("cue \"Lost\" not saved") != std::string::npos &&
+                                m.find("could not be reached") != std::string::npos);
+            CHECK(said, "and the log says it was not saved, and why");
             CHECK(err.find("Cue not saved") != std::string::npos &&
                       err.find("could not be reached") != std::string::npos,
                   "and the reason says it was not saved, and why");

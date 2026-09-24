@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "decoder_session.h"
+#include "log.h"
 #include "session.h"     // for now_ms()
 
 #include <algorithm>
@@ -821,6 +822,19 @@ std::string DecoderSession::current_event_id() const {
 
 bool DecoderSession::add_cue(const std::string& label, std::string& error,
                              uint64_t operator_seq, int64_t operator_at_ms) {
+    // One line per cue, set or not. The encoder has always logged its own;
+    // a site's cue left nothing, so the log could not say a cue was dropped,
+    // which route it took, or why one was refused (seen live 2026-09-24).
+    std::string said;
+    const bool ok = add_cue_impl(label, error, operator_seq, operator_at_ms, said);
+    if (ok) log_info("cue \"%s\" set — %s", label.c_str(), said.c_str());
+    else    log_warn("cue \"%s\" not saved — %s", label.c_str(), error.c_str());
+    return ok;
+}
+
+bool DecoderSession::add_cue_impl(const std::string& label, std::string& error,
+                                  uint64_t operator_seq, int64_t operator_at_ms,
+                                  std::string& said) {
     std::string author;
     std::string prefix;
     std::string event_id;
@@ -930,6 +944,7 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
         }
         std::lock_guard<std::mutex> lk(m_mtx);
         if (parsed) m_markers = std::move(merged);
+        said = "handed to the encoder's LAN hub, as " + author;
         return true;
     }
 
@@ -971,6 +986,10 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
         error = p.error.empty() ? "the cue could not be written" : p.error;
         return false;
     }
+
+    said = "segment " + std::to_string(seq) + ", written to " + key +
+           (cue_writer ? " with this event's cue permission" : "") +
+           ", as " + author;
 
     // Show it here at once, rather than up to a poll later.
     std::lock_guard<std::mutex> lk(m_mtx);
