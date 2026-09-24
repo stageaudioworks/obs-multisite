@@ -643,6 +643,11 @@ if(FFMPEG_FOUND)
                      "${CMAKE_CURRENT_BINARY_DIR}/cmaf_out/seg_000.m4s")
     # The muxer test writes that fixture, so it has to run first.
     set_tests_properties(cmaf_decode PROPERTIES DEPENDS cmaf)
+
+    # One event from two muxers: media time has to run on across the join.
+    add_executable(test_cmaf_join tests/test_cmaf_join.cpp)
+    target_link_libraries(test_cmaf_join PRIVATE multisite_cmaf)
+    add_test(NAME cmaf_join COMMAND test_cmaf_join)
 else()
     message(STATUS "skipping CMAF muxer targets")
 endif()

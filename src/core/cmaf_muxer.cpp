@@ -67,6 +67,7 @@ struct CmafMuxer::Impl {
     double   seg_start_pts_s = 0.0;
     double   last_video_pts_s = 0.0;
     int      video_track = -1;
+    bool     keep_input_timestamps = false;
 
     static int write_cb(void* opaque, MS_AVIO_WRITE_BUF data, int size) {
         auto* self = static_cast<Impl*>(opaque);
@@ -91,8 +92,10 @@ struct CmafMuxer::Impl {
         fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
         // Shift timestamps so the stream starts at 0 — handles the audio
         // encoder priming delay (negative initial DTS) without an edit-list
-        // conflict against the already-written moov.
-        fmt->avoid_negative_ts = AVFMT_AVOID_NEG_TS_MAKE_ZERO;
+        // conflict against the already-written moov. Not when the caller's
+        // times are already the event's media time (see the header).
+        fmt->avoid_negative_ts = keep_input_timestamps ? AVFMT_AVOID_NEG_TS_DISABLED
+                                                       : AVFMT_AVOID_NEG_TS_MAKE_ZERO;
 
         stream_index.assign(tracks.size(), -1);
         for (size_t i = 0; i < tracks.size(); ++i) {
@@ -127,7 +130,14 @@ struct CmafMuxer::Impl {
         // CMAF-style fragmentation, caller-controlled cut points.
         AVDictionary* opts = nullptr;
         av_dict_set(&opts, "movflags",
-                    "empty_moov+frag_custom+default_base_moof+cmaf", 0);
+                    keep_input_timestamps
+                        // frag_discont: the first fragment carries its real
+                        // decode time (tfdt) rather than one measured from
+                        // this muxer's first packet; no edit list, so nothing
+                        // shifts it back.
+                        ? "empty_moov+frag_custom+default_base_moof+cmaf+frag_discont"
+                        : "empty_moov+frag_custom+default_base_moof+cmaf", 0);
+        if (keep_input_timestamps) av_dict_set(&opts, "use_editlist", "0", 0);
         int r = avformat_write_header(fmt, &opts);
         av_dict_free(&opts);
         if (r < 0) { fail("write_header"); return false; }
@@ -209,10 +219,12 @@ struct CmafMuxer::Impl {
     }
 };
 
-CmafMuxer::CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s)
+CmafMuxer::CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s,
+                     bool keep_input_timestamps)
     : d(std::make_unique<Impl>()) {
     d->tracks = std::move(tracks);
     d->target_s = target_segment_s;
+    d->keep_input_timestamps = keep_input_timestamps;
     d->setup();
 }
 CmafMuxer::~CmafMuxer() = default;

@@ -50,7 +50,15 @@ using CmafSegmentCallback =
 
 class CmafMuxer {
 public:
-    CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s);
+    // `keep_input_timestamps`: the packets' times are already the event's
+    // media time and are written as given. Off (the OBS encoder's case), the
+    // first timestamp is shifted to zero, which absorbs the AAC encoder's
+    // priming delay; but that also means a second muxer for the same event —
+    // a part after a signal drop, or a resume after a restart — starts its
+    // media time at zero again, and a decoder following the event sees time
+    // go backwards at the join. On, no packet may have a negative time.
+    CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s,
+              bool keep_input_timestamps = false);
     ~CmafMuxer();
 
     // The init segment (ftyp+moov). Available immediately after construction.
