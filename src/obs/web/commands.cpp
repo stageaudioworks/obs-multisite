@@ -350,6 +350,12 @@ std::string decoder_status_json() {
     j["role"]    = "decoder";
     j["now_ms"]  = now_ms();
     j["version"] = PLUGIN_VERSION;
+    // Which site this is, as the encoder's status already says. It was missing,
+    // so the decoder's heartbeat named no site: a dashboard could not say which
+    // box it was, and the collector — which names a player's cue file after the
+    // site it reports, else its hostname — named this one after the Mac.
+    // A copy, under the settings' own lock: the heartbeat worker calls this.
+    j["site_name"] = decoder_settings_copy().site_name;
     // The remote surface's own lock, and the one the desk set. Both are shown,
     // because "why will this not respond" has two different answers.
     j["locked"]        = web_ui_locked();
