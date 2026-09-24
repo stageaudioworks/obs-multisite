@@ -30,6 +30,9 @@ inline constexpr const char* kHeartbeatPath   = "/v1/heartbeat";
 inline constexpr const char* kPairStartPath   = "/v1/pair/start";
 inline constexpr const char* kPairPollPath    = "/v1/pair/poll";
 inline constexpr const char* kCredentialsPath = "/v1/credentials";
+// A paired decoder's second credential, for its own cue file in one event
+// (multisite-cloud TELEMETRY.md §4, "Cue credentials"; cue_credentials.h).
+inline constexpr const char* kCueCredentialsPath = "/v1/credentials/cue";
 
 // Build a collector URL from a base and a path. Trims trailing slashes from the
 // base so `https://host/` and `https://host` give the same answer. Pure, so it

@@ -15,6 +15,7 @@
 #include "model.h"
 #include "segment_cache.h"
 #include "transport.h"
+#include "cue_credentials.h"
 #include "link_health.h"
 
 #include <atomic>
@@ -91,6 +92,17 @@ struct DecoderConfig {
     // means this box writes its own cue object.
     std::function<bool(const std::string& author, const std::string& label,
                        std::string& merged_json, std::string& error)> cue_hub;
+    // A device whose storage is Multisite Cloud reads with a read-only
+    // credential, and writes its cue with a SECOND one the collector issues per
+    // event for exactly one key (cue_credentials.h). Set, this is asked for that
+    // event's writer on every cue, and it comes FIRST: the cue goes to the
+    // returned object_key, never to a key built from the author's name. With no
+    // writer available the cue goes to cue_hub when there is one, and otherwise
+    // fails with the reason — it is never written through the read-only
+    // transport, whose refusal would read as a fault in the bucket. Empty on
+    // every other kind of box, which keeps the routes below exactly as they
+    // were.
+    std::function<CueTarget(const std::string& event_id)> cue_target;
     // Segments to buffer before playback starts. Higher = more resilient.
     int    prebuffer_segments = 2;
     // Seconds of programme that must be banked (contiguously cached) before
@@ -173,6 +185,10 @@ public:
 
     RoomState room_state() const { return m_room.load(); }
     const std::string& event_id() const { return m_event_id; }
+    // The same, copied under the lock, for a thread other than the one that
+    // polls — the host's loop that tells its cue credentials which event is
+    // playing.
+    std::string current_event_id() const;
 
     // ── Pinning ──────────────────────────────────────────────────────────────
     // Play one specific event and stop following the room. Pinning an event

@@ -87,6 +87,9 @@ add_library(multisite_core STATIC
     # identity while reading storage under a pasted key is the failure this
     # exists to prevent. Pure logic, no network.
     src/core/cloud_identity.cpp
+    # A paired decoder's second credential, for its own cue file per event
+    # (multisite-cloud TELEMETRY.md §4). Same lifecycle as the one above.
+    src/core/cue_credentials.cpp
     src/core/http_date.cpp
     # Comparing this build against the published one. No network here: only the
     # part that can be wrong (is one tag newer than another) so it is tested
@@ -359,6 +362,10 @@ add_test(NAME heartbeat_reporter COMMAND test_heartbeat_reporter)
 add_executable(test_cloud_identity tests/test_cloud_identity.cpp)
 target_link_libraries(test_cloud_identity PRIVATE multisite_core)
 add_test(NAME cloud_identity COMMAND test_cloud_identity)
+
+add_executable(test_cue_credentials tests/test_cue_credentials.cpp)
+target_link_libraries(test_cue_credentials PRIVATE multisite_core)
+add_test(NAME cue_credentials COMMAND test_cue_credentials)
 
 # The low-disk readout the encoder dock and the appliance's web UI both show.
 # Pure threshold arithmetic, kept out of the statvfs/std::filesystem::space()

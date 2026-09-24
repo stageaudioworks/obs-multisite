@@ -814,12 +814,19 @@ bool DecoderSession::jump_to_marker(const std::string& marker_id) {
     return seek(target);          // seek() bounds-checks and raises a jump
 }
 
+std::string DecoderSession::current_event_id() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_event_id;
+}
+
 bool DecoderSession::add_cue(const std::string& label, std::string& error,
                              uint64_t operator_seq, int64_t operator_at_ms) {
     std::string author;
     std::string prefix;
+    std::string event_id;
     uint64_t    seq = 0;
     bool        have_hub = false;
+    std::function<CueTarget(const std::string&)> cue_target;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         author = m_cfg.author_name;
@@ -869,6 +876,8 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
             }
         }
         have_hub = static_cast<bool>(m_cfg.cue_hub);
+        cue_target = m_cfg.cue_target;
+        event_id = m_event_id;
     }
 
     // The wall-clock time of the CONTENT at that position, so a cue set on a
@@ -877,10 +886,37 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
     int64_t at_ms = operator_at_ms > 0 ? operator_at_ms : wall_clock_ms(seq);
     if (at_ms <= 0) at_ms = now_ms();
 
+    // MULTISITE CLOUD: the collector's cue credential writes exactly the key it
+    // names (cue_credentials.h). Asked for first; without one, the LAN hub if
+    // there is one, and otherwise a plain refusal — never the read-only
+    // transport, whose refused put would be reported as the bucket failing.
+    std::shared_ptr<Transport> cue_writer;
+    std::string cue_key;
+    if (cue_target) {
+        CueTarget t = cue_target(event_id);
+        if (t.tx) {
+            // The collector chose the key; check it is this event's before
+            // trusting a write to it. cloud_parse_cue_credentials refused any
+            // other shape already, so this is belt and braces.
+            if (t.object_key.compare(0, prefix.size() + 5, prefix + "cues/") != 0) {
+                error = "the cue permission names a file outside this event";
+                return false;
+            }
+            cue_writer = std::move(t.tx);
+            cue_key = t.object_key;
+        } else if (!have_hub) {
+            error = "Cue not saved: " + (t.why.empty()
+                ? std::string("this player has no permission to write cues yet")
+                : t.why) + ".";
+            return false;
+        }
+        // else: no writer, but a hub — fall through to it.
+    }
+
     // A LAN satellite hands the cue to the encoder, which owns the event and
     // writes it under this site's name — so the box stays read-only and needs
     // no bucket credentials at all.
-    if (have_hub) {
+    if (!cue_writer && have_hub) {
         std::string merged_json;
         if (!m_cfg.cue_hub(author, label, merged_json, error)) return false;
         MarkerList merged;
@@ -897,7 +933,9 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
         return true;
     }
 
-    const std::string key = prefix + "cues/" + cue_author_token(author) + ".json";
+    const std::string key = cue_writer
+        ? cue_key
+        : prefix + "cues/" + cue_author_token(author) + ".json";
 
     // Read this box's OWN cue object, append, write it back — never anyone
     // else's. That is the property the per-author layout exists to give: this
@@ -923,9 +961,12 @@ bool DecoderSession::add_cue(const std::string& label, std::string& error,
     mk.author = author;
     mine.markers.push_back(mk);
 
+    // The read above went through m_tx, the read-only transport, in every
+    // case. The put goes through the cue credential when there is one.
     const std::string body = mine.to_json();
-    auto p = m_tx.put(key, std::vector<uint8_t>(body.begin(), body.end()),
-                      "application/json", {});
+    Transport& writer = cue_writer ? *cue_writer : m_tx;
+    auto p = writer.put(key, std::vector<uint8_t>(body.begin(), body.end()),
+                        "application/json", {});
     if (!p.success) {
         error = p.error.empty() ? "the cue could not be written" : p.error;
         return false;

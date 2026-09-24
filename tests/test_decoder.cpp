@@ -74,6 +74,49 @@ public:
 };
 
 
+// The read-only credential of a paired decoder: reads and lists the store,
+// refuses every write — and counts the attempts, because the rule under test is
+// that a cue is NEVER written through it.
+class ReadOnlyView : public Transport {
+public:
+    explicit ReadOnlyView(FakeStore& s) : m_s(s) {}
+    int put_attempts = 0;
+    PutResult put(const std::string&, const std::vector<uint8_t>&,
+                  const std::string&, const std::map<std::string,std::string>&) override {
+        ++put_attempts;
+        return {false, 403, false, "AccessDenied"};
+    }
+    GetResult get(const std::string& key) override { return m_s.get(key); }
+    ListResult list(const std::string& p, const std::string& d,
+                    const std::string& c, int m) override { return m_s.list(p, d, c, m); }
+private:
+    FakeStore& m_s;
+};
+
+// The cue credential: may put exactly one key and do nothing else. Reads are
+// refused and counted, because every read stays on the read-only credential.
+class CueOnlyWriter : public Transport {
+public:
+    CueOnlyWriter(FakeStore& s, std::string key) : m_s(s), m_key(std::move(key)) {}
+    int reads = 0;
+    std::vector<std::string> puts;
+    PutResult put(const std::string& key, const std::vector<uint8_t>& body,
+                  const std::string& ct, const std::map<std::string,std::string>& t) override {
+        puts.push_back(key);
+        if (key != m_key) return {false, 403, false, "AccessDenied"};
+        return m_s.put(key, body, ct, t);
+    }
+    GetResult get(const std::string&) override {
+        ++reads; GetResult r; r.http_status = 403; r.error = "AccessDenied"; return r;
+    }
+    ListResult list(const std::string&, const std::string&, const std::string&, int) override {
+        ++reads; ListResult r; r.http_status = 403; return r;
+    }
+private:
+    FakeStore&  m_s;
+    std::string m_key;
+};
+
 // Two stores behind one Transport, with a preference the caller can flip — the
 // shape the decoder sees once an encoder has failed over: one end keeps
 // answering 200 with a manifest that has stopped moving.
@@ -1261,6 +1304,127 @@ int main() {
               "no cue object was written by the satellite itself");
         CHECK(dec.markers().size() == 1 && dec.markers()[0].label == "Hub cue",
               "the hub's merged list is reflected locally at once");
+    }
+
+    std::printf("== 24b. A paired decoder writes its cue with the cue credential ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01M371AFJJDMER8XYGSC4JJAT6");
+        enc.publish_start();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();
+        const std::string key =
+            "events/" + enc.event + "/cues/north-campus-2062aa.json";
+
+        ReadOnlyView ro(store);
+        auto writer = std::make_shared<CueOnlyWriter>(store, key);
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_cuecred").string();
+        cfg.author_name = "North Campus";
+        cfg.can_author_cues = true;
+        std::string asked_for;
+        cfg.cue_target = [&](const std::string& event_id) {
+            asked_for = event_id;
+            CueTarget t; t.tx = writer; t.object_key = key; return t;
+        };
+        bool hub_used = false;
+        cfg.cue_hub = [&](const std::string&, const std::string&,
+                          std::string&, std::string&) { hub_used = true; return true; };
+
+        DecoderSession dec(cfg, ro);
+        dec.poll(enc.clock_ms);
+        std::string err;
+        CHECK(dec.add_cue("From the north", err), "the cue is accepted");
+        CHECK(asked_for == enc.event, "the writer is asked for for THIS event");
+        CHECK(store.objects.count(key) == 1, "it is written at the collector's object_key");
+        CHECK(store.objects.count("events/" + enc.event + "/cues/north-campus.json") == 0,
+              "not at a key built from the site's name");
+        CHECK(ro.put_attempts == 0, "nothing was put through the read-only credential");
+        CHECK(writer->reads == 0, "and nothing was read through the cue credential");
+        CHECK(!hub_used, "a cue credential comes before the LAN hub");
+
+        CHECK(dec.add_cue("Again", err), "a second cue");
+        {
+            const auto& raw = store.objects[key];
+            auto ml = MarkerList::from_json(std::string(raw.begin(), raw.end()));
+            CHECK(ml.markers.size() == 2,
+                  "is appended: the read half of the read-modify-write found the first");
+        }
+        CHECK(writer->reads == 0, "and that read went through the read-only credential too");
+    }
+
+    std::printf("== 24c. No cue credential: the hub, or a plain refusal — never the read-only one ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01M371AFJJDMER8XYGSC4JJAT7");
+        enc.publish_start();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();
+
+        ReadOnlyView ro(store);
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_cuenone").string();
+        cfg.author_name = "North Campus";
+        cfg.can_author_cues = true;
+        cfg.cue_target = [](const std::string&) {
+            CueTarget t;
+            t.why = "Multisite Cloud could not be reached for a cue permission";
+            return t;
+        };
+        {
+            DecoderSession dec(cfg, ro);
+            dec.poll(enc.clock_ms);
+            std::string err;
+            CHECK(!dec.add_cue("Lost", err), "with no hub, the cue is refused");
+            CHECK(err.find("Cue not saved") != std::string::npos &&
+                      err.find("could not be reached") != std::string::npos,
+                  "and the reason says it was not saved, and why");
+            CHECK(ro.put_attempts == 0,
+                  "it did NOT try the read-only credential and report the bucket");
+        }
+
+        bool hub_used = false;
+        cfg.cue_hub = [&](const std::string& author, const std::string& label,
+                          std::string& merged, std::string& error) {
+            hub_used = true;
+            MarkerList ml;
+            Marker mk; mk.seq = 1; mk.at_ms = enc.clock_ms; mk.type = "cue";
+            mk.label = label; mk.id = "hub-id"; mk.author = author;
+            ml.markers.push_back(mk);
+            merged = ml.to_json();
+            error.clear();
+            return true;
+        };
+        DecoderSession dec(cfg, ro);
+        dec.poll(enc.clock_ms);
+        std::string err;
+        CHECK(dec.add_cue("Through the hub", err), "with a hub, the cue goes through it");
+        CHECK(hub_used && ro.put_attempts == 0, "and still not through the read-only credential");
+    }
+
+    std::printf("== 24d. A writer for a file outside this event is not trusted ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01M371AFJJDMER8XYGSC4JJAT8");
+        enc.publish_start();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();
+        const std::string elsewhere = "events/01M371AFJJDMER8XYGSC4JJZZZ/cues/x.json";
+        ReadOnlyView ro(store);
+        auto writer = std::make_shared<CueOnlyWriter>(store, elsewhere);
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_cueelse").string();
+        cfg.author_name = "North Campus";
+        cfg.can_author_cues = true;
+        cfg.cue_target = [&](const std::string&) {
+            CueTarget t; t.tx = writer; t.object_key = elsewhere; return t;
+        };
+        DecoderSession dec(cfg, ro);
+        dec.poll(enc.clock_ms);
+        std::string err;
+        CHECK(!dec.add_cue("Misdirected", err), "the cue is refused");
+        CHECK(writer->puts.empty() && store.objects.count(elsewhere) == 0,
+              "and nothing was written anywhere");
     }
 
     std::printf("== 25. A cue on a RECORDING lands at the playhead, not the end ==\n");

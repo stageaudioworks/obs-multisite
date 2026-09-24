@@ -24,6 +24,7 @@
 
 #include "transport.h"
 #include "cloud_identity.h"
+#include "cue_credentials.h"
 #include "s3_transport.h"
 
 #include <memory>
@@ -133,5 +134,49 @@ private:
     mutable std::string m_built_session;
     mutable bool        m_built_stale = false;
 };
+
+// Writes the one object a cue credential allows (cue_credentials.h).
+//
+// Built from the CueCredentials a host's reporter keeps fresh, and handed to a
+// DecoderSession through DecoderConfig::cue_target. It builds a plain
+// S3Transport from the cue set — rebuilt when the set changes, like
+// CloudTransport's inner — and is used for the cue put alone. It does not read:
+// the read half of add_cue's read-modify-write stays on the session's own
+// read-only transport, as the brief requires.
+class CueWriter {
+public:
+    CueWriter(std::shared_ptr<CueCredentials> creds, const CloudStorageConfig& cfg);
+
+    // A transport and key to write `event_id`'s cue with, or why there is none.
+    CueTarget target(const std::string& event_id);
+
+private:
+    std::shared_ptr<CueCredentials> m_creds;
+    CloudStorageConfig              m_cfg;
+    std::mutex                      m_mtx;
+    std::shared_ptr<S3Transport>    m_tx;
+    std::string                     m_built_for;   // token + expiry + key
+};
+
+// One cue-credential step, for a host's reporter thread: if the wanted event is
+// due, POST /v1/credentials/cue with this enrolment's bearer and hand the
+// outcome to `creds`. Returns what happened so the host can log it in its own
+// voice. Does nothing, and returns fetched=false, when nothing is due.
+struct CueStep {
+    bool                fetched = false;
+    std::string         event_id;
+    CueCredentialsReply reply;
+};
+CueStep serve_cue_credentials(CueCredentials& creds, const Enrolment& en);
+
+// What a step is worth saying in a log, in one voice for both hosts: the line,
+// and how loud. A host logs it only when it differs from the last one it
+// logged, so a collector that is down is reported once, not every retry.
+struct CueStepLine {
+    enum class Level { Info, Warn, Error };
+    Level       level = Level::Info;
+    std::string text;   // empty when nothing was fetched
+};
+CueStepLine cue_step_line(const CueStep& step, long long now_ms);
 
 } // namespace multisite

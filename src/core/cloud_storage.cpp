@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cloud_storage.h"
+#include "collector_client.h"
+
+#include <chrono>
 
 namespace multisite {
 
@@ -274,6 +277,102 @@ int64_t CloudTransport::server_clock_skew_ms() const {
     // alone, this went to 0 — "nothing observed" — after every refresh.
     const S3Transport* t = observed_locked();
     return t ? t->server_clock_skew_ms() : 0;
+}
+
+CueWriter::CueWriter(std::shared_ptr<CueCredentials> creds,
+                     const CloudStorageConfig& cfg)
+    : m_creds(std::move(creds)), m_cfg(cfg) {}
+
+CueTarget CueWriter::target(const std::string& event_id) {
+    CueTarget t;
+    if (!m_creds) { t.why = "this player has no cue permissions"; return t; }
+    const long long now_ms = (long long)std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    const CueCredentials::Held h = m_creds->held(event_id, now_ms);
+    if (!h.present) { t.why = h.why; return t; }
+
+    std::lock_guard<std::mutex> lk(m_mtx);
+    const std::string built_for = h.creds.session_token + "|" +
+        std::to_string(h.creds.expires_at_ms) + "|" + h.object_key;
+    if (!m_tx || m_built_for != built_for) {
+        S3Config s3 = s3_config_from_credentials(h.creds);
+        s3.region = m_cfg.region;
+        s3.use_https = m_cfg.use_https;
+        s3.connect_timeout_ms = m_cfg.connect_timeout_ms;
+        s3.request_timeout_ms = m_cfg.request_timeout_ms;
+        m_tx = std::make_shared<S3Transport>(s3);
+        m_built_for = built_for;
+    }
+    t.tx = m_tx;
+    t.object_key = h.object_key;
+    return t;
+}
+
+CueStep serve_cue_credentials(CueCredentials& creds, const Enrolment& en) {
+    CueStep step;
+    if (!en.paired()) return step;
+    const long long now_ms = (long long)std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    const CueCredentials::Due due = creds.tick(now_ms);
+    if (!due.fetch) return step;
+
+    step.fetched = true;
+    step.event_id = due.event_id;
+    const HttpResult r = http_post_json(
+        collector_url(en.url, kCueCredentialsPath), en.token,
+        cue_credentials_request(due.event_id));
+    if (!r.reached) {
+        step.reply.outcome = CueCredentialsReply::Outcome::Unreachable;
+    } else {
+        step.reply = cloud_parse_cue_credentials(r.body, r.code, due.event_id);
+    }
+    creds.on_reply(due.event_id, step.reply, now_ms);
+    return step;
+}
+
+CueStepLine cue_step_line(const CueStep& st, long long now_ms) {
+    CueStepLine l;
+    if (!st.fetched) return l;
+    using O = CueCredentialsReply::Outcome;
+    using L = CueStepLine::Level;
+    switch (st.reply.outcome) {
+    case O::Ok:
+        l.text = "cue credentials: event " + st.event_id + " — may write " +
+                 st.reply.object_key + " (expires in " +
+                 std::to_string((st.reply.creds.expires_at_ms - now_ms) / 1000) +
+                 " s)";
+        break;
+    case O::Unreachable:
+        l.level = L::Warn;
+        l.text = "cue credentials: Multisite Cloud not reached for event " +
+                 st.event_id + " — a cue uses the permission already held, or "
+                 "the LAN hub, until it is";
+        break;
+    case O::Unpaired:
+        l.level = L::Warn;
+        l.text = "cue credentials: the collector says this device is UNPAIRED — "
+                 "no more cue permissions will be fetched";
+        break;
+    case O::NotADecoder:
+        l.level = L::Warn;
+        l.text = "cue credentials: the collector says this is an encoder (409), "
+                 "which writes cues with its own credential — not asking again";
+        break;
+    case O::BadEvent:
+        l.level = L::Error;
+        l.text = "cue credentials: the collector rejected event id " +
+                 st.event_id + " (400) — a bug on this side; not asking again "
+                 "for it";
+        break;
+    case O::Failed:
+        l.level = L::Warn;
+        l.text = "cue credentials: event " + st.event_id + " refused (HTTP " +
+                 std::to_string(st.reply.http_code) + ") — will try again";
+        break;
+    }
+    return l;
 }
 
 } // namespace multisite
