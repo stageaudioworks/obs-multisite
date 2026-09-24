@@ -194,6 +194,10 @@ struct SourceCtx : DecoderControls {
     // the CloudTransport was built in a local shared_ptr, referenced by
     // FallbackTransport, and destroyed when the builder returned.
     std::shared_ptr<multisite::CloudTransport> cloud_transport;
+    // Whether this source reads through Multisite Cloud, for the poll loop to
+    // say which event it is in to the decoder's cue credentials. Atomic: set
+    // with the session under obj_mtx, read by the poll loop without it.
+    std::atomic<bool> reads_cloud{false};
     // Null unless a LAN host is configured (PROJECT-SCOPE.md §8.7). Kept
     // alongside `transport` (never in place of it) so stop_playback()'s
     // "cancel whatever is in flight" and play()'s re-arm reach BOTH legs —
@@ -1559,6 +1563,15 @@ static void poll_loop(SourceCtx* ctx) {
             // poll() does network I/O and can take seconds; never under a lock.
             RoomState st = sess->poll();
 
+            // Which event this source is in, for the decoder's cue credential:
+            // fetched on joining, so a cue dropped later needs nothing from the
+            // collector. Only a source reading Multisite Cloud says; the
+            // credentials are the machine's, so with two such sources in two
+            // events the worker refreshes whichever each names (a handful are
+            // kept, see CueCredentials).
+            if (ctx->reads_cloud.load())
+                reporter_cue_credentials()->want_event(sess->current_event_id());
+
             // Pick up how this feed was composited. It comes from the manifest,
             // so it is known before the first frame is decoded and it follows a
             // change of event — a room that sends one camera this week and four
@@ -2290,6 +2303,17 @@ static void src_update(void* data, obs_data_t* s) {
             csc.region = shared.region;
             cloud_tx = std::make_shared<multisite::CloudTransport>(
                 *identity, multisite::CloudRole::Decoder, csc);
+            // The cue credential's writer, beside the read-only leg: a cue goes
+            // to the key the collector names, with the one permission it grants
+            // (cue_credentials.h). Shorter timeout than a segment read — a cue
+            // is a button press, and someone is waiting on the answer.
+            multisite::CloudStorageConfig cue_csc = csc;
+            cue_csc.request_timeout_ms = 10000;
+            auto cue_writer = std::make_shared<multisite::CueWriter>(
+                reporter_cue_credentials(), cue_csc);
+            dc.cue_target = [cue_writer](const std::string& event_id) {
+                return cue_writer->target(event_id);
+            };
             mlog_info("source: storage is Multisite Cloud — bucket '%s'",
                       cloud_tx->bucket().c_str());
         } else if (provider == "multisite_cloud" && identity && identity->paired()) {
@@ -2345,12 +2369,17 @@ static void src_update(void* data, obs_data_t* s) {
             }
         }
 
-        if (lan_tx && !cloud) {
+        if (lan_tx && (!cloud || cloud_tx)) {
             // A cue goes to the encoder's hub only when there is NO bucket to
             // write to. With cloud configured the cue is written directly, so a
             // configured-but-unreachable LAN host — a box tested at home, an
             // encoder that is switched off — can never take cue authoring down
             // with it.
+            //
+            // MULTISITE CLOUD is the exception: its bucket credential is
+            // read-only, and the cue credential (dc.cue_target, above) comes
+            // first. The hub is only its fallback, for when no cue permission
+            // could be fetched — add_cue decides, per cue.
             dc.cue_hub = [lan_tx](const std::string& author,
                                   const std::string& label,
                                   std::string& merged, std::string& error) {
@@ -2390,6 +2419,7 @@ static void src_update(void* data, obs_data_t* s) {
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         ctx->transport       = tx;
         ctx->cloud_transport = cloud_tx;   // keeps the paired leg alive
+        ctx->reads_cloud     = (cloud_tx != nullptr);
         ctx->lan_transport   = lan_tx;
         ctx->fallback        = fb;
         ctx->mirror_read     = mirror_tx;
@@ -2454,6 +2484,7 @@ static void src_destroy(void* data) {
         ctx->lan_transport.reset();
         ctx->transport.reset();
         ctx->cloud_transport.reset();
+        ctx->reads_cloud = false;
     }
     delete ctx;
 }

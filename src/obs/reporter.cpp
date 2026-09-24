@@ -172,6 +172,11 @@ struct RoleIdentity {
 };
 RoleIdentity g_id_encoder;
 RoleIdentity g_id_decoder;
+// The decoder's cue credentials (reporter_cue_credentials). Made once, before
+// anything can ask, and never replaced; it locks itself.
+const std::shared_ptr<multisite::CueCredentials> g_cue_creds =
+    std::make_shared<multisite::CueCredentials>();
+std::string g_cue_last_said;   // worker thread only
 
 RoleIdentity& role_identity(multisite::CloudRole r) {
     return r == multisite::CloudRole::Encoder ? g_id_encoder : g_id_decoder;
@@ -579,6 +584,30 @@ void serve_cloud_credentials(multisite::CloudRole role) {
     }
 }
 
+// The decoder's cue credential for the event a paired source is playing. Due
+// only while a source has said so (reporter_cue_credentials()->want_event), so
+// a machine that does not read Multisite Cloud never fetches one.
+void serve_cue_credentials() {
+    auto id = g_id_decoder.id;
+    if (!id) return;
+    const multisite::CueStep st =
+        multisite::serve_cue_credentials(*g_cue_creds, id->enrolment());
+    if (!st.fetched) return;
+    const long long now_ms = (long long)std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    const multisite::CueStepLine line = multisite::cue_step_line(st, now_ms);
+    // Once per change; the expiry is left out, so a routine refresh is not one.
+    const std::string key = line.text.substr(0, line.text.find(" (expires in "));
+    if (line.text.empty() || key == g_cue_last_said) return;
+    g_cue_last_said = key;
+    switch (line.level) {
+    case multisite::CueStepLine::Level::Info:  mlog_info("%s", line.text.c_str()); break;
+    case multisite::CueStepLine::Level::Warn:  mlog_warn("%s", line.text.c_str()); break;
+    case multisite::CueStepLine::Level::Error: mlog_error("%s", line.text.c_str()); break;
+    }
+}
+
 void loop() {
     multisite::collector_http_init();
     g_id_encoder.id = std::make_shared<multisite::CloudIdentity>();
@@ -589,6 +618,7 @@ void loop() {
         reporter_adopt_saved_pairing();
         serve_cloud_credentials(multisite::CloudRole::Encoder);
         serve_cloud_credentials(multisite::CloudRole::Decoder);
+        serve_cue_credentials();
         serve(g_encoder);
         serve(g_decoder);
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -678,6 +708,10 @@ reporter_cloud_identity(multisite::CloudRole role) {
     return role_identity(role).id;
 }
 
+std::shared_ptr<multisite::CueCredentials> reporter_cue_credentials() {
+    return g_cue_creds;
+}
+
 namespace {
 // One role's saved pairing into that role's identity — never another role's.
 void adopt_role(multisite::CloudRole role, const Slot& slot) {
@@ -697,6 +731,8 @@ void adopt_role(multisite::CloudRole role, const Slot& slot) {
             id->reset();
             ri.src.clear();
             ri.last_bucket.clear();
+            // The decoder's cue permissions were the old pairing's too.
+            if (role == multisite::CloudRole::Decoder) g_cue_creds->reset();
         }
         return;
     }
@@ -715,6 +751,8 @@ void adopt_role(multisite::CloudRole role, const Slot& slot) {
     }
     ri.src = src;
     id->set_enrolment(cfg.url, cfg.id, cfg.token);
+    // A new appliance holds none of the old one's cue permissions.
+    if (role == multisite::CloudRole::Decoder) g_cue_creds->reset();
 }
 } // namespace
 

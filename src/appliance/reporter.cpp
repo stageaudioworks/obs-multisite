@@ -269,6 +269,8 @@ void Reporter::loop() {
         // collector connection, the clock and the network. It fetches only when
         // the identity says one is due, so a steady state costs nothing.
         if (m_worker->player) m_worker->player->serve_cloud_credentials();
+        // And the cue credential for the event being played, beside it.
+        if (m_worker->player) m_worker->player->serve_cue_credentials();
         serve_once();
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

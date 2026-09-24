@@ -264,6 +264,13 @@ was set.
   cue file, so its key needs permission for that file alone. On a LAN with no
   bucket, the cue is handed to the main site, which writes it — so a campus box
   can set cues with no bucket credentials at all.
+- **On Multisite Cloud** a campus reads with a read-only permission, so it asks
+  Multisite Cloud for a second one when it joins an event, allowing it to write
+  its own cue file and nothing else. Because it is fetched on joining rather
+  than on the click, cues keep working if Multisite Cloud becomes unreachable
+  during the service. A box that never got one (Multisite Cloud unreachable from
+  the start) hands the cue to the main site over the LAN when it can, and
+  otherwise says plainly that the cue was not saved.
 
 Set the box's **Site name** under **Settings…** first (for example "Campus B").
 A box with no site name still receives and jumps to cues; it simply cannot set

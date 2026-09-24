@@ -327,6 +327,11 @@ public:
     // collector connection, the clock and the network. It calls this each tick;
     // the method fetches only when the identity says one is due.
     void serve_cloud_credentials();
+    // The cue credential for the event being played (cue_credentials.h), on
+    // the same thread: fetched on joining an event so a cue dropped later does
+    // not wait on — or depend on — the collector. Only when this box's storage
+    // is Multisite Cloud.
+    void serve_cue_credentials();
 
     // The box's cloud identity, under the object mutex. The reporter and the
     // transport share it — which is the point: one identity for storage and
@@ -457,6 +462,13 @@ private:
     // of it, because the two answer different questions: what to read through,
     // and what to report about the cloud leg.
     std::shared_ptr<multisite::CloudTransport> m_cloud_transport;
+    // The cue credentials this box holds, per event. Made once and never
+    // replaced, so the pointer needs no lock; the object locks itself. The
+    // writer built from it is rebuilt with the session, under m_obj_mtx.
+    const std::shared_ptr<multisite::CueCredentials> m_cue_creds =
+        std::make_shared<multisite::CueCredentials>();
+    std::shared_ptr<multisite::CueWriter> m_cue_writer;
+    std::string m_cue_last_said;   // reporter thread only: log once per change
     // LAN (PROJECT-SCOPE.md §8.7), null unless cfg.lan_configured().
     std::shared_ptr<multisite::LanTransport>       m_lan_transport;
     // Only constructed when BOTH of the above exist; DecoderSession and

@@ -392,6 +392,35 @@ void Player::serve_cloud_credentials() {
     m_poll_now = true;
 }
 
+void Player::serve_cue_credentials() {
+    std::shared_ptr<CloudIdentity> id;
+    {
+        std::lock_guard<std::mutex> lk(m_obj_mtx);
+        id = m_identity;
+    }
+    if (!id || !paired_for_storage(config())) return;
+
+    const multisite::CueStep st =
+        multisite::serve_cue_credentials(*m_cue_creds, id->enrolment());
+    if (!st.fetched) return;
+
+    // Once per change, not per retry: a collector that is down is asked every
+    // fifteen seconds, and the log should say so once. The expiry is left out
+    // of the comparison, so a routine refresh is not a change either.
+    const long long now_ms = (long long)std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    const multisite::CueStepLine line = multisite::cue_step_line(st, now_ms);
+    const std::string key = line.text.substr(0, line.text.find(" (expires in "));
+    if (line.text.empty() || key == m_cue_last_said) return;
+    m_cue_last_said = key;
+    switch (line.level) {
+    case multisite::CueStepLine::Level::Info:  plog_info("%s", line.text.c_str()); break;
+    case multisite::CueStepLine::Level::Warn:  plog_warn("%s", line.text.c_str()); break;
+    case multisite::CueStepLine::Level::Error: plog_error("%s", line.text.c_str()); break;
+    }
+}
+
 void Player::note_error(const std::string& what) {
     std::lock_guard<std::mutex> lk(m_err_mtx);
     m_last_error = what;
@@ -418,6 +447,7 @@ void Player::adopt_saved_pairing(const Config& cfg) {
             plog_info("cloud identity: pairing cleared — no longer reading or "
                       "reporting as %s", m_identity->appliance_id().c_str());
             m_identity->reset();
+            m_cue_creds->reset();   // they were the old pairing's too
         }
         return;
     }
@@ -430,6 +460,7 @@ void Player::adopt_saved_pairing(const Config& cfg) {
         return;
     m_identity->set_enrolment(cfg.reporter_url, cfg.reporter_appliance_id,
                               cfg.reporter_token);
+    m_cue_creds->reset();   // a new appliance holds none of the old one's
 }
 
 bool Player::paired_for_storage(const Config& cfg) const {
@@ -457,6 +488,7 @@ void Player::rebuild_session() {
 
     m_transport.reset();
     m_cloud_transport.reset();
+    m_cue_writer.reset();
     m_lan_transport.reset();
     m_fallback_transport.reset();
     m_session.reset();
@@ -491,6 +523,12 @@ void Player::rebuild_session() {
         csc.region = cfg.region;
         m_cloud_transport =
             std::make_shared<CloudTransport>(*m_identity, role, csc);
+        // The cue credential's writer, beside the read-only leg. Shorter
+        // timeouts than a segment read: a cue is dropped from a button, and the
+        // person pressing it is waiting for the answer.
+        CloudStorageConfig cue_csc = csc;
+        cue_csc.request_timeout_ms = 10000;
+        m_cue_writer = std::make_shared<CueWriter>(m_cue_creds, cue_csc);
     } else if (cfg.cloud_configured()) {
         S3Config s3;
         s3.endpoint_host     = cfg.endpoint_host;
@@ -550,6 +588,12 @@ void Player::rebuild_session() {
     // Cues: who this box is, and whether it may drop one. See DecoderConfig.
     dc.author_name          = cfg.site_name;
     dc.can_author_cues      = !cfg.site_name.empty() && cfg.configured();
+    // MULTISITE CLOUD: the cue goes to the collector's cue credential first;
+    // the hub below, when there is LAN, is its fallback (see add_cue).
+    if (m_cue_writer) {
+        auto w = m_cue_writer;
+        dc.cue_target = [w](const std::string& event_id) { return w->target(event_id); };
+    }
     if (m_lan_transport && !m_transport) {
         // A cue goes to the encoder's hub only when there is no bucket to write
         // to. With cloud configured the cue is written directly, so a
@@ -1697,6 +1741,14 @@ void Player::poll_loop() {
                 // poll() does network I/O and can take seconds; never under a
                 // lock.
                 const RoomState st = sess->poll();
+
+                // Which event this box is in, for its cue credential: fetched
+                // on joining, so a cue dropped later needs nothing from the
+                // collector. Only a box whose storage is Multisite Cloud holds
+                // one; every other box wants none, and so fetches none.
+                m_cue_creds->want_event(paired_for_storage(config())
+                                            ? sess->current_event_id()
+                                            : std::string());
 
                 // The declared layout, for the crop the delivery thread
                 // applies. It cannot change mid-event (event.json is written

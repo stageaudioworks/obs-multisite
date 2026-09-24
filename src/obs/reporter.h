@@ -44,6 +44,12 @@ void reporter_stop();
 std::shared_ptr<multisite::CloudIdentity>
 reporter_cloud_identity(multisite::CloudRole role);
 
+// The DECODER's cue credentials (cue_credentials.h): one per event, fetched by
+// this worker for whichever event a paired decoder source says it is playing,
+// so a cue dropped later needs nothing from the collector. Decoder only — an
+// encoder writes its cues with its own read-write credential. Never null.
+std::shared_ptr<multisite::CueCredentials> reporter_cue_credentials();
+
 // Adopt each role's saved collector url/id/token into that role's identity, so
 // an already-paired install works with no operator action. Called by the
 // worker each tick, cheap and idempotent.
