@@ -454,6 +454,12 @@ void DrmOutput::present(const multisite::DecodedVideoFrame& frame) {
     }
     if (!m_sws) return;
 
+    // With two buffers, the back one is still on screen until the flip queued
+    // last time has happened. Drawing into it before then paints over the
+    // picture being scanned out: on a 30 Hz output with 30 fps content the
+    // two lock in step and every frame tears at the same line (seen through
+    // an HDMI capture; on 60 Hz the flip lands long before the next frame).
+    wait_for_flip();
     Framebuffer& fb = back();
     if (!fb.map) return;
 
@@ -480,6 +486,7 @@ void DrmOutput::present_bgrx(int width, int height, int stride,
                              const uint8_t* pixels) {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_fd < 0 || !pixels) return;
+    wait_for_flip();   // not into the buffer still on screen (present)
     Framebuffer& fb = back();
     if (!fb.map) return;
 
@@ -497,6 +504,7 @@ void DrmOutput::present_bgrx(int width, int height, int stride,
 void DrmOutput::blank() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_fd < 0) return;
+    wait_for_flip();   // not into the buffer still on screen (present)
     Framebuffer& fb = back();
     if (!fb.map) return;
     std::memset(fb.map, 0, (size_t)fb.size);
