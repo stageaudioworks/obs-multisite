@@ -20,6 +20,7 @@ extern "C" {
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -121,7 +122,16 @@ struct CmafDecoder::Impl {
 
     SwsContext* sws = nullptr;
     int sws_w = 0, sws_h = 0, sws_fmt = -1;
-    SwrContext* swr = nullptr;
+    // One converter per audio track, made for that track's own layout. An
+    // event's tracks need not match (a stereo mix beside a mono ISO, or a
+    // packed eight beside a stereo programme); one converter shared between
+    // them read every track but the first with the wrong channel count.
+    struct Resampler {
+        SwrContext* swr = nullptr;
+        AVChannelLayout layout{};
+        int format = -1, rate = 0;
+    };
+    std::map<int, Resampler> resamplers;
 
     int width = 0, height = 0, audio_tracks = 0;
     std::string video_codec;
@@ -225,8 +235,15 @@ struct CmafDecoder::Impl {
     void emit_audio(AVFrame* f, AVRational tb, int track_index) {
         if (!on_audio) return;
         const int out_ch = f->ch_layout.nb_channels > 0 ? f->ch_layout.nb_channels : 2;
-        if (!swr) {
-            swr = swr_alloc();
+        Resampler& r = resamplers[track_index];
+        if (r.swr && (r.format != f->format || r.rate != f->sample_rate ||
+                      av_channel_layout_compare(&r.layout, &f->ch_layout) != 0)) {
+            // The track changed shape (a new event on the same decoder).
+            swr_free(&r.swr);
+            av_channel_layout_uninit(&r.layout);
+        }
+        if (!r.swr) {
+            SwrContext* swr = swr_alloc();
             av_opt_set_chlayout(swr, "in_chlayout", &f->ch_layout, 0);
             av_opt_set_chlayout(swr, "out_chlayout", &f->ch_layout, 0);
             av_opt_set_int(swr, "in_sample_rate", f->sample_rate, 0);
@@ -234,7 +251,12 @@ struct CmafDecoder::Impl {
             av_opt_set_sample_fmt(swr, "in_sample_fmt", (AVSampleFormat)f->format, 0);
             av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
             if (swr_init(swr) < 0) { swr_free(&swr); return; }
+            r.swr = swr;
+            av_channel_layout_copy(&r.layout, &f->ch_layout);
+            r.format = f->format;
+            r.rate = f->sample_rate;
         }
+        SwrContext* swr = r.swr;
         DecodedAudioFrame out;
         out.sample_rate = f->sample_rate;
         out.channels = out_ch;
@@ -243,7 +265,7 @@ struct CmafDecoder::Impl {
         out.interleaved.resize((size_t)f->nb_samples * out_ch);
         uint8_t* dstp = reinterpret_cast<uint8_t*>(out.interleaved.data());
         int got = swr_convert(swr, &dstp, f->nb_samples,
-                              (const uint8_t**)f->data, f->nb_samples);
+                              (const uint8_t**)f->extended_data, f->nb_samples);
         if (got <= 0) return;
         out.frames = (uint32_t)got;
         out.interleaved.resize((size_t)got * out_ch);
@@ -541,7 +563,10 @@ struct CmafDecoder::Impl {
 
     ~Impl() {
         if (sws) sws_freeContext(sws);
-        if (swr) swr_free(&swr);
+        for (auto& kv : resamplers) {
+            swr_free(&kv.second.swr);
+            av_channel_layout_uninit(&kv.second.layout);
+        }
     }
 };
 

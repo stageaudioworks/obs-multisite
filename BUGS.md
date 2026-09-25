@@ -11,7 +11,7 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-09-21.
+Last updated: 2026-09-25.
 
 ---
 
@@ -145,6 +145,34 @@ immediately instead, which its own comment says not to do while held.
 
 **Archive:** `docs/bugs/02-hold-resume-skips.md` — the 2026-09-23 section is
 the one to read.
+
+### 3. Packed audio from OBS: channel 4 is the LFE, and comes out low-passed
+
+**Status: open, not started.** Measured 2026-09-25, not yet heard in a room.
+
+**Symptom (expected, from the measurement).** In packed multi-channel mode
+(§4.3.1) the fourth channel — "Click" in the default `channel_labels` — reaches
+a satellite as low frequencies only. A click becomes a thud or nothing; a voice
+there, a mumble.
+
+**Root cause.** The OBS encoder sends eight channels as 7.1, because that is
+OBS's speaker setting and the AAC encoder takes OBS's layout. In 7.1 the fourth
+channel is the LFE, and AAC codes an LFE element as the lowest bands only.
+`tests/test_cmaf_tracks.cpp` shows it: a 3150 Hz tone on channel 4 of a 7.1
+track does not come back. The 2026-09-07 check proved channel *order*, which is
+intact; it did not play full-range sound on channel 4.
+
+**Next step.** Encode the packed track as octagonal (eight full-range channels,
+no LFE; FFmpeg writes a PCE for it) whatever OBS's speaker layout, as the
+MultisiteOS encoder does (multisite-outpost, `audio_feed.cpp`). The satellite
+already ignores positions. Check the OBS satellite still presents eight
+channels to OBS's 7.1 mixer from an octagonal stream.
+
+**The trap.** Do not move "Click" to another channel as the fix: every channel
+of a packed track must be full range, and the next user's click is on 4.
+
+**Files:** `src/obs/multisite_output.cpp` (the packed path),
+`tests/test_cmaf_tracks.cpp`.
 
 ---
 
