@@ -31,6 +31,40 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.26-alpha
+
+A small release, for campuses receiving from the new MultisiteOS encoder box.
+
+**Audio tracks of different sizes now all play correctly.** When an event's
+audio tracks had different channel counts, a campus decoded every track after
+the first as if it had the first's channel count. A stereo mix beside a mono
+microphone track could crash the decoder, and an eight-channel track beside a
+stereo one came back as noise across all eight channels. Events from OBS have
+not hit this, because OBS sends every track with the same channel count, but an
+event from a MultisiteOS encoder, which sends a stereo programme with all eight
+channels beside it, would. This fixes the OBS plugin and the campus player
+alike. A test now plays a stereo, a mono and an eight-channel track together
+and checks every channel of every track comes back in order.
+
+**The relay sends the programme when an event also carries every channel.** A
+MultisiteOS encoder sends its stereo programme as track 1 and every AES67
+channel as one packed track beside it, for campuses with a multi-channel
+output. The relay used to refuse the whole event because of that packed track.
+It now sends the programme, and never sends the packed track or offers it as a
+choice, since that would put the microphones and the click on air. An event
+with nothing but a packed track is still refused, as before.
+
+**Known, not fixed: packed audio from OBS loses the highs on channel 4.** In
+packed multi-channel mode OBS sends eight channels as 7.1, and in 7.1 the
+fourth channel is the low-frequency (subwoofer) channel, which AAC keeps only
+the lowest frequencies of. With the default channel names that is "Click", so
+a click can reach a campus as a thud or not at all. Until this is fixed, put
+nothing on channel 4 of a packed feed that needs more than bass. Separate
+audio tracks, the default mode, are not affected. (BUGS.md entry 3.)
+
+**Captions are still not in this release**, for the same reasons as before:
+they have never run end to end, and they would be on by default.
+
 ## What's new in v0.1.25-alpha
 
 **The End broadcast button says "End broadcast" again.** In v0.1.24-alpha it
