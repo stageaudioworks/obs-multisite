@@ -446,7 +446,10 @@ ServiceStatus Service::status() const {
     if (!snap.last_error.empty() && s.storage_error.empty())
         s.storage_error = snap.last_error;
 
-    for (const auto& t : snap.manifest.audio_tracks) s.audio_labels.push_back(t.label);
+    // What a destination can be set to send: never a packed track (it would
+    // put the microphones and the click on air), which plan_stream refuses.
+    for (const auto& t : snap.manifest.audio_tracks)
+        if (!multisite::is_packed(t)) s.audio_labels.push_back(t.label);
 
     if (snap.have_event_info) {
         const auto& v = snap.manifest.video;

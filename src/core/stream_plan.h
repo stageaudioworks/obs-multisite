@@ -100,6 +100,10 @@ struct RoomSendability {
 
 RoomSendability sendability(const multisite::Manifest& manifest);
 
+// One stream carrying several sources in fixed channel positions
+// (PROJECT-SCOPE.md 4.3.1): never sent onward, and never offered as a choice.
+bool is_packed(const AudioTrack& t);
+
 // `input` is what ffmpeg reads. In the relay this is always "pipe:0": the
 // feeder owns the write end and hands over one fragment at a time, and a pipe
 // that goes quiet is what the machine reads as a stall.

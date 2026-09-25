@@ -57,8 +57,11 @@ main site delays the public stream rather than breaking it.
   YouTube; it settles nothing about anywhere else.
 - **Split up packed multi-channel audio.** If the main site sends its sound as
   one multi-channel track with the mix, the microphones and the click inside
-  it, the relay refuses rather than guessing which channels are the programme.
-  Send separate audio tracks instead. (See `PROJECT-SCOPE.md` §4.3.)
+  it, the relay never sends that track and never offers it as a choice. An
+  event that carries a separate programme track beside it (a MultisiteOS
+  encoder's does) sends the programme; one with only the packed track is
+  refused rather than guessing which channels are the programme. (See
+  `PROJECT-SCOPE.md` §4.3.1.)
 - **Sign in to YouTube.** You paste a stream key. Creating the broadcast still
   happens in YouTube's own page.
 - **Start by itself** at a scheduled time or when the encoder goes live.

@@ -888,9 +888,13 @@ rather than adapted:
   carries that caveat above every destination. Over SRT there is nothing to
   send: ffmpeg cannot mux AV1 into MPEG-TS.
 - **Packed multi-channel audio (§4.3.1)** — the mix, ISOs and click sharing one
-  track — is refused; sending it unchanged would put a mic ISO or the click out
-  to the public. Multi-track events (§4.3) are fine: each destination carries one
-  track, chosen by the label the main site published.
+  track — is never sent and never offered as a choice; sending it unchanged
+  would put a mic ISO or the click out to the public. Multi-track events (§4.3)
+  are fine: each destination carries one track, chosen by the label the main
+  site published, and a destination with none chosen takes the first track
+  that is not packed. So an event carrying a stereo programme *beside* a packed
+  track (a MultisiteOS encoder's does) is sent; one with only a packed track is
+  refused.
 - **An unknown codec is refused outright** on both protocols.
 
 **Supervision is the point, not a refinement.** Each destination has one ffmpeg

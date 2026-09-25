@@ -171,6 +171,32 @@ int main() {
               "and says what is inside it, because that is the danger");
     }
     {
+        // A MultisiteOS encoder's event: the stereo programme, then every
+        // channel packed beside it for campuses with a multi-channel output.
+        Manifest m;
+        m.video.codec = "h264";
+        AudioTrack packed = track(1, "All channels (AES67)", 8);
+        packed.channel_labels = { "Main L", "Main R", "Sermon", "Click",
+                                  "Spare", "Spare", "Spare", "Spare" };
+        m.audio_tracks = { track(0, "Programme", 2), packed };
+        auto p = plan_stream(m, dest(), "/tmp/f.fifo");
+        CHECK(p.ok, "a programme beside a packed track: the programme is sent");
+        bool maps_programme = false;
+        for (size_t i = 0; i + 1 < p.args.size(); ++i)
+            if (p.args[i] == "-map" && p.args[i + 1] == "0:a:0") maps_programme = true;
+        CHECK(maps_programme, "and it is the programme that is mapped, not the packed track");
+        p = plan_stream(m, dest("All channels (AES67)"), "/tmp/f.fifo");
+        CHECK(!p.ok && p.problem.find("click") != std::string::npos,
+              "choosing the packed track by name is still refused, with why");
+        m.audio_tracks = { packed, track(1, "Programme", 2) };
+        m.audio_tracks[1].idx = 1;
+        m.audio_tracks[0].idx = 0;
+        p = plan_stream(m, dest(), "/tmp/f.fifo");
+        CHECK(p.ok && p.problem.empty(),
+              "packed first: the default is the first track that can be sent");
+        CHECK(sendability(m).any, "and the room is sendable");
+    }
+    {
         Manifest m = ordinary();
         auto p = plan_stream(m, dest("Sermon Mic"), "/tmp/f.fifo");
         CHECK(!p.ok, "a saved track name that no longer exists is refused");

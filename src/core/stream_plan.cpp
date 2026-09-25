@@ -39,14 +39,6 @@ std::string join_labels(const std::vector<AudioTrack>& tracks) {
     return out;
 }
 
-// A packed multi-channel feed is one stream carrying the main mix, the ISOs
-// and the click in fixed channel positions (PROJECT-SCOPE.md 4.3.1). It is
-// identified by published channel labels, not by a mode flag — there isn't
-// one — and only ever set beyond stereo.
-bool is_packed(const AudioTrack& t) {
-    return !t.channel_labels.empty() || t.channels > 2;
-}
-
 // Replaces every occurrence of `secret` in `s` with `with`. Substring rather
 // than whole-argument, because under SRT a secret sits inside a URL alongside
 // things worth keeping in the log.
@@ -58,6 +50,14 @@ void scrub(std::string& s, const std::string& secret, const char* with) {
 }
 
 } // namespace
+
+// A packed multi-channel feed is one stream carrying the main mix, the ISOs
+// and the click in fixed channel positions (PROJECT-SCOPE.md 4.3.1). It is
+// identified by published channel labels, not by a mode flag — there isn't
+// one — and only ever set beyond stereo.
+bool is_packed(const AudioTrack& t) {
+    return !t.channel_labels.empty() || t.channels > 2;
+}
 
 std::string output_url(const Destination& d) {
     if (protocol_of(d) == Protocol::Rtmp) {
@@ -282,17 +282,24 @@ StreamPlan plan_stream(const Manifest& manifest,
     // Packed multi-channel: one stream carrying the mix, the ISOs and the
     // click together. Sending it on unchanged would put a mic ISO or the click
     // track out to the public. This has nothing to do with the transport —
-    // SRT would carry it perfectly well — so it is refused on both.
-    for (const auto& t : tracks) {
-        if (!is_packed(t)) continue;
+    // SRT would carry it perfectly well — so it is never what is sent, on
+    // either. An event may carry one *beside* a programme track (a
+    // MultisiteOS encoder does: the stereo programme first, and every channel
+    // packed after it for campuses with a multi-channel output); then the
+    // programme is sent and the packed track is not a candidate at all.
+    auto packed_refusal = [&](const AudioTrack& t) {
         p.problem = "The main site is sending its sound as one "
                     + channels_word(t.channels) +
                     " track with the mix, the microphones and the click all "
                     "inside it.";
         p.remedy  = "Picking one pair out of that is not built yet. Set the "
-                    "main site to send separate audio tracks instead.";
+                    "main site to send a separate programme track as well.";
         return p;
-    }
+    };
+    std::vector<AudioTrack> sendable;
+    for (const auto& t : tracks)
+        if (!is_packed(t)) sendable.push_back(t);
+    if (sendable.empty()) return packed_refusal(tracks[0]);
 
     // Resolve the operator's choice. By label, always — the UI never shows an
     // index, and a saved destination must keep meaning the same thing even if
@@ -300,11 +307,17 @@ StreamPlan plan_stream(const Manifest& manifest,
     int index = -1;
     std::string label;
     if (dest.audio.label.empty()) {
-        index = 0;                       // the main mix, by convention
-        label = tracks[0].label;
+        // The main mix, by convention: the first track that can be sent.
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            if (is_packed(tracks[i])) continue;
+            index = (int)i;
+            label = tracks[i].label;
+            break;
+        }
     } else {
         for (size_t i = 0; i < tracks.size(); ++i) {
             if (tracks[i].label != dest.audio.label) continue;
+            if (is_packed(tracks[i])) return packed_refusal(tracks[i]);
             index = (int)i;
             label = tracks[i].label;
             break;
@@ -312,7 +325,7 @@ StreamPlan plan_stream(const Manifest& manifest,
         if (index < 0) {
             p.problem = "This event does not have a sound feed called \"" +
                         dest.audio.label + "\".";
-            p.remedy  = "It is sending " + join_labels(tracks) +
+            p.remedy  = "It is sending " + join_labels(sendable) +
                         ". Choose one of those instead.";
             return p;
         }
