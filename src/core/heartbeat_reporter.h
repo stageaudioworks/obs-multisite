@@ -187,10 +187,16 @@ std::string heartbeat_mint_device_id(const std::string& hostname,
                                      const std::string& kind,
                                      long long now_ns, long long pid);
 // `serial` is omitted from the body when empty rather than sent as "".
+// `role` likewise: for a kind whose role is a setting on the box (a Light or
+// Pro unit, an encoder or a decoder by its shape), the collector grants write
+// access only when the pairing asks for "encoder", and read-only otherwise —
+// so the headless encoder says so here. Other kinds' roles follow from the
+// kind, and a stated one is ignored (multisite-cloud ingest/pairing.ts).
 std::string heartbeat_pair_start_body(const std::string& device_id,
                                       const std::string& kind,
                                       const std::string& hostname,
-                                      const std::string& serial = std::string());
+                                      const std::string& serial = std::string(),
+                                      const std::string& role = std::string());
 std::string heartbeat_pair_poll_body(const std::string& poll_token);
 
 class Pairing {

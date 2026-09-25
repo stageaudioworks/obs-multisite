@@ -305,12 +305,14 @@ std::string heartbeat_mint_device_id(const std::string& hostname,
 std::string heartbeat_pair_start_body(const std::string& device_id,
                                       const std::string& kind,
                                       const std::string& hostname,
-                                      const std::string& serial) {
+                                      const std::string& serial,
+                                      const std::string& role) {
     json j;
     j["device_id"] = device_id;
     j["kind"] = kind;
     j["hostname"] = hostname;
     if (!serial.empty()) j["serial"] = serial;
+    if (role == "encoder" || role == "decoder") j["role"] = role;
     return j.dump();
 }
 

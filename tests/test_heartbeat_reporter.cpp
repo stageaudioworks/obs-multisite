@@ -290,6 +290,15 @@ int main() {
             heartbeat_pair_start_body("dev_x", "outpost-light", "box", "abc123"));
         CHECK(with_serial["serial"] == "abc123", "a serial is sent when known");
         CHECK(with_serial["kind"] == "outpost-light", "the configured kind is sent");
+        CHECK(!start.contains("role") && !with_serial.contains("role"),
+              "no role is omitted: the OBS plugin and the Pi send what they always have");
+        const json encoder = json::parse(heartbeat_pair_start_body(
+            "dev_x", "outpost-light", "box", "abc123", "encoder"));
+        CHECK(encoder["role"] == "encoder",
+              "a Light encoder asks for the encoder role (else it pairs read-only)");
+        CHECK(!json::parse(heartbeat_pair_start_body("d", "outpost-light", "b", "", "writer"))
+                   .contains("role"),
+              "  and only encoder or decoder is ever sent");
         const json poll = json::parse(heartbeat_pair_poll_body("p"));
         CHECK(poll["poll_token"] == "p", "poll carries the token");
     }
