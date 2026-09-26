@@ -443,10 +443,18 @@ int DecoderSession::pump_downloads(int max) {
         auto r = m_tx.get(prefix + "init.mp4");
         if (!m_tx.last_request_cancelled())
             m_link.observe(link_reachable_result(r.success, r.http_status));
-        if (!r.success && !m_tx.last_request_cancelled()) {
-            std::lock_guard<std::mutex> lk(m_mtx);
-            { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "init.mp4: HTTP " + std::to_string(r.http_status) +
-                           " " + r.error; }
+        if (!r.success) {
+            // A cancelled request is not an error to report, but it is not an
+            // init segment either. It used to fall through to the store below
+            // and write its empty body as init.mp4 — which has_init() then
+            // counted as present, so it was never fetched again and playback
+            // waited on it for ever (a Stop or seek during the download, on a
+            // Mac following a ROCK 5B encoder, 2026-09-26).
+            if (!m_tx.last_request_cancelled()) {
+                std::lock_guard<std::mutex> lk(m_mtx);
+                std::lock_guard<std::mutex> elk(m_err_mtx);
+                m_last_error = "init.mp4: HTTP " + std::to_string(r.http_status) + " " + r.error;
+            }
             return 0;
         }
         if (!m_cache->store_init(r.body)) return 0;

@@ -98,6 +98,23 @@ int main() {
         CHECK(c.has(0), "calling set_event with the current id does not wipe it");
     }
 
+    std::printf("== 5. An empty init segment is not an init segment ==\n");
+    {
+        // A cancelled init download used to be stored as an empty init.mp4,
+        // which has_init() counted as present: never fetched again, playback
+        // waited on it for ever (2026-09-26).
+        fs::path dir = base / "t5";
+        SegmentCache c(dir.string(), "EVENT_I");
+        CHECK(!c.store_init({}), "storing an empty init is refused");
+        CHECK(!c.has_init(), "  and leaves none");
+        fs::create_directories(dir / "EVENT_I");
+        std::ofstream(dir / "EVENT_I" / "init.mp4", std::ios::binary).close();   // what the bug left
+        CHECK(fs::exists(dir / "EVENT_I" / "init.mp4") && !c.has_init(),
+              "an empty init.mp4 already on disk counts as missing, so it is fetched again");
+        CHECK(c.store_init({1, 2, 3}) && c.has_init() && c.load_init()->size() == 3,
+              "a real one is stored, and is there");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0
         ? "ALL SEGMENT-CACHE TESTS PASSED"

@@ -108,6 +108,9 @@ static bool write_atomic(const std::string& path,
 }
 
 bool SegmentCache::store_init(const std::vector<uint8_t>& bytes) {
+    // An init segment is never empty: refusing one keeps "stored" meaning
+    // "decodable", whatever went wrong upstream.
+    if (bytes.empty()) return false;
     std::string path;
     { std::lock_guard<std::mutex> lk(m_mtx); ensure_dir(); path = init_path(); }
     return write_atomic(path, bytes);
@@ -124,7 +127,11 @@ std::optional<std::vector<uint8_t>> SegmentCache::load_init() const {
 bool SegmentCache::has_init() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     std::error_code ec;
-    return fs::exists(init_path(), ec);
+    // An empty file is not an init segment. Caches written before the fix
+    // above can hold one, and treating it as present held playback for ever;
+    // treating it as absent fetches the real one again.
+    const auto size = fs::file_size(init_path(), ec);
+    return !ec && size > 0;
 }
 
 bool SegmentCache::store(uint64_t seq, const std::vector<uint8_t>& bytes,
