@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cmaf_decoder.h"
+#include "log.h"
 #include "mpp_decoder.h"
 
 extern "C" {
@@ -148,7 +149,20 @@ struct CmafDecoder::Impl {
     bool ok_flag = true;
     std::string err;
 
-    void fail(const std::string& m) { if (ok_flag) { ok_flag = false; err = m; } }
+    // The decoder stops for good on its first failure, so that one is said:
+    // a host that only saw "no frames delivered" had nothing to go on.
+    void fail(const std::string& m) {
+        if (ok_flag) {
+            ok_flag = false;
+            err = m;
+            log_error("decoder: stopped: %s", m.c_str());
+        }
+    }
+
+    // What the stream carries, said when it is first opened and again only
+    // when it changes (a new event, a new layout) — never per fragment.
+    std::string last_layout;
+    std::map<std::string, bool> said_open_failure;
 
     bool push(std::vector<uint8_t> bytes, uint64_t seq) {
         std::unique_lock<std::mutex> lk(q_mtx);
@@ -302,10 +316,12 @@ struct CmafDecoder::Impl {
             fail("avformat_open_input (invalid init or fragment?)");
             return;
         }
-        if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        if (const int sr = avformat_find_stream_info(fmt, nullptr); sr < 0) {
             avformat_close_input(&fmt);
             if (avio) { if (avio->buffer) av_freep(&avio->buffer); avio_context_free(&avio); }
-            fail("avformat_find_stream_info");
+            char e[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(sr, e, sizeof(e));
+            fail(std::string("the stream could not be read (avformat_find_stream_info: ") + e + ")");
             return;
         }
 
@@ -422,7 +438,22 @@ struct CmafDecoder::Impl {
             if (!ctxs[i] && !(par->codec_type == AVMEDIA_TYPE_VIDEO && mpp)) {
                 const AVCodec* sw = avcodec_find_decoder(par->codec_id);
                 AVCodecContext* c = open_codec(par, sw);
-                if (!c) continue;
+                if (!c) {
+                    // Skipped, as before — the other tracks still play — but
+                    // said, once per kind of failure: a track that silently
+                    // decodes nothing is indistinguishable from silence.
+                    const std::string what = std::string("stream #") + std::to_string(i) + " (" +
+                        avcodec_get_name(par->codec_id) + ", " +
+                        (par->codec_type == AVMEDIA_TYPE_AUDIO
+                             ? std::to_string(par->ch_layout.nb_channels) + " ch"
+                             : std::to_string(par->width) + "x" + std::to_string(par->height)) +
+                        "): " + (sw ? "its decoder would not open" : "this build has no decoder for it");
+                    if (!said_open_failure[what]) {
+                        said_open_failure[what] = true;
+                        log_warn("decoder: %s; that track is skipped", what.c_str());
+                    }
+                    continue;
+                }
                 ctxs[i] = c;
                 dec = sw;
             }
@@ -437,6 +468,38 @@ struct CmafDecoder::Impl {
             else if (par->codec_type == AVMEDIA_TYPE_AUDIO) audio_idx[i] = an++;
         }
         audio_tracks = an;
+
+        // What is in the stream, and what decodes it.
+        {
+            std::string layout;
+            for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+                const AVStream* st = fmt->streams[i];
+                const AVCodecParameters* par = st->codecpar;
+                char buf[160];
+                if (par->codec_type == AVMEDIA_TYPE_VIDEO) {
+                    const AVRational fr = st->avg_frame_rate.num ? st->avg_frame_rate : st->r_frame_rate;
+                    std::snprintf(buf, sizeof(buf), "#%u video %s %dx%d %.3f fps", i,
+                                  avcodec_get_name(par->codec_id), par->width, par->height,
+                                  fr.den ? (double)fr.num / fr.den : 0.0);
+                } else if (par->codec_type == AVMEDIA_TYPE_AUDIO) {
+                    char lay[64] = {0};
+                    av_channel_layout_describe(&par->ch_layout, lay, sizeof(lay));
+                    std::snprintf(buf, sizeof(buf), "#%u audio %s %d Hz %d ch (%s)", i,
+                                  avcodec_get_name(par->codec_id), par->sample_rate,
+                                  par->ch_layout.nb_channels, lay);
+                } else {
+                    std::snprintf(buf, sizeof(buf), "#%u %s", i, av_get_media_type_string(par->codec_type));
+                }
+                layout += (layout.empty() ? "" : "; ") + std::string(buf);
+                if (par->codec_type == AVMEDIA_TYPE_VIDEO && mpp) layout += " [MPP]";
+                else if (ctxs[i]) layout += std::string(" [") + ctxs[i]->codec->name + "]";
+                else layout += " [NOT DECODED]";
+            }
+            if (layout != last_layout) {
+                last_layout = layout;
+                log_info("decoder: stream: %s", layout.c_str());
+            }
+        }
 
         // Read every packet in the fragment, then decode in TIMESTAMP order.
         //

@@ -598,7 +598,9 @@ if(FFMPEG_FOUND)
         src/core/cmaf_decoder.cpp
         src/core/mpp_decoder.cpp)
     target_include_directories(multisite_cmaf PUBLIC src src/core)
-    target_link_libraries(multisite_cmaf PUBLIC ffmpeg_iface)
+    # multisite_core for its log sink: the decoder says what a stream carries
+    # and why a track or the stream would not decode.
+    target_link_libraries(multisite_cmaf PUBLIC ffmpeg_iface multisite_core)
     set_target_properties(multisite_cmaf PROPERTIES POSITION_INDEPENDENT_CODE ON)
     multisite_apply_mpp(multisite_cmaf)
 
