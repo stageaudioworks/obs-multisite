@@ -31,6 +31,41 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.27-alpha
+
+A small release that fixes playback on a campus that failed while it was
+joining, and fixes a fault on the campus player's screen.
+
+**A campus no longer waits for ever on an event it failed to join.** Before
+it can play an event, a campus downloads a small setup file. If that download
+was cancelled partway, for example because the source was restarted while it
+was downloading, the campus saved the empty result and treated it as
+the real file. It never downloaded it again and played nothing for that
+event, with no error, even after OBS was restarted. A campus now never saves
+a failed download, and an empty setup file left by an earlier version counts
+as missing and is downloaded again, so a campus already stuck this way fixes
+itself on upgrade. Found on OBS for Mac playing an event from a MultisiteOS
+encoder. A test now fails on the old behaviour.
+
+**The OBS log says what an event carries.** When a campus starts playing, it
+now logs each track in the stream: the codec, picture size and frame rate, or
+sample rate and channel count. If an event cannot be decoded, it logs which
+part failed to open, and when the decoder stops it logs why. Until now a
+stream that did not play left nothing in the log to show what was in it.
+
+**The campus player no longer shows a tear line.** A Pi drawing to its own
+screen could show a fixed horizontal line where the picture tore. The player
+drew each new frame into the one still on screen; it now waits for the screen
+to finish with a frame before drawing into it. Verified on a Pi 5.
+
+**For developers.** A pairing with Multisite Cloud can say which role it
+wants. MultisiteOS encoders need this, because Multisite Cloud gives a Light
+box read-only storage unless it asks to be an encoder. Existing plugins and
+players are unchanged.
+
+**Captions are still not in this release**, for the same reasons as before:
+they have never run end to end, and they would be on by default.
+
 ## What's new in v0.1.26-alpha
 
 A small release, for campuses receiving from the new MultisiteOS encoder box.
