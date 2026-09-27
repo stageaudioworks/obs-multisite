@@ -266,23 +266,15 @@ note "installed $($PREFIX/bin/multisite-player --version)"
 
 # ── Where the cache goes ─────────────────────────────────────────────────────
 # The cache writes roughly 3 GB an hour. On an SD card that is a wear-out
-# problem, not a performance one, so a USB SSD is looked for and used.
+# problem, not a performance one, so a USB SSD is looked for and used. How,
+# and the Armbian ramlog trap it steers round, is in cache-dir.sh.
 say "Choosing where to keep the downloaded event"
-CACHE_DIR="$STATE_DIR/cache"
-SSD_MOUNT=""
-while read -r src target fstype _; do
-  case "$src" in
-    /dev/sd*|/dev/nvme*)
-      case "$target" in
-        /|/boot*) ;;
-        *) [ "$fstype" != "vfat" ] && SSD_MOUNT="$target" && break ;;
-      esac ;;
-  esac
-done < /proc/self/mounts
+# shellcheck source-path=SCRIPTDIR source=cache-dir.sh
+. "$SRC_DIR/scripts/player/cache-dir.sh"
+CACHE_DIR="$(choose_cache_dir "$STATE_DIR")"
 
-if [ -n "$SSD_MOUNT" ]; then
-  CACHE_DIR="$SSD_MOUNT/multisite-player/cache"
-  note "using the drive mounted at $SSD_MOUNT"
+if [ "$CACHE_DIR" != "$STATE_DIR/cache" ]; then
+  note "using the drive mounted at ${CACHE_DIR%/multisite-player/cache}"
 else
   ROOT_SRC="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
   case "$ROOT_SRC" in
@@ -322,6 +314,15 @@ EOF
   note "the storage details still need entering — from a browser, in a moment"
 fi
 
+# An earlier installer could put the cache under /var/log.hdd, which Armbian
+# copies into a small RAM disk at every boot (obs-multisite#35). Point an
+# existing config at the new choice; the old directory is removed once the
+# player has been restarted away from it, below.
+OLD_CACHE="$(cache_repair_config "$CONFIG" "$CACHE_DIR")"
+if [ -n "$OLD_CACHE" ]; then
+  note "moving the cache from $OLD_CACHE, which is kept in RAM, to $CACHE_DIR"
+fi
+
 # Remember a network key or token given above even when the config already
 # existed, without rewriting the rest of the file. python3 is present on
 # Raspberry Pi OS Lite; where it is not, a fresh install has already written
@@ -351,6 +352,10 @@ install -m 0644 "$SRC_DIR/scripts/player/$SERVICE.service" \
 systemctl daemon-reload
 systemctl enable --quiet "$SERVICE"
 systemctl restart "$SERVICE"
+if [ -n "$OLD_CACHE" ]; then
+  cache_remove_old "$OLD_CACHE"
+  note "removed $OLD_CACHE (downloaded segments; the player fetches them again)"
+fi
 
 # The console cursor and kernel messages would otherwise blink over the
 # picture the player is putting on the screen.

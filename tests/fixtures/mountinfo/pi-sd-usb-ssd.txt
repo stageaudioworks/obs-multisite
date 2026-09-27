@@ -1,0 +1,3 @@
+21 1 179:2 / / rw,noatime shared:1 - ext4 /dev/mmcblk0p2 rw
+25 21 179:1 / /boot/firmware rw,relatime shared:4 - vfat /dev/mmcblk0p1 rw,fmask=0022
+30 21 8:1 / /mnt/ssd rw,relatime shared:9 - ext4 /dev/sda1 rw

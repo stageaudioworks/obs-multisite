@@ -1,0 +1,3 @@
+22 1 259:1 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p1 rw
+27 22 254:1 / /var/log rw,nosuid,nodev,noexec,relatime shared:5 - ext4 /dev/zram1 rw
+26 22 259:1 /var/log /var/log.hdd rw,relatime shared:1 - ext4 /dev/nvme0n1p1 rw

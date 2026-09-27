@@ -281,6 +281,10 @@ if(UNIX)
     add_test(NAME core_portable
              COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_core_portable.sh
                         ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+    # Where the player installer keeps its cache: a drive, never a bind of a
+    # directory, never under /var/log (obs-multisite#35). Needs bash and python3.
+    add_test(NAME cache_dir
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cache_dir.sh)
 endif()
 
 # The signer's entire output derives from these two functions, and each

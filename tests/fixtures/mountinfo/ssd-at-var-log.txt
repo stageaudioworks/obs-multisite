@@ -1,0 +1,2 @@
+21 1 179:2 / / rw,noatime shared:1 - ext4 /dev/mmcblk0p2 rw
+30 21 8:1 / /var/log rw,relatime shared:9 - ext4 /dev/sda1 rw
