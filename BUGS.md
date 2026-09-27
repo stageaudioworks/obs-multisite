@@ -204,6 +204,12 @@ each, so the history is findable without being 1,100 lines in the way.
 - **#6 — OBS froze when uploads stalled.** A network PUT under the status lock;
   a publisher thread owns manifest writes now. Pinned by `test_session` case 21
   (1202 ms → 0 ms). FIXED.
+- **#8 — status() still waited on the network, for live.json and markers.json**
+  (obs-multisite#34). #6 moved manifest writes off the lock; the heartbeat in
+  `on_confirmed()` and `add_marker()` still PUT under it, which stalled a
+  headless encoder's capture every heartbeat on a slow link. Now built under the
+  lock and sent after it, each object's PUTs serialised, and no heartbeat after
+  "ended". Pinned by `test_session` cases 22–25 (1197 ms → 0 ms). FIXED.
 - **#7 — Windows crash: `QPointer` as a cross-thread receiver.** Receiver is
   `qApp` now; PDBs staged as a CI artifact so the next dump is readable. FIXED
   (strongly indicated, not proven).

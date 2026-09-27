@@ -404,6 +404,7 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
 // This is the only place the manifest gains an entry — the write-ordering rule.
 void Session::on_confirmed(const SpooledSegment& seg) {
   std::string manifest_json;
+  std::string live_json;   // the heartbeat, when one is due: sent after m_mtx
   {
     std::lock_guard<std::mutex> lk(m_mtx);
     ManifestSegment ms;
@@ -419,17 +420,30 @@ void Session::on_confirmed(const SpooledSegment& seg) {
     manifest_json = queue_manifest_locked();
 
     // Periodic heartbeat so decoders can distinguish "quiet" from "dead".
+    // Built here and PUT below, outside m_mtx: it used to be PUT here, and
+    // status() waited on the network for it every heartbeat (obs-multisite#34).
     int64_t t = now_ms();
-    if (t - m_last_heartbeat_ms > (int64_t)m_cfg.heartbeat_interval_s * 1000) {
+    if (m_manifest.status != "ended" &&
+        t - m_last_heartbeat_ms.load() > (int64_t)m_cfg.heartbeat_interval_s * 1000) {
         m_last_heartbeat_ms = t;
-        // publish outside the manifest lock is not required; live.json is small
         LivePointer lp;
         lp.room_id = m_cfg.room_id;
         lp.event_id = m_event_id;
         lp.status = "live";
         lp.updated_at_ms = t;
-        put_json(live_pointer_key(m_cfg.room_id), lp.to_json());
+        live_json = lp.to_json();
     }
+  }
+  if (!live_json.empty()) {
+    std::lock_guard<std::mutex> pl(m_live_put_mtx);
+    // end() may have published "ended" since this was built; a late "live"
+    // after it would bring the room back to life for every campus.
+    bool ended;
+    {
+      std::lock_guard<std::mutex> lk(m_mtx);
+      ended = m_manifest.status == "ended";
+    }
+    if (!ended) put_json(live_pointer_key(m_cfg.room_id), live_json);
   }
   // This segment's bytes are exactly what a LAN satellite would otherwise
   // wait for the bucket to hand back — and, once the spool file behind it is
@@ -533,7 +547,10 @@ void Session::publish_live(const std::string& status) {
     lp.updated_at_ms = now_ms();
     m_last_heartbeat_ms = lp.updated_at_ms;
     std::string json = lp.to_json();
-    put_json(live_pointer_key(m_cfg.room_id), json);
+    {
+        std::lock_guard<std::mutex> pl(m_live_put_mtx);
+        put_json(live_pointer_key(m_cfg.room_id), json);
+    }
     // Not called under m_mtx (publish_live never is — see its three callers),
     // so no unlock dance is needed here unlike queue_manifest_locked().
     if (m_on_live_published) m_on_live_published(json);
@@ -569,7 +586,16 @@ void Session::add_marker(const std::string& label, const std::string& type) {
         mk.author = m_author_name;      // empty reads as the main site
         mk.id    = make_event_id(mk.at_ms);
         m_markers.markers.push_back(mk);
-        json = m_markers.to_json();
+    }
+    // Sent outside m_mtx (obs-multisite#34), one at a time, and always the
+    // newest list: re-read under the PUT lock, so if two cues are dropped
+    // together the last PUT to land carries both.
+    {
+        std::lock_guard<std::mutex> pl(m_markers_put_mtx);
+        {
+            std::lock_guard<std::mutex> lk(m_mtx);
+            json = m_markers.to_json();
+        }
         put_json(event_prefix() + "markers.json", json);
     }
     // Unlocked, on the same principle as every other hook in this file: a

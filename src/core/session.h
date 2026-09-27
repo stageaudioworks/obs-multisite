@@ -358,7 +358,9 @@ private:
     // Atomic because publish_segment runs on the encode path while add_marker
     // runs on whoever pressed the button.
     std::atomic<int64_t> m_live_media_ms{0};
-    int64_t     m_last_heartbeat_ms = 0;
+    // Written by publish_live() and read by on_confirmed() on the uploader's
+    // thread, so atomic rather than guarded by m_mtx.
+    std::atomic<int64_t> m_last_heartbeat_ms{0};
     std::string m_author_name;      // guarded by m_mtx; stamped on cues
 
     Manifest    m_manifest;
@@ -388,7 +390,19 @@ private:
     ManifestPublishedCallback m_on_manifest_published;
     LivePublishedCallback     m_on_live_published;
     MarkersPublishedCallback  m_on_markers_published;
+    // THE RULE: no transport call is made with m_mtx held. Everything that
+    // reports on the session (status(), and through it an encoder's pipeline
+    // thread and the OBS dock) takes m_mtx, so a PUT under it makes all of
+    // them wait on the network (BUGS #6 for manifest.json; obs-multisite#34
+    // for live.json and markers.json). Build what is to be sent under m_mtx,
+    // release it, then send.
     mutable std::mutex m_mtx;
+    // Order what m_mtx no longer orders, now that the PUTs are outside it:
+    // one live.json PUT at a time (so a heartbeat's "live" cannot land after
+    // end()'s "ended"), and one markers.json PUT at a time, each sending the
+    // newest list (so two cues dropped together cannot land oldest-last).
+    std::mutex m_live_put_mtx;
+    std::mutex m_markers_put_mtx;
 
     std::string segment_key(uint64_t seq) const;
     std::string event_prefix() const;

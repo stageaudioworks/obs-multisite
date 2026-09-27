@@ -1010,6 +1010,121 @@ int main() {
         ses.end();
     }
 
+    // obs-multisite#34: the same stall as BUGS #6, for the two PUTs it left
+    // under m_mtx. on_confirmed() PUT live.json (the heartbeat) and
+    // add_marker() PUT markers.json with the lock held, so status(), which an
+    // encoder's pipeline thread calls once a second and the OBS dock calls on
+    // the UI thread, waited out the request. A slow link stopped capture.
+    // Both tests fail against that version. The sleeps are outside MemStore's
+    // own mutex, so they model a slow network rather than a contended mock.
+    class SlowKeyStore : public MemStore {
+    public:
+        explicit SlowKeyStore(std::string k) : slow_key(std::move(k)) {}
+        std::string slow_key;
+        std::atomic<bool> slow{false};
+        std::atomic<int> slow_puts{0};
+        PutResult put(const std::string& key, const std::vector<uint8_t>& body,
+                      const std::string& ct,
+                      const std::map<std::string,std::string>& tags) override {
+            if (slow && key.find(slow_key) != std::string::npos) {
+                ++slow_puts;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+            }
+            return MemStore::put(key, body, ct, tags);
+        }
+    };
+    auto elapsed_ms = [](std::chrono::steady_clock::time_point t0) {
+        return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - t0).count();
+    };
+
+    std::printf("== 22. a stalled live.json heartbeat does not block status() or the next segment ==\n");
+    {
+        SlowKeyStore store("live.json");
+        SessionConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.spool_dir = (base / "s22").string();
+        cfg.segment_duration_s = 6.0;
+        cfg.heartbeat_interval_s = 0;   // a heartbeat with every confirmed segment
+        Session ses(cfg, store);
+        CHECK(ses.start_new(blob(0, 1500), video, tracks), "start_new succeeded");
+        store.slow = true;
+        ses.publish_segment(blob(1, 4000), 6.0, 0.0);   // confirmed, then a heartbeat
+        for (int i = 0; i < 400 && store.slow_puts.load() == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(store.slow_puts.load() > 0, "a live.json PUT is in flight");
+
+        auto t0 = std::chrono::steady_clock::now();
+        (void)ses.status();
+        const long long st_ms = elapsed_ms(t0);
+        t0 = std::chrono::steady_clock::now();
+        ses.publish_segment(blob(2, 4000), 6.0, 6.0);
+        const long long pub_ms = elapsed_ms(t0);
+        std::printf("         status() %lld ms, publish_segment() %lld ms, during a 1200 ms live.json PUT\n",
+                    st_ms, pub_ms);
+        CHECK(st_ms < 300, "status() returns promptly while the heartbeat is stalled");
+        CHECK(pub_ms < 300, "  and so does the next segment");
+        ses.end();
+    }
+
+    std::printf("== 23. a stalled markers.json upload does not block status() ==\n");
+    {
+        SlowKeyStore store("markers.json");
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s23").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        store.slow = true;
+        std::thread cue([&] { ses.add_marker("Sermon"); });   // whoever pressed the button
+        for (int i = 0; i < 400 && store.slow_puts.load() == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(store.slow_puts.load() > 0, "a markers.json PUT is in flight");
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)ses.status();
+        const long long st_ms = elapsed_ms(t0);
+        std::printf("         status() took %lld ms during a 1200 ms markers.json PUT\n", st_ms);
+        CHECK(st_ms < 300, "status() returns promptly while a cue is uploading");
+        cue.join();
+        ses.end();
+    }
+
+    std::printf("== 24. two cues dropped together both land, whichever PUT is last ==\n");
+    {
+        SlowKeyStore store("markers.json");
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s24").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        store.slow = true;
+        std::thread a([&] { ses.add_marker("Worship"); });
+        std::thread b([&] { ses.add_marker("Sermon"); });
+        a.join();
+        b.join();
+        MarkerList ml = MarkerList::from_json(
+            store.text("events/" + ses.event_id() + "/markers.json"));
+        CHECK(ml.markers.size() == 2, "the stored markers.json has both cues");
+        ses.end();
+    }
+
+    std::printf("== 25. a heartbeat never lands after the event has ended ==\n");
+    {
+        SlowKeyStore store("live.json");
+        SessionConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.spool_dir = (base / "s25").string();
+        cfg.heartbeat_interval_s = 0;
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        store.slow = true;
+        for (int i = 1; i <= 3; ++i) ses.publish_segment(blob(i), 6.0, (i - 1) * 6.0);
+        ses.end();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));   // any heartbeat left in flight
+        LivePointer lp = LivePointer::from_json(store.text("rooms/main-auditorium/live.json"));
+        CHECK(lp.status == "ended", "live.json says ended, not a late heartbeat's live");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;
