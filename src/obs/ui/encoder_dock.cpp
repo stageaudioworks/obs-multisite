@@ -12,6 +12,7 @@
 #include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
+#include "fit_label.h"
 #include "web_box.h"
 #include "secondary_box.h"
 #include "storage_dialog.h"
@@ -101,12 +102,14 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     grid->setHorizontalSpacing(14);
     grid->setVerticalSpacing(4);
 
-    auto addStat = [&](int row, int col, const char* labelKey, QLabel*& out) {
+    auto addStat = [&](int row, int col, const char* labelKey,
+                       multisite_ui::FitLabel*& out) {
         auto* cap = new QLabel(tr_(labelKey), statusBox);
         // Dim but still legible: palette(mid) is nearly invisible on
         // OBS's dark theme, which left the numbers looking unlabelled.
         cap->setStyleSheet("color: palette(text); opacity: 0.75;");
-        out = new QLabel("—", statusBox);
+        // A FitLabel, so no value can set the width of the dock (fit_label.h).
+        out = new multisite_ui::FitLabel("—", statusBox);
         grid->addWidget(cap, row, col * 2);
         grid->addWidget(out, row, col * 2 + 1);
     };
@@ -134,6 +137,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // LAN / direct delivery (PROJECT-SCOPE.md §8.7) — only meaningful while
     // live, since the server starts at Go Live; shows "off" otherwise.
     addStat(4, 1, "Dock.Lan",       m_lan);
+    // Spare width goes to the values, not the captions (see the decoder dock).
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(3, 1);
 
     m_error = new QLabel(QString(), statusBox);
     m_error->setWordWrap(true);
@@ -1585,7 +1591,7 @@ void EncoderDock::refresh() {
         showSecond();
         // The idle probe's colo and host, so the operator can see where the
         // bucket answers from before they go live.
-        multisite_ui::set_value(m_storage, multisite_ui::link_summary(
+        m_storage->setText(multisite_ui::link_summary(
             QString::fromStdString(st.colo),
             QString::fromStdString(st.storage_host),
             st.upload_bytes_per_s, st.upload_samples));
@@ -1603,7 +1609,7 @@ void EncoderDock::refresh() {
     }
 
     if (m_storage)
-        multisite_ui::set_value(m_storage, multisite_ui::link_summary(
+        m_storage->setText(multisite_ui::link_summary(
             QString::fromStdString(st.colo),
             QString::fromStdString(st.storage_host),
             st.upload_bytes_per_s, st.upload_samples));

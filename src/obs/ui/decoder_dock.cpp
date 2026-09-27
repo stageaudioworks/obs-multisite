@@ -8,6 +8,7 @@
 #include "../update_check.h"
 #include "role_selector.h"
 #include "status_text.h"
+#include "fit_label.h"
 #include "web_box.h"
 #include "secondary_box.h"
 
@@ -588,12 +589,14 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // detail
     auto* box = new QGroupBox(tr_("Dock.Status"), this);
     auto* grid = new QGridLayout(box);
-    auto addStat = [&](int r, int c, const char* key, QLabel*& out) {
+    auto addStat = [&](int r, int c, const char* key, multisite_ui::FitLabel*& out) {
         auto* cap = new QLabel(tr_(key), box);
         // Dim but still legible: palette(mid) is nearly invisible on
         // OBS's dark theme, which left the numbers looking unlabelled.
         cap->setStyleSheet("color: palette(text); opacity: 0.75;");
-        out = new QLabel("—", box);
+        // A FitLabel, so no value — a long AES67 track name, a cue name, a
+        // host — can set the width of the dock (fit_label.h).
+        out = new multisite_ui::FitLabel("—", box);
         grid->addWidget(cap, r, c * 2);
         grid->addWidget(out, r, c * 2 + 1);
     };
@@ -606,6 +609,11 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // campus that cannot hold a buffer has no other way to tell a slow link
     // from a distant bucket.
     addStat(2, 1, "Dock.Storage",  m_storage);
+    // Spare width goes to the VALUES, not shared with the captions: a cut value
+    // should get the room back first. Without it a 1400 px dock still cut the
+    // AES67 track name in a 340 px cell (measured in a Qt layout harness).
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(3, 1);
     m_error = new QLabel(QString(), box);
     m_error->setWordWrap(true);
     m_error->setStyleSheet("color: #e5484d;");
@@ -1924,7 +1932,7 @@ void DecoderDock::refresh() {
         // rather than infer from a manifest they cannot see.
         if (s.reading_secondary)
             text += "  ·  " + tr_("Dock.ViaSecond");
-        multisite_ui::set_value(m_storage, text);
+        m_storage->setText(text);
     }
     m_buffered->setToolTip(tr_("Dock.BufferedHint"));
     // How far back the recording still exists in storage (not on this PC).

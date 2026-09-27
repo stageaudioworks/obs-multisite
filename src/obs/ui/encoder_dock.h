@@ -19,6 +19,7 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QPushButton;
 class QLabel;
+namespace multisite_ui { class FitLabel; }   // fit_label.h
 class QTimer;
 class QCheckBox;
 class QDialog;
@@ -112,7 +113,7 @@ private:
     // own machine-wide store when Apply is pressed.
     SecondaryTargetBox* m_secondary = nullptr;
     QCheckBox* m_tags = nullptr;
-    QLabel*    m_storage = nullptr;   // colo + observed upload rate
+    multisite_ui::FitLabel*    m_storage = nullptr;   // colo + observed upload rate
     QLabel*    m_version = nullptr;
     // The second bucket's state, when one is configured (Phase 9). Hidden
     // otherwise. Its own sentence rather than a grid cell — see the dock.
@@ -193,14 +194,14 @@ private:
     QPushButton* m_goLive = nullptr;
     QPushButton* m_end = nullptr;
     QLabel* m_state = nullptr;
-    QLabel* m_uptime = nullptr;
-    QLabel* m_confirmed = nullptr;
-    QLabel* m_queue = nullptr;
-    QLabel* m_retries = nullptr;
-    QLabel* m_data = nullptr;
-    QLabel* m_link = nullptr;
-    QLabel* m_disk = nullptr;
-    QLabel* m_lan = nullptr;
+    multisite_ui::FitLabel* m_uptime = nullptr;
+    multisite_ui::FitLabel* m_confirmed = nullptr;
+    multisite_ui::FitLabel* m_queue = nullptr;
+    multisite_ui::FitLabel* m_retries = nullptr;
+    multisite_ui::FitLabel* m_data = nullptr;
+    multisite_ui::FitLabel* m_link = nullptr;
+    multisite_ui::FitLabel* m_disk = nullptr;
+    multisite_ui::FitLabel* m_lan = nullptr;
     QLabel* m_error = nullptr;
     // Persistent — not auto-dismissing — line shown for as long as the live
     // broadcast is actually a resumed one, plus its escape hatch. Both hidden

@@ -18,6 +18,7 @@
 #include "../storage_probe.h"
 
 class QLabel;
+namespace multisite_ui { class FitLabel; }   // fit_label.h
 class QPushButton;
 class QComboBox;
 class QTimer;
@@ -202,13 +203,13 @@ private:
     // What this box is doing with it (PLAYING, HELD, STOPPED, LOADING…).
     QLabel* m_playback = nullptr;
     QLabel* m_behind = nullptr;
-    QLabel* m_buffered = nullptr;
-    QLabel* m_cached = nullptr;
-    QLabel* m_marker = nullptr;
-    QLabel* m_audio = nullptr;
-    QLabel* m_net = nullptr;         // internet/connection health, coloured
+    multisite_ui::FitLabel* m_buffered = nullptr;
+    multisite_ui::FitLabel* m_cached = nullptr;
+    multisite_ui::FitLabel* m_marker = nullptr;
+    multisite_ui::FitLabel* m_audio = nullptr;
+    multisite_ui::FitLabel* m_net = nullptr;         // internet/connection health, coloured
     QLabel* m_error = nullptr;
-    QLabel* m_storage = nullptr;   // colo + observed download rate
+    multisite_ui::FitLabel* m_storage = nullptr;   // colo + observed download rate
     QLabel* m_version = nullptr;
     // "A newer build is available", shown only when the once-per-run check
     // found one. Hidden the rest of the time, including when the check could

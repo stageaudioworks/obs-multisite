@@ -97,11 +97,5 @@ inline QString clock_skew_text(long long skew_ms) {
                      : QObject::tr("%1 s").arg(a / 1000);
 }
 
-inline void set_value(QLabel* label, const QString& text, int max_px = 240) {
-    if (!label) return;
-    label->setToolTip(text);
-    const QFontMetrics fm(label->font());
-    label->setText(fm.elidedText(text, Qt::ElideMiddle, max_px));
-}
 
 } // namespace multisite_ui

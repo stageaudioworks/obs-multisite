@@ -227,6 +227,11 @@ add_test(NAME mpp_pts COMMAND test_mpp_pts)
 add_executable(test_feed_wait tests/test_feed_wait.cpp)
 add_test(NAME feed_wait COMMAND test_feed_wait)
 
+# A dock value shortened to the width it has (src/obs/ui/fit_text.h). Pure
+# C++ — FitLabel hands it Qt's font measurement — so it builds everywhere.
+add_executable(test_fit_text tests/test_fit_text.cpp)
+add_test(NAME fit_text COMMAND test_fit_text)
+
 # The plugin's translation files: one Key="value" per line, and every tr_()
 # key defined in en-US. A glued line hid Dock.End for a day (see the script).
 add_test(NAME locale COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR}
