@@ -469,6 +469,8 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     lines.push_back({title, big, kText, info.label.empty() ? unit * 4 : unit * 2});
     // What the box is, in its host's words, right under its name.
     if (!info.label.empty()) lines.push_back({info.label, small, kDim, unit * 4});
+    // And which screen this is, when there are several.
+    if (!info.output_label.empty()) lines.push_back({info.output_label, mid, kAccent, unit * 4});
     lines.push_back({"", 0, kRule, unit * 4});       // the rule
 
     if (!info.configured)

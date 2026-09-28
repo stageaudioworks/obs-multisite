@@ -103,6 +103,14 @@ json status_json(const Player& player) {
     j["channel_labels"] = s.channel_labels;
 
     j["output_description"] = s.output_description;
+    if (!s.outputs.empty()) {
+        json outs = json::array();
+        for (const auto& o : s.outputs)
+            outs.push_back({{"connector", o.connector}, {"tile", o.tile}, {"active", o.active}, {"mode", o.mode}});
+        j["outputs"] = outs;
+        j["output_flip_spread_ms"] = std::round(s.output_flip_spread_ms * 100) / 100;
+        j["output_flip_spread_worst_ms"] = std::round(s.output_flip_spread_worst_ms * 100) / 100;
+    }
     j["audio_description"]  = s.audio_description;
     j["video_output_ok"]    = s.video_output_ok;
     j["audio_output_ok"]    = s.audio_output_ok;
@@ -196,6 +204,8 @@ json config_json(const Config& c) {
     j["out_height"]      = c.out_height;
     j["out_fps"]         = c.out_fps;
     j["tile_index"]      = c.tile_index;
+    j["outputs"]         = json::array();
+    for (const auto& o : c.outputs) j["outputs"].push_back({{"connector", o.connector}, {"tile", o.tile}});
     j["idle_mode"]       = to_string(c.idle_mode);
     j["idle_image_path"] = c.idle_image_path;
     j["identity_until_video"] = c.identity_until_video;
@@ -351,6 +361,17 @@ Config apply_edit(Config c, const json& j) {
     take(j, "out_height", c.out_height);
     take(j, "out_fps",    c.out_fps);
     take(j, "tile_index", c.tile_index);
+    if (auto it = j.find("outputs"); it != j.end() && it->is_array()) {
+        std::vector<OutputSpec> outs;
+        for (const auto& o : *it) {
+            if (!o.is_object()) continue;
+            OutputSpec spec;
+            if (o.contains("connector") && o["connector"].is_string()) spec.connector = o["connector"].get<std::string>();
+            if (o.contains("tile") && o["tile"].is_number_integer()) spec.tile = o["tile"].get<int>();
+            if (!spec.connector.empty()) outs.push_back(spec);
+        }
+        c.outputs = outs;
+    }
     {
         std::string idle;
         take(j, "idle_mode", idle);

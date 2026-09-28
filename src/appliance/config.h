@@ -14,6 +14,7 @@
 // learned in one place means the same in the other.
 //
 #include <string>
+#include <vector>
 #include <cstdint>
 
 namespace multisite_player {
@@ -21,6 +22,15 @@ namespace multisite_player {
 // What the box puts on screen when nothing is playing. A campus screen is
 // visible to a congregation, so "whatever was last decoded" is not always the
 // right answer — sometimes black is, and sometimes a holding slide is.
+// One screen of several driven by the one player (obs-multisite#29): which
+// connector, and which tile of a composited feed it shows (-1: the whole).
+struct OutputSpec {
+    std::string connector;   // "HDMI-A-2"
+    int         tile = -1;
+    bool operator==(const OutputSpec& o) const { return connector == o.connector && tile == o.tile; }
+    bool operator!=(const OutputSpec& o) const { return !(*this == o); }
+};
+
 enum class IdleMode {
     Black,      // safest: nothing on the screen
     HoldFrame,  // freeze the last decoded picture (matches the pause behaviour)
@@ -134,6 +144,10 @@ struct Config {
     // to the whole picture, which is recoverable by hand where a wrongly
     // cropped one is not obviously wrong at all.
     int  tile_index = -1;
+    // Two or more: the player drives each of these connectors, each showing
+    // its tile of the same decoded frame, from one download and one decode.
+    // Empty (or one): `connector` and `tile_index` above, exactly as ever.
+    std::vector<OutputSpec> outputs;
 
     IdleMode    idle_mode = IdleMode::Splash;
     std::string idle_image_path;

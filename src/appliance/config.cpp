@@ -114,6 +114,17 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "out_height",           out_height);
     take(j, "out_fps",              out_fps);
     take(j, "tile_index",           tile_index);
+    if (auto it = j.find("outputs"); it != j.end() && it->is_array()) {
+        std::vector<OutputSpec> outs;
+        for (const auto& o : *it) {
+            if (!o.is_object()) continue;
+            OutputSpec spec;
+            if (o.contains("connector") && o["connector"].is_string()) spec.connector = o["connector"].get<std::string>();
+            if (o.contains("tile") && o["tile"].is_number_integer()) spec.tile = o["tile"].get<int>();
+            if (!spec.connector.empty()) outs.push_back(spec);
+        }
+        outputs = outs;
+    }
 
     std::string idle = to_string(idle_mode);
     take(j, "idle_mode", idle);
@@ -190,6 +201,8 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["out_height"]           = out_height;
     j["out_fps"]              = out_fps;
     j["tile_index"]           = tile_index;
+    j["outputs"]              = json::array();
+    for (const auto& o : outputs) j["outputs"].push_back({{"connector", o.connector}, {"tile", o.tile}});
     j["idle_mode"]            = to_string(idle_mode);
     j["idle_image_path"]      = idle_image_path;
     j["identity_until_video"] = identity_until_video;

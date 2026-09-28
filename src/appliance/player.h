@@ -149,6 +149,10 @@ struct Status {
     // ── The box itself ───────────────────────────────────────────────────────
     bool        configured = false;     // storage credentials present
     std::string output_description;     // e.g. "HDMI-A-1 1920x1080@50"
+    // Several screens (obs-multisite#29): each one, and how far apart their
+    // flips of one frame land, last and worst.
+    std::vector<OutputHeadStatus> outputs;
+    double output_flip_spread_ms = 0, output_flip_spread_worst_ms = 0;
     std::string audio_description;
     bool        video_output_ok = false;
     bool        audio_output_ok = false;
@@ -394,6 +398,7 @@ private:
     // than a timer of its own: it only ever needs to act a few times a
     // minute, and never while frames are flowing.
     void update_screen();
+    void show_splash(const SplashInfo& info);
     // Everything the identity screen needs to say right now.
     SplashInfo splash_info() const;
 

@@ -74,6 +74,8 @@ struct SplashInfo {
     bool        configured = true;
     // The host's own line under the name (Config::splash_label).
     std::string label;
+    // Which of several screens this one is ("OUTPUT 1 OF 2 - LEFT HALF").
+    std::string output_label;
     // Colour bars behind it all, with the words on a dark panel: the screen
     // before the first picture (Config::identity_until_video).
     bool        test_pattern = false;

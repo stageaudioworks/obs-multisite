@@ -19,6 +19,7 @@
 //
 #include "config.h"
 #include "../core/cmaf_decoder.h"
+#include "../core/model.h"
 
 #include <cstdint>
 #include <string>
@@ -47,6 +48,14 @@ inline void fix_planes(multisite::DecodedVideoFrame& f) {
         off += (size_t)f.stride[i] * (size_t)(i == 0 ? f.height : (f.height + 1) / 2);
     }
 }
+
+// One screen of several, as /api/status reports it (obs-multisite#29).
+struct OutputHeadStatus {
+    std::string connector;
+    int         tile = -1;
+    bool        active = false;   // plugged in and being driven
+    std::string mode;             // "1920x1080 @ 60.00 Hz", or "" while not active
+};
 
 struct DisplayInfo {
     std::string connector;          // e.g. "HDMI-A-1"
@@ -90,6 +99,29 @@ public:
     // Enumerated on demand rather than cached: somebody may plug a different
     // screen in without rebooting the box.
     virtual std::vector<DisplayInfo> displays() const = 0;
+
+    // ── Several screens from the one player (obs-multisite#29) ───────────────
+    // Everything below has a default that is exactly the one-screen output, so
+    // an output that drives one screen implements none of it.
+
+    // How many screens this output drives.
+    virtual int heads() const { return 1; }
+    // Each screen its own tile of the one decoded frame, flipped together.
+    virtual void present_tiles(const multisite::DecodedVideoFrame& frame,
+                               const multisite::TileLayout&) { present(frame); }
+    // One screen's mode, and a pre-rendered screen for it alone (its identity
+    // screen says which output it is).
+    virtual void head_size(int, int& width, int& height) const { size(width, height); }
+    virtual void present_bgrx_on(int, int width, int height, int stride,
+                                 const uint8_t* pixels) { present_bgrx(width, height, stride, pixels); }
+    // Called every few seconds: a screen unplugged stops being driven, and one
+    // plugged back in is driven again, without disturbing the others.
+    virtual void recheck() {}
+    virtual std::vector<OutputHeadStatus> head_status() const { return {}; }
+    // How far apart the screens' page flips of one frame landed, worst and
+    // most recent, in milliseconds: each HDMI output runs on its own clock.
+    virtual double flip_spread_ms() const { return 0; }
+    virtual double flip_spread_worst_ms() const { return 0; }
 };
 
 // Discards everything, reports itself as working. The development and

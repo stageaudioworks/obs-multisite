@@ -807,7 +807,8 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/reporter.cpp
         src/appliance/preview.cpp
         src/appliance/splash.cpp
-        src/appliance/outputs.cpp)
+        src/appliance/outputs.cpp
+        src/appliance/output_heads.cpp)
     # The HTTP server arrives through multisite_core: it is shared with the
     # relay and the OBS plugin's remote-control pages, so there is one copy.
 
@@ -831,6 +832,13 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_include_directories(test_splash PRIVATE src/appliance src/core)
     target_link_libraries(test_splash PRIVATE ffmpeg_iface)
     add_test(NAME splash COMMAND test_splash)
+
+    # Several screens from one player: which controller drives which screen,
+    # what each screen is called, and the outputs setting's round trip.
+    add_executable(test_output_heads tests/test_output_heads.cpp
+                   src/appliance/output_heads.cpp src/appliance/config.cpp)
+    target_include_directories(test_output_heads PRIVATE src/appliance src/core)
+    add_test(NAME output_heads COMMAND test_output_heads)
 
     # DRM/KMS: the appliance drives the HDMI output itself, with no desktop.
     find_package(PkgConfig QUIET)

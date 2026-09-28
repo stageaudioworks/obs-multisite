@@ -17,6 +17,8 @@
 //
 #include "video_output.h"
 #include "log.h"
+#include "output_heads.h"
+#include "../core/tile_crop.h"
 
 extern "C" {
 #include <libswscale/swscale.h>
@@ -27,7 +29,9 @@ extern "C" {
 #include <xf86drmMode.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -135,9 +139,45 @@ bool create_framebuffer(int fd, int width, int height, Framebuffer& out,
     return true;
 }
 
-void on_page_flip(int, unsigned, unsigned, unsigned, void* user) {
-    if (user) *static_cast<bool*>(user) = false;    // no longer pending
+// A page flip's completion, with when it landed (the vblank it was latched
+// on, in CLOCK_MONOTONIC): the screens' flips of one frame are compared.
+struct FlipWait {
+    bool     pending = false;
+    uint64_t at_ns = 0;
+};
+
+void on_page_flip(int, unsigned, unsigned sec, unsigned usec, void* user) {
+    if (auto* w = static_cast<FlipWait*>(user)) {
+        w->pending = false;     // no longer pending
+        w->at_ns = (uint64_t)sec * 1000000000ULL + (uint64_t)usec * 1000ULL;
+    }
 }
+
+// One screen: a connector, the display controller driving it, its mode, its
+// two buffers and its own scaler. The player has one of these per screen, all
+// on the one DRM device (obs-multisite#29); one screen is the case that has
+// always been.
+struct Head {
+    std::string want;              // the connector asked for; "" = the first connected
+    int         tile = -1;         // which tile of a composited feed; -1 = all of it
+    uint32_t    connector_id = 0;
+    std::string name;              // "HDMI-A-2"
+    uint32_t    crtc_id = 0;
+    drmModeModeInfo mode{};
+    drmModeCrtc* saved_crtc = nullptr;
+    bool        active = false;    // plugged in, mode set, being driven
+    Framebuffer fb[2];
+    int         back = 0;
+    FlipWait    flip;
+    bool        first_present = true;
+    bool        drawn = false;     // drawn into back() this round, so it flips
+    SwsContext* sws = nullptr;
+    int sws_src_w = 0, sws_src_h = 0;
+    int dst_x = 0, dst_y = 0, dst_w = 0, dst_h = 0;
+    std::string description = "no display output";
+
+    Framebuffer& back_fb() { return fb[back]; }
+};
 
 class DrmOutput : public VideoOutput {
 public:
@@ -145,22 +185,56 @@ public:
 
     bool open(const Config& cfg, std::string& error) override;
     void close() override;
-    bool ok() const override { return m_fd >= 0 && m_crtc_id != 0; }
+    bool ok() const override {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (m_fd < 0) return false;
+        for (const auto& h : m_heads) if (h.active) return true;
+        return false;
+    }
 
     std::string description() const override {
         std::lock_guard<std::mutex> lk(m_mtx);
-        return m_description;
+        std::string d;
+        for (const auto& h : m_heads) {
+            if (!h.active) continue;
+            if (!d.empty()) d += " + ";
+            d += h.description;
+        }
+        if (m_heads.size() > 1) {
+            for (const auto& h : m_heads)
+                if (!h.active) d += (d.empty() ? "" : "; ") + h.name + " not connected";
+        }
+        return d.empty() ? "no display output" : d;
     }
-    void size(int& width, int& height) const override {
-        width = m_mode.hdisplay;
-        height = m_mode.vdisplay;
+    void size(int& width, int& height) const override { head_size(0, width, height); }
+    void head_size(int i, int& width, int& height) const override {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (i < 0 || i >= (int)m_heads.size()) { width = 1920; height = 1080; return; }
+        width = m_heads[(size_t)i].mode.hdisplay ? m_heads[(size_t)i].mode.hdisplay : 1920;
+        height = m_heads[(size_t)i].mode.vdisplay ? m_heads[(size_t)i].mode.vdisplay : 1080;
     }
-    double refresh_hz() const override { return refresh_mhz(m_mode) / 1000.0; }
+    double refresh_hz() const override {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return m_heads.empty() ? 0 : refresh_mhz(m_heads[0].mode) / 1000.0;
+    }
 
     void present(const multisite::DecodedVideoFrame& frame) override;
+    void present_tiles(const multisite::DecodedVideoFrame& frame,
+                       const multisite::TileLayout& layout) override;
     void present_bgrx(int width, int height, int stride,
                       const uint8_t* pixels) override;
+    void present_bgrx_on(int head, int width, int height, int stride,
+                         const uint8_t* pixels) override;
     void blank() override;
+
+    int heads() const override {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        return (int)m_heads.size();
+    }
+    void recheck() override;
+    std::vector<OutputHeadStatus> head_status() const override;
+    double flip_spread_ms() const override { return m_spread_ms.load(); }
+    double flip_spread_worst_ms() const override { return m_spread_worst_ms.load(); }
 
     std::vector<DisplayInfo> displays() const override;
 
@@ -170,27 +244,20 @@ public:
 
 private:
     bool pick_device(const Config& cfg, std::string& error);
-    bool flip();                      // present the back buffer, then swap
-    void wait_for_flip();
-    Framebuffer& back() { return m_fb[m_back]; }
+    bool activate(Head& h, std::string& error);
+    void deactivate(Head& h, const char* why);
+    void draw(Head& h, const multisite::DecodedVideoFrame& frame);
+    void draw_bgrx(Head& h, int height, int stride, const uint8_t* pixels);
+    void wait_for_flips();          // every screen's queued flip, bounded
+    void flip_drawn();              // flip every screen drawn this round
 
     mutable std::mutex m_mtx;
     int      m_fd = -1;
-    uint32_t m_connector_id = 0;
-    uint32_t m_crtc_id = 0;
-    drmModeModeInfo m_mode{};
-    drmModeCrtc* m_saved_crtc = nullptr;
     std::string m_card_path;
-    std::string m_description = "no display output";
-
-    Framebuffer m_fb[2];
-    int  m_back = 0;
-    bool m_flip_pending = false;
-    bool m_first_present = true;
-
-    SwsContext* m_sws = nullptr;
-    int m_sws_src_w = 0, m_sws_src_h = 0;
-    int m_dst_x = 0, m_dst_y = 0, m_dst_w = 0, m_dst_h = 0;
+    std::vector<Head> m_heads;
+    int m_want_w = 0, m_want_h = 0, m_want_fps = 0;
+    bool m_round_had_many = false;   // this round flipped more than one screen
+    std::atomic<double> m_spread_ms{0}, m_spread_worst_ms{0};
 };
 
 bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
@@ -218,6 +285,11 @@ bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
         return false;
     }
 
+    // The screens asked for: the list, or the one connector as ever.
+    std::vector<OutputSpec> specs;
+    if (cfg.outputs.size() >= 2) specs = cfg.outputs;
+    else specs.push_back({cfg.connector, -1});
+
     std::string last;
     for (const auto& path : cards) {
         const int fd = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
@@ -231,76 +303,66 @@ bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
         drmModeRes* res = drmModeGetResources(fd);
         if (!res) { last = path + ": not a display device"; ::close(fd); continue; }
 
-        drmModeConnector* chosen = nullptr;
-        for (int i = 0; i < res->count_connectors; ++i) {
-            drmModeConnector* c = drmModeGetConnector(fd, res->connectors[i]);
-            if (!c) continue;
-            const bool wanted = cfg.connector.empty()
-                                    ? (c->connection == DRM_MODE_CONNECTED &&
-                                       c->count_modes > 0)
-                                    : (connector_name(c) == cfg.connector);
-            if (wanted && c->count_modes > 0) { chosen = c; break; }
-            drmModeFreeConnector(c);
+        std::vector<Head> heads;
+        std::vector<uint32_t> possible;
+        std::vector<int> current;
+        for (const auto& spec : specs) {
+            Head h;
+            h.want = spec.connector;
+            h.tile = spec.tile;
+            uint32_t mask = 0;
+            int cur = -1;
+            for (int i = 0; i < res->count_connectors && !h.connector_id; ++i) {
+                drmModeConnector* c = drmModeGetConnector(fd, res->connectors[i]);
+                if (!c) continue;
+                const bool wanted = spec.connector.empty()
+                                        ? (c->connection == DRM_MODE_CONNECTED &&
+                                           c->count_modes > 0)
+                                        : (connector_name(c) == spec.connector);
+                if (wanted) {
+                    h.connector_id = c->connector_id;
+                    h.name = connector_name(c);
+                    for (int e = 0; e < c->count_encoders; ++e) {
+                        if (drmModeEncoder* enc = drmModeGetEncoder(fd, c->encoders[e])) {
+                            mask |= enc->possible_crtcs;
+                            if (enc->encoder_id == c->encoder_id && enc->crtc_id)
+                                for (int k = 0; k < res->count_crtcs; ++k)
+                                    if (res->crtcs[k] == enc->crtc_id) cur = k;
+                            drmModeFreeEncoder(enc);
+                        }
+                    }
+                }
+                drmModeFreeConnector(c);
+            }
+            heads.push_back(std::move(h));
+            possible.push_back(mask);
+            current.push_back(cur);
         }
-        if (!chosen) {
+        // One screen: it must be there, as ever. Several: each is looked for,
+        // and one not plugged in yet is driven when it is.
+        if (specs.size() == 1 && !heads[0].connector_id) {
             last = path + ": nothing is plugged into it";
             drmModeFreeResources(res);
             ::close(fd);
             continue;
         }
+        bool any = false;
+        for (const auto& h : heads) any = any || h.connector_id;
+        if (!any) {
+            last = path + ": none of the connectors asked for is on it";
+            drmModeFreeResources(res);
+            ::close(fd);
+            continue;
+        }
 
-        // The mode the operator asked for, or the one the screen prefers.
-        const drmModeModeInfo* picked = nullptr;
-        if (cfg.out_width > 0 && cfg.out_height > 0) {
-            for (int i = 0; i < chosen->count_modes; ++i) {
-                const drmModeModeInfo& m = chosen->modes[i];
-                if (m.hdisplay != cfg.out_width || m.vdisplay != cfg.out_height)
-                    continue;
-                if (cfg.out_fps > 0 &&
-                    std::abs(refresh_mhz(m) / 1000 - cfg.out_fps) > 1)
-                    continue;
-                picked = &m;
-                break;
-            }
-            if (!picked)
-                plog_warn("the screen will not do %dx%d at %d Hz — using what "
-                          "it prefers instead",
-                          cfg.out_width, cfg.out_height, cfg.out_fps);
+        const std::vector<int> crtcs = assign_crtcs(possible, current, res->count_crtcs);
+        for (size_t i = 0; i < heads.size(); ++i) {
+            if (crtcs[i] >= 0) heads[i].crtc_id = res->crtcs[crtcs[i]];
+            else if (heads[i].connector_id)
+                plog_warn("%s: no display controller is free to drive it", heads[i].name.c_str());
         }
-        if (!picked) {
-            for (int i = 0; i < chosen->count_modes; ++i)
-                if (chosen->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
-                    picked = &chosen->modes[i];
-                    break;
-                }
-        }
-        if (!picked) picked = &chosen->modes[0];
-
-        // A CRTC to drive it with: the connector's current encoder if it has
-        // one, otherwise the first one the connector will accept.
-        uint32_t crtc_id = 0;
-        if (chosen->encoder_id) {
-            if (drmModeEncoder* enc = drmModeGetEncoder(fd, chosen->encoder_id)) {
-                crtc_id = enc->crtc_id;
-                drmModeFreeEncoder(enc);
-            }
-        }
-        if (!crtc_id) {
-            for (int i = 0; i < chosen->count_encoders && !crtc_id; ++i) {
-                drmModeEncoder* enc = drmModeGetEncoder(fd, chosen->encoders[i]);
-                if (!enc) continue;
-                for (int c = 0; c < res->count_crtcs; ++c) {
-                    if (enc->possible_crtcs & (1u << c)) {
-                        crtc_id = res->crtcs[c];
-                        break;
-                    }
-                }
-                drmModeFreeEncoder(enc);
-            }
-        }
-        if (!crtc_id) {
+        if (specs.size() == 1 && !heads[0].crtc_id) {
             last = path + ": no display controller is free for that output";
-            drmModeFreeConnector(chosen);
             drmModeFreeResources(res);
             ::close(fd);
             continue;
@@ -308,18 +370,7 @@ bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
 
         m_fd = fd;
         m_card_path = path;
-        m_connector_id = chosen->connector_id;
-        m_crtc_id = crtc_id;
-        m_mode = *picked;
-        m_saved_crtc = drmModeGetCrtc(fd, crtc_id);
-
-        char desc[160];
-        std::snprintf(desc, sizeof(desc), "%s %dx%d @ %.2f Hz",
-                      connector_name(chosen).c_str(), m_mode.hdisplay,
-                      m_mode.vdisplay, refresh_mhz(m_mode) / 1000.0);
-        m_description = desc;
-
-        drmModeFreeConnector(chosen);
+        m_heads = std::move(heads);
         drmModeFreeResources(res);
         return true;
     }
@@ -328,8 +379,80 @@ bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
     return false;
 }
 
+// Set a screen's mode and give it buffers. The mode is the one asked for, or
+// the one the screen prefers.
+bool DrmOutput::activate(Head& h, std::string& error) {
+    if (!h.connector_id || !h.crtc_id) { error = h.name + ": not driveable"; return false; }
+    drmModeConnector* c = drmModeGetConnector(m_fd, h.connector_id);
+    if (!c) { error = h.name + ": the connector went away"; return false; }
+    if (c->connection != DRM_MODE_CONNECTED || c->count_modes == 0) {
+        drmModeFreeConnector(c);
+        error = h.name + ": nothing is plugged into it";
+        return false;
+    }
+    const drmModeModeInfo* picked = nullptr;
+    if (m_want_w > 0 && m_want_h > 0) {
+        for (int i = 0; i < c->count_modes; ++i) {
+            const drmModeModeInfo& m = c->modes[i];
+            if (m.hdisplay != m_want_w || m.vdisplay != m_want_h) continue;
+            if (m_want_fps > 0 && std::abs(refresh_mhz(m) / 1000 - m_want_fps) > 1) continue;
+            picked = &m;
+            break;
+        }
+        if (!picked)
+            plog_warn("%s will not do %dx%d at %d Hz — using what it prefers instead",
+                      h.name.c_str(), m_want_w, m_want_h, m_want_fps);
+    }
+    if (!picked)
+        for (int i = 0; i < c->count_modes; ++i)
+            if (c->modes[i].type & DRM_MODE_TYPE_PREFERRED) { picked = &c->modes[i]; break; }
+    if (!picked) picked = &c->modes[0];
+    const drmModeModeInfo mode = *picked;
+    drmModeFreeConnector(c);
+
+    if (!h.saved_crtc) h.saved_crtc = drmModeGetCrtc(m_fd, h.crtc_id);
+    if (h.fb[0].map == nullptr || h.mode.hdisplay != mode.hdisplay || h.mode.vdisplay != mode.vdisplay) {
+        for (auto& fb : h.fb) fb.destroy(m_fd);
+        for (auto& fb : h.fb)
+            if (!create_framebuffer(m_fd, mode.hdisplay, mode.vdisplay, fb, error)) {
+                for (auto& f : h.fb) f.destroy(m_fd);
+                return false;
+            }
+    }
+    h.mode = mode;
+    if (drmModeSetCrtc(m_fd, h.crtc_id, h.fb[0].fb_id, 0, 0, &h.connector_id, 1, &h.mode) != 0) {
+        error = std::string("could not set the display mode on ") + h.name + ": " + strerror(errno);
+        if (errno == EACCES)
+            error += ". Something else owns the screen — on Raspberry Pi OS "
+                     "with a desktop installed, stop the display manager.";
+        return false;
+    }
+    h.back = 1;
+    h.first_present = true;
+    h.flip.pending = false;
+    h.active = true;
+    char desc[160];
+    std::snprintf(desc, sizeof(desc), "%s %dx%d @ %.2f Hz", h.name.c_str(), h.mode.hdisplay,
+                  h.mode.vdisplay, refresh_mhz(h.mode) / 1000.0);
+    h.description = desc;
+    return true;
+}
+
+void DrmOutput::deactivate(Head& h, const char* why) {
+    if (!h.active) return;
+    h.active = false;
+    h.flip.pending = false;
+    h.drawn = false;
+    plog_warn("%s: %s — the other screens carry on, and it is driven again when it is back",
+              h.name.c_str(), why);
+}
+
 bool DrmOutput::open(const Config& cfg, std::string& error) {
     close();
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_want_w = cfg.out_width;
+    m_want_h = cfg.out_height;
+    m_want_fps = cfg.out_fps;
     if (!pick_device(cfg, error)) return false;
 
     // Becoming DRM master is what lets this process set the mode. On a box
@@ -338,178 +461,291 @@ bool DrmOutput::open(const Config& cfg, std::string& error) {
     if (drmSetMaster(m_fd) != 0 && errno != EINVAL && errno != EACCES)
         plog_debug("drmSetMaster: %s", strerror(errno));
 
-    for (int i = 0; i < 2; ++i) {
-        if (!create_framebuffer(m_fd, m_mode.hdisplay, m_mode.vdisplay,
-                                m_fb[i], error)) {
-            close();
-            return false;
+    int active = 0;
+    std::string first_error;
+    for (auto& h : m_heads) {
+        std::string e;
+        if (activate(h, e)) {
+            ++active;
+            plog_info("display claimed: %s on %s%s", h.description.c_str(), m_card_path.c_str(),
+                      m_heads.size() > 1 ? (" (tile " + std::to_string(h.tile) + ")").c_str() : "");
+        } else {
+            if (first_error.empty()) first_error = e;
+            if (m_heads.size() > 1) plog_warn("%s", e.c_str());
         }
     }
-
-    if (drmModeSetCrtc(m_fd, m_crtc_id, m_fb[0].fb_id, 0, 0, &m_connector_id, 1,
-                       &m_mode) != 0) {
-        error = std::string("could not set the display mode: ") + strerror(errno);
-        if (errno == EACCES)
-            error += ". Something else owns the screen — on Raspberry Pi OS "
-                     "with a desktop installed, stop the display manager.";
-        close();
+    if (m_heads.size() == 1 && !active) {
+        // One screen that cannot be driven is the failure it always was.
+        error = first_error;
+        // Undone here, under the lock this holds: nothing was set on screen.
+        for (auto& h : m_heads) {
+            for (auto& fb : h.fb) fb.destroy(m_fd);
+            if (h.saved_crtc) drmModeFreeCrtc(h.saved_crtc);
+        }
+        m_heads.clear();
+        drmDropMaster(m_fd);
+        ::close(m_fd);
+        m_fd = -1;
         return false;
     }
-    m_back = 1;
-    m_first_present = true;
-    plog_info("display claimed: %s on %s", m_description.c_str(),
-              m_card_path.c_str());
+    if (m_heads.size() > 1)
+        plog_info("%d of %zu screens driven from one decode", active, m_heads.size());
     return true;
 }
 
 void DrmOutput::close() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_fd < 0) return;
-    wait_for_flip();
+    wait_for_flips();
 
     // Put the console back the way it was, so a stopped event does not
     // leave a black screen that looks like broken hardware.
-    if (m_saved_crtc) {
-        drmModeSetCrtc(m_fd, m_saved_crtc->crtc_id, m_saved_crtc->buffer_id,
-                       m_saved_crtc->x, m_saved_crtc->y, &m_connector_id, 1,
-                       &m_saved_crtc->mode);
-        drmModeFreeCrtc(m_saved_crtc);
-        m_saved_crtc = nullptr;
+    for (auto& h : m_heads) {
+        if (h.saved_crtc) {
+            drmModeSetCrtc(m_fd, h.saved_crtc->crtc_id, h.saved_crtc->buffer_id,
+                           h.saved_crtc->x, h.saved_crtc->y, &h.connector_id, 1,
+                           &h.saved_crtc->mode);
+            drmModeFreeCrtc(h.saved_crtc);
+            h.saved_crtc = nullptr;
+        }
+        for (auto& fb : h.fb) fb.destroy(m_fd);
+        if (h.sws) { sws_freeContext(h.sws); h.sws = nullptr; }
     }
-    for (auto& fb : m_fb) fb.destroy(m_fd);
-    if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
-    m_sws_src_w = m_sws_src_h = 0;
+    m_heads.clear();
     drmDropMaster(m_fd);
     ::close(m_fd);
     m_fd = -1;
-    m_crtc_id = 0;
-    m_description = "no display output";
 }
 
-void DrmOutput::wait_for_flip() {
-    if (!m_flip_pending || m_fd < 0) return;
+void DrmOutput::wait_for_flips() {
+    if (m_fd < 0) return;
     drmEventContext ev{};
     ev.version = 2;
     ev.page_flip_handler = on_page_flip;
 
-    // A bounded wait. If the driver never reports the flip — which happens if
-    // the screen is unplugged mid-event — playback must carry on rather than
+    // A bounded wait. If the driver never reports a flip — which happens if
+    // a screen is unplugged mid-event — playback must carry on rather than
     // block the delivery thread for ever.
-    pollfd pfd{};
-    pfd.fd = m_fd;
-    pfd.events = POLLIN;
-    const int rc = ::poll(&pfd, 1, 100);
-    if (rc > 0) {
-        // The handler clears the flag through the user pointer we passed in.
+    const auto pending = [&] {
+        for (const auto& h : m_heads) if (h.active && h.flip.pending) return true;
+        return false;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    while (pending()) {
+        const int left = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - std::chrono::steady_clock::now()).count();
+        if (left <= 0) break;
+        pollfd pfd{};
+        pfd.fd = m_fd;
+        pfd.events = POLLIN;
+        if (::poll(&pfd, 1, left) <= 0) break;
+        // The handler clears each screen's flag through the user pointer.
         drmHandleEvent(m_fd, &ev);
     }
-    m_flip_pending = false;
-}
-
-bool DrmOutput::flip() {
-    wait_for_flip();
-    m_flip_pending = true;
-    if (drmModePageFlip(m_fd, m_crtc_id, back().fb_id,
-                        DRM_MODE_PAGE_FLIP_EVENT, &m_flip_pending) != 0) {
-        m_flip_pending = false;
-        // Falling back to a mode set keeps a picture on the screen on drivers
-        // or states where a flip is refused — notably right after a mode
-        // change, and on the very first frame.
-        if (drmModeSetCrtc(m_fd, m_crtc_id, back().fb_id, 0, 0, &m_connector_id,
-                           1, &m_mode) != 0)
-            return false;
+    if (m_round_had_many && !pending()) {
+        // How far apart the screens' flips of the last frame landed.
+        uint64_t lo = UINT64_MAX, hi = 0;
+        for (const auto& h : m_heads)
+            if (h.active && h.flip.at_ns) { lo = std::min(lo, h.flip.at_ns); hi = std::max(hi, h.flip.at_ns); }
+        if (hi >= lo && lo != UINT64_MAX) {
+            const double ms = (double)(hi - lo) / 1e6;
+            m_spread_ms = ms;
+            if (ms > m_spread_worst_ms.load()) m_spread_worst_ms = ms;
+        }
     }
-    m_back ^= 1;
-    return true;
+    m_round_had_many = false;
+    for (auto& h : m_heads) h.flip.pending = false;
 }
 
-void DrmOutput::present(const multisite::DecodedVideoFrame& frame) {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    if (m_fd < 0 || frame.width <= 0 || frame.height <= 0) return;
+void DrmOutput::flip_drawn() {
+    int flipped = 0;
+    for (auto& h : m_heads) {
+        if (!h.active || !h.drawn) continue;
+        h.drawn = false;
+        h.flip.pending = true;
+        h.flip.at_ns = 0;
+        if (drmModePageFlip(m_fd, h.crtc_id, h.back_fb().fb_id,
+                            DRM_MODE_PAGE_FLIP_EVENT, &h.flip) != 0) {
+            h.flip.pending = false;
+            // Falling back to a mode set keeps a picture on the screen on
+            // drivers or states where a flip is refused — notably right after
+            // a mode change, and on the very first frame.
+            if (drmModeSetCrtc(m_fd, h.crtc_id, h.back_fb().fb_id, 0, 0, &h.connector_id,
+                               1, &h.mode) != 0) {
+                if (m_heads.size() > 1) deactivate(h, "it stopped taking pictures");
+                continue;
+            }
+        }
+        h.back ^= 1;
+        ++flipped;
+    }
+    m_round_had_many = flipped > 1;
+}
 
+// One screen's share of a frame: scaled into its back buffer, letterboxed to
+// keep its shape.
+void DrmOutput::draw(Head& h, const multisite::DecodedVideoFrame& frame) {
+    if (!h.active || frame.width <= 0 || frame.height <= 0) return;
     // Fit the picture inside the screen without changing its shape.
-    if (frame.width != m_sws_src_w || frame.height != m_sws_src_h) {
-        if (m_sws) { sws_freeContext(m_sws); m_sws = nullptr; }
-        const double scale = std::min((double)m_mode.hdisplay / frame.width,
-                                      (double)m_mode.vdisplay / frame.height);
-        m_dst_w = std::max(2, (int)(frame.width * scale)) & ~1;
-        m_dst_h = std::max(2, (int)(frame.height * scale)) & ~1;
-        m_dst_x = (m_mode.hdisplay - m_dst_w) / 2;
-        m_dst_y = (m_mode.vdisplay - m_dst_h) / 2;
+    if (frame.width != h.sws_src_w || frame.height != h.sws_src_h) {
+        if (h.sws) { sws_freeContext(h.sws); h.sws = nullptr; }
+        const double scale = std::min((double)h.mode.hdisplay / frame.width,
+                                      (double)h.mode.vdisplay / frame.height);
+        h.dst_w = std::max(2, (int)(frame.width * scale)) & ~1;
+        h.dst_h = std::max(2, (int)(frame.height * scale)) & ~1;
+        h.dst_x = (h.mode.hdisplay - h.dst_w) / 2;
+        h.dst_y = (h.mode.vdisplay - h.dst_h) / 2;
 
-        m_sws = sws_getContext(frame.width, frame.height, AV_PIX_FMT_YUV420P,
-                               m_dst_w, m_dst_h, AV_PIX_FMT_BGRA,
+        h.sws = sws_getContext(frame.width, frame.height, AV_PIX_FMT_YUV420P,
+                               h.dst_w, h.dst_h, AV_PIX_FMT_BGRA,
                                SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (!m_sws) {
-            plog_error("could not set up the display scaler");
-            m_sws_src_w = m_sws_src_h = 0;
+        if (!h.sws) {
+            plog_error("could not set up the display scaler for %s", h.name.c_str());
+            h.sws_src_w = h.sws_src_h = 0;
             return;
         }
-        m_sws_src_w = frame.width;
-        m_sws_src_h = frame.height;
-        m_first_present = true;      // the bars around it need painting again
-        plog_info("showing %dx%d as %dx%d on a %dx%d screen", frame.width,
-                  frame.height, m_dst_w, m_dst_h, m_mode.hdisplay,
-                  m_mode.vdisplay);
+        h.sws_src_w = frame.width;
+        h.sws_src_h = frame.height;
+        h.first_present = true;      // the bars around it need painting again
+        plog_info("showing %dx%d as %dx%d on %s's %dx%d screen", frame.width,
+                  frame.height, h.dst_w, h.dst_h, h.name.c_str(), h.mode.hdisplay,
+                  h.mode.vdisplay);
     }
-    if (!m_sws) return;
+    if (!h.sws) return;
 
     // With two buffers, the back one is still on screen until the flip queued
-    // last time has happened. Drawing into it before then paints over the
-    // picture being scanned out: on a 30 Hz output with 30 fps content the
-    // two lock in step and every frame tears at the same line (seen through
-    // an HDMI capture; on 60 Hz the flip lands long before the next frame).
-    wait_for_flip();
-    Framebuffer& fb = back();
+    // last time has happened, and the caller has waited for it: drawing into
+    // it before then paints over the picture being scanned out (on a 30 Hz
+    // output with 30 fps content the two lock in step and every frame tears
+    // at the same line, seen through an HDMI capture).
+    Framebuffer& fb = h.back_fb();
     if (!fb.map) return;
 
     // The bars only need clearing when the letterbox changes, not every frame:
     // at 1080p that is eight megabytes of pointless writes thirty times a
     // second on a box that has better things to do.
-    if (m_first_present) {
+    if (h.first_present) {
         std::memset(fb.map, 0, (size_t)fb.size);
-        m_first_present = false;
+        h.first_present = false;
     }
 
-    uint8_t* dst = fb.map + (size_t)m_dst_y * fb.pitch + (size_t)m_dst_x * 4;
+    uint8_t* dst = fb.map + (size_t)h.dst_y * fb.pitch + (size_t)h.dst_x * 4;
     uint8_t* dst_planes[4] = { dst, nullptr, nullptr, nullptr };
     int dst_stride[4] = { (int)fb.pitch, 0, 0, 0 };
     const uint8_t* src[4] = { frame.plane[0], frame.plane[1], frame.plane[2],
                               nullptr };
     const int src_stride[4] = { frame.stride[0], frame.stride[1],
                                 frame.stride[2], 0 };
-    sws_scale(m_sws, src, src_stride, 0, frame.height, dst_planes, dst_stride);
-    flip();
+    sws_scale(h.sws, src, src_stride, 0, frame.height, dst_planes, dst_stride);
+    h.drawn = true;
+}
+
+void DrmOutput::draw_bgrx(Head& h, int height, int stride, const uint8_t* pixels) {
+    if (!h.active) return;
+    Framebuffer& fb = h.back_fb();
+    if (!fb.map) return;
+    std::memset(fb.map, 0, (size_t)fb.size);
+    if (pixels) {
+        const int rows = std::min(height, (int)h.mode.vdisplay);
+        const int bytes = std::min(stride, (int)fb.pitch);
+        for (int y = 0; y < rows; ++y)
+            std::memcpy(fb.map + (size_t)y * fb.pitch,
+                        pixels + (size_t)y * stride, (size_t)bytes);
+    }
+    h.first_present = true;      // a decoded frame after this repaints the bars
+    h.drawn = true;
+}
+
+void DrmOutput::present(const multisite::DecodedVideoFrame& frame) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (m_fd < 0) return;
+    wait_for_flips();
+    for (auto& h : m_heads) draw(h, frame);
+    flip_drawn();
+}
+
+void DrmOutput::present_tiles(const multisite::DecodedVideoFrame& frame,
+                              const multisite::TileLayout& layout) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (m_fd < 0) return;
+    // Every screen's previous flip first, then every screen drawn from the one
+    // frame, then every flip queued back to back: the halves of one frame go
+    // up together, each on its own screen's next vblank.
+    wait_for_flips();
+    for (auto& h : m_heads) {
+        if (h.tile >= 0 && layout.is_split() && h.tile < layout.count())
+            draw(h, multisite::tile_view(frame, layout, h.tile));
+        else
+            draw(h, frame);   // a 1x1 feed, or no tile: the whole picture
+    }
+    flip_drawn();
 }
 
 void DrmOutput::present_bgrx(int width, int height, int stride,
                              const uint8_t* pixels) {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_fd < 0 || !pixels) return;
-    wait_for_flip();   // not into the buffer still on screen (present)
-    Framebuffer& fb = back();
-    if (!fb.map) return;
-
-    std::memset(fb.map, 0, (size_t)fb.size);
-    const int rows = std::min(height, (int)m_mode.vdisplay);
-    const int bytes = std::min(stride, (int)fb.pitch);
-    for (int y = 0; y < rows; ++y)
-        std::memcpy(fb.map + (size_t)y * fb.pitch,
-                    pixels + (size_t)y * stride, (size_t)bytes);
     (void)width;
-    m_first_present = true;      // a decoded frame after this repaints the bars
-    flip();
+    wait_for_flips();   // not into the buffer still on screen (present)
+    for (auto& h : m_heads) draw_bgrx(h, height, stride, pixels);
+    flip_drawn();
+}
+
+void DrmOutput::present_bgrx_on(int head, int width, int height, int stride,
+                                const uint8_t* pixels) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (m_fd < 0 || !pixels || head < 0 || head >= (int)m_heads.size()) return;
+    (void)width;
+    wait_for_flips();
+    draw_bgrx(m_heads[(size_t)head], height, stride, pixels);
+    flip_drawn();
 }
 
 void DrmOutput::blank() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_fd < 0) return;
-    wait_for_flip();   // not into the buffer still on screen (present)
-    Framebuffer& fb = back();
-    if (!fb.map) return;
-    std::memset(fb.map, 0, (size_t)fb.size);
-    m_first_present = true;
-    flip();
+    wait_for_flips();   // not into the buffer still on screen (present)
+    for (auto& h : m_heads) draw_bgrx(h, 0, 0, nullptr);
+    flip_drawn();
+}
+
+void DrmOutput::recheck() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    // One screen is left as it always was: its failures are the player's to
+    // report. With several, each comes and goes without the others.
+    if (m_fd < 0 || m_heads.size() < 2) return;
+    for (auto& h : m_heads) {
+        if (!h.connector_id) continue;
+        drmModeConnector* c = drmModeGetConnector(m_fd, h.connector_id);
+        const bool present = c && c->connection == DRM_MODE_CONNECTED && c->count_modes > 0;
+        if (c) drmModeFreeConnector(c);
+        if (h.active && !present) {
+            deactivate(h, "unplugged");
+        } else if (!h.active && present) {
+            std::string e;
+            if (activate(h, e)) plog_info("%s is back: %s", h.name.c_str(), h.description.c_str());
+        }
+    }
+}
+
+std::vector<OutputHeadStatus> DrmOutput::head_status() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    std::vector<OutputHeadStatus> out;
+    if (m_heads.size() < 2) return out;
+    for (const auto& h : m_heads) {
+        OutputHeadStatus s;
+        s.connector = h.name.empty() ? h.want : h.name;
+        s.tile = h.tile;
+        s.active = h.active;
+        if (h.active) {
+            char m[64];
+            std::snprintf(m, sizeof m, "%dx%d @ %.2f Hz", h.mode.hdisplay, h.mode.vdisplay,
+                          refresh_mhz(h.mode) / 1000.0);
+            s.mode = m;
+        }
+        out.push_back(s);
+    }
+    return out;
 }
 
 std::vector<DisplayInfo> DrmOutput::displays() const {

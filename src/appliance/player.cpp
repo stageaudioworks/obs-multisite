@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "player.h"
+#include "output_heads.h"
 #include "log.h"
 #include "reporter.h"
 #include "screen.h"
@@ -841,7 +842,8 @@ void Player::reconfigure(const Config& cfg) {
         before.connector  != cfg.connector  ||
         before.out_width  != cfg.out_width  ||
         before.out_height != cfg.out_height ||
-        before.out_fps    != cfg.out_fps;
+        before.out_fps    != cfg.out_fps    ||
+        before.outputs    != cfg.outputs;
 
     if (display_changed) {
         plog_info("display settings changed — resetting the output");
@@ -1491,7 +1493,14 @@ void Player::deliver_loop() {
             // falls through to the whole picture — recoverable by hand, where
             // a wrongly cropped one is not obviously wrong at all.
             const int sel = m_tile_sel.load();
-            if (sel >= 0) {
+            if (m_video.heads() > 1) {
+                // Several screens: each takes its own tile of this one frame
+                // (obs-multisite#29), so the feed is downloaded and decoded once.
+                TileLayout lay;
+                lay.cols = m_tile_cols.load();
+                lay.rows = m_tile_rows.load();
+                m_video.present_tiles(item.video, lay);
+            } else if (sel >= 0) {
                 TileLayout lay;
                 lay.cols = m_tile_cols.load();
                 lay.rows = m_tile_rows.load();
@@ -1629,12 +1638,7 @@ void Player::update_screen() {
     // is already arriving (delivery holds its frames back meanwhile).
     if (now_ns() < m_boot_splash_until_ns.load()) {
         if (!m_boot_splash_drawn.exchange(true)) {
-            int width = 1920, height = 1080;
-            m_video.size(width, height);
-            Canvas canvas(width, height);
-            render_splash(canvas, splash_info());
-            m_video.present_bgrx(canvas.width(), canvas.height(),
-                                 canvas.stride(), canvas.pixels());
+            show_splash(splash_info());
             m_idle_showing = true;
         }
         return;
@@ -1699,11 +1703,41 @@ void Player::update_screen() {
     if (m_idle_showing && signature == m_idle_signature) return;
     m_idle_signature = signature;
 
-    Canvas canvas(width, height);
-    render_splash(canvas, info);
-    m_video.present_bgrx(canvas.width(), canvas.height(), canvas.stride(),
-                         canvas.pixels());
+    show_splash(info);
     m_idle_showing = true;
+}
+
+// The identity screen on every screen this player drives. With several, each
+// says which it is ("OUTPUT 1 OF 2 - LEFT HALF"), so a swapped cable is
+// obvious at install; with one, exactly as ever.
+void Player::show_splash(const SplashInfo& info) {
+    const int n = m_video.heads();
+    if (n < 2) {
+        int width = 1920, height = 1080;
+        m_video.size(width, height);
+        Canvas canvas(width, height);
+        render_splash(canvas, info);
+        m_video.present_bgrx(canvas.width(), canvas.height(), canvas.stride(),
+                             canvas.pixels());
+        return;
+    }
+    // The feed's layout once an event says it; before then, the screens side
+    // by side, which is what a list of tiles 0, 1, ... across screens means.
+    TileLayout lay;
+    lay.cols = m_tile_cols.load();
+    lay.rows = m_tile_rows.load();
+    if (!lay.is_split()) { lay.cols = n; lay.rows = 1; }
+    const std::vector<OutputHeadStatus> heads = m_video.head_status();
+    for (int i = 0; i < n; ++i) {
+        int width = 1920, height = 1080;
+        m_video.head_size(i, width, height);
+        SplashInfo one = info;
+        one.output_label = output_label(i, n, i < (int)heads.size() ? heads[(size_t)i].tile : -1, lay);
+        Canvas canvas(width, height);
+        render_splash(canvas, one);
+        m_video.present_bgrx_on(i, canvas.width(), canvas.height(), canvas.stride(),
+                                canvas.pixels());
+    }
 }
 
 // ── Poll loop ────────────────────────────────────────────────────────────────
@@ -1715,6 +1749,7 @@ void Player::poll_loop() {
     update_screen();
     long long next_poll = 0;
     long long last_status_log = now_ms();
+    long long last_recheck = now_ms();
 
     while (m_running.load()) {
         const long long now = now_ms();
@@ -1821,6 +1856,13 @@ void Player::poll_loop() {
         }
 
         update_screen();
+
+        // A second screen unplugged stops being driven, and one plugged back
+        // in is driven again, without disturbing the others (#29).
+        if (now - last_recheck > 2000) {
+            last_recheck = now;
+            m_video.recheck();
+        }
 
         if (now - last_status_log > 60000) {
             const long long span_ms = now - last_status_log;
@@ -2313,6 +2355,9 @@ void Player::status(Status& out) const {
     out.frames_dropped    = m_frames_dropped.load();
 
     out.output_description = m_video.description();
+    out.outputs = m_video.head_status();
+    out.output_flip_spread_ms = m_video.flip_spread_ms();
+    out.output_flip_spread_worst_ms = m_video.flip_spread_worst_ms();
     out.video_output_ok    = m_video.ok();
     // Whether the sound is leaving is no longer the same question as whether
     // the operator left the sound switched on. It is whether the card is open:
