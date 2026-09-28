@@ -127,6 +127,19 @@ int main() {
     expect(IdleMode::Black, false, false, true, ScreenAction::Blank,
            "Hold released and frames stopped, black idle: black returns");
 
+    std::printf("\n== Until the first picture, the identity screen (identity_until_video) ==\n");
+    for (const IdleMode m : kModes) {
+        char what[128];
+        std::snprintf(what, sizeof what, "idle=%s, nothing shown yet: the identity screen", name(m));
+        CHECK(screen_action(m, false, false, false, true) == ScreenAction::Splash, what);
+        std::snprintf(what, sizeof what, "idle=%s, after a picture: the idle mode as ever", name(m));
+        CHECK(screen_action(m, false, false, true, true) == screen_action(m, false, false, true, false), what);
+    }
+    CHECK(screen_action(IdleMode::Black, true, false, true, true) == ScreenAction::Leave,
+          "a picture arriving still owns the screen");
+    CHECK(screen_action(IdleMode::Black, false, false, false, false) == ScreenAction::Blank,
+          "off (the default), a box told to idle in black stays black from the start");
+
     std::printf("\n== Every combination is decided, and none falls through ==\n");
     // A mode added later without a case in the switch would land on the splash
     // (the fallback), which is the safest of the four but not obviously so, and

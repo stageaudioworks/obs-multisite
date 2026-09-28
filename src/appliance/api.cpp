@@ -198,6 +198,8 @@ json config_json(const Config& c) {
     j["tile_index"]      = c.tile_index;
     j["idle_mode"]       = to_string(c.idle_mode);
     j["idle_image_path"] = c.idle_image_path;
+    j["identity_until_video"] = c.identity_until_video;
+    j["splash_label"]    = c.splash_label;
 
     j["audio_enabled"]  = c.audio_enabled;
     j["alsa_device"]    = c.alsa_device;
@@ -355,6 +357,8 @@ Config apply_edit(Config c, const json& j) {
         if (!idle.empty()) c.idle_mode = idle_mode_from_string(idle, c.idle_mode);
     }
     take(j, "idle_image_path", c.idle_image_path);
+    take(j, "identity_until_video", c.identity_until_video);
+    take(j, "splash_label", c.splash_label);
 
     take(j, "audio_enabled",  c.audio_enabled);
     take(j, "alsa_device",    c.alsa_device);

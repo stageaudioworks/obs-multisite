@@ -119,6 +119,8 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "idle_mode", idle);
     idle_mode = idle_mode_from_string(idle, idle_mode);
     take(j, "idle_image_path",      idle_image_path);
+    take(j, "identity_until_video", identity_until_video);
+    take(j, "splash_label",         splash_label);
 
     take(j, "audio_enabled",        audio_enabled);
     take(j, "alsa_device",          alsa_device);
@@ -190,6 +192,8 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["tile_index"]           = tile_index;
     j["idle_mode"]            = to_string(idle_mode);
     j["idle_image_path"]      = idle_image_path;
+    j["identity_until_video"] = identity_until_video;
+    j["splash_label"]         = splash_label;
 
     j["audio_enabled"]        = audio_enabled;
     j["alsa_device"]          = alsa_device;

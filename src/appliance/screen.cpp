@@ -4,10 +4,17 @@
 namespace multisite_player {
 
 ScreenAction screen_action(IdleMode mode, bool frames_arriving,
-                           bool holding_picture, bool has_frame) {
+                           bool holding_picture, bool has_frame,
+                           bool identity_until_video) {
     // A picture is arriving: there is an event on, and nothing here should
     // touch the screen.
     if (frames_arriving) return ScreenAction::Leave;
+
+    // Nothing has reached the screen since the player started, and the host
+    // asked for the box to say what it is until something does: the identity
+    // screen, whatever the idle mode. Once a picture has played, the idle mode
+    // is back in charge, so a congregation never sees it between services.
+    if (identity_until_video && !has_frame) return ScreenAction::Splash;
 
     // Hold is an operator act, not an idle state. Whoever pressed it is asking
     // for the frame in front of them to stay, so the idle screen must not take

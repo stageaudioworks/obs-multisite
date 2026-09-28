@@ -1562,6 +1562,8 @@ SplashInfo Player::splash_info() const {
     info.room       = cfg.room_id;
     info.version    = player_version();
     info.configured = cfg.configured();
+    info.label      = cfg.splash_label;
+    info.test_pattern = cfg.identity_until_video && m_frames_out.load() == 0;
     for (const auto& n : network_interfaces()) {
         if (n.ipv4.empty()) continue;
         info.addresses.push_back("http://" + n.ipv4 + ":" +
@@ -1652,7 +1654,8 @@ void Player::update_screen() {
     const Config cfg = config();
     const ScreenAction wanted = screen_action(cfg.idle_mode, frames_arriving,
                                               m_playing.load() && m_paused.load(),
-                                              m_frames_out.load() > 0);
+                                              m_frames_out.load() > 0,
+                                              cfg.identity_until_video);
 
     if (wanted == ScreenAction::Leave) {
         // Either a picture is arriving, in which case any idle screen it
@@ -1692,7 +1695,7 @@ void Player::update_screen() {
     // Nothing has changed, so nothing needs redrawing.
     std::string signature = info.state + "|" + info.detail + "|" + info.room;
     for (const auto& a : info.addresses) signature += "|" + a;
-    signature += "|" + info.remote_ip;
+    signature += "|" + info.remote_ip + "|" + info.label + (info.test_pattern ? "|bars" : "");
     if (m_idle_showing && signature == m_idle_signature) return;
     m_idle_signature = signature;
 

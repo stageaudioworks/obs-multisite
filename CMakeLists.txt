@@ -825,6 +825,13 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_link_libraries(test_preview PRIVATE ffmpeg_iface)
     add_test(NAME preview COMMAND test_preview)
 
+    # The identity screen on colour bars until the first picture, and the
+    # host's line under the name, read back pixel by pixel.
+    add_executable(test_splash tests/test_splash.cpp src/appliance/splash.cpp)
+    target_include_directories(test_splash PRIVATE src/appliance src/core)
+    target_link_libraries(test_splash PRIVATE ffmpeg_iface)
+    add_test(NAME splash COMMAND test_splash)
+
     # DRM/KMS: the appliance drives the HDMI output itself, with no desktop.
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)

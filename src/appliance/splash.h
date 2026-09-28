@@ -72,6 +72,11 @@ struct SplashInfo {
     // empty label would only invite the question.
     std::string remote_ip;
     bool        configured = true;
+    // The host's own line under the name (Config::splash_label).
+    std::string label;
+    // Colour bars behind it all, with the words on a dark panel: the screen
+    // before the first picture (Config::identity_until_video).
+    bool        test_pattern = false;
 };
 
 void render_splash(Canvas& canvas, const SplashInfo& info);

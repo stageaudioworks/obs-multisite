@@ -29,7 +29,10 @@ enum class ScreenAction {
 //   seconds, so there is an event on and the idle screen has nothing to say.
 // `holding_picture` — the operator pressed Hold while playback was running.
 // `has_frame` — any frame has reached the display since the box started.
+// `identity_until_video` — until that first frame, the identity screen,
+//   whatever `mode` says (Config::identity_until_video).
 ScreenAction screen_action(IdleMode mode, bool frames_arriving,
-                           bool holding_picture, bool has_frame);
+                           bool holding_picture, bool has_frame,
+                           bool identity_until_video = false);
 
 } // namespace multisite_player

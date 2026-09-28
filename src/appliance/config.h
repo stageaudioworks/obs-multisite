@@ -137,6 +137,15 @@ struct Config {
 
     IdleMode    idle_mode = IdleMode::Splash;
     std::string idle_image_path;
+    // From the player's start until its first picture, show the identity
+    // screen on colour bars, whatever idle_mode says; after that, idle_mode as
+    // ever. For a box somebody has just plugged in: its screen says what it is
+    // and that the output works. Off by default, so a player told to idle in
+    // black stays black; a host such as MultisiteOS turns it on.
+    bool        identity_until_video = false;
+    // A line the host adds under the name on the identity screen, such as
+    // "DECODER - MULTISITEOS 0.2.35": what the box is, in the host's words.
+    std::string splash_label;
 
     // ── Audio output ─────────────────────────────────────────────────────────
     bool        audio_enabled = true;

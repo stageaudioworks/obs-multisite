@@ -131,6 +131,9 @@ void Canvas::fill(uint32_t bgrx) {
 void Canvas::rect(int x, int y, int w, int h, uint32_t bgrx) {
     const int x0 = std::max(0, x), y0 = std::max(0, y);
     const int x1 = std::min(m_width, x + w), y1 = std::min(m_height, y + h);
+    // Wholly off the canvas: nothing to fill. Without this, a rectangle past
+    // the left edge gave x1 < x0, and std::fill a backwards range.
+    if (x1 <= x0 || y1 <= y0) return;
     for (int row = y0; row < y1; ++row)
         std::fill(m_px.begin() + (size_t)row * m_width + x0,
                   m_px.begin() + (size_t)row * m_width + x1, bgrx);
@@ -234,6 +237,20 @@ namespace {
 
 // A vertical gradient under the identity screen: flat navy reads as a dead
 // monitor, a gentle lift reads as deliberate.
+// SMPTE-style colour bars at 75%, their castellations and the bottom row:
+// the screen says at a glance that the output works and its colours are right.
+void fill_bars(Canvas& canvas) {
+    static const uint32_t top[7]    = {0xbfbfbf, 0xbfbf00, 0x00bfbf, 0x00bf00, 0xbf00bf, 0xbf0000, 0x0000bf};
+    static const uint32_t middle[7] = {0x0000bf, 0x131313, 0xbf00bf, 0x131313, 0x00bfbf, 0x131313, 0xbfbfbf};
+    static const uint32_t bottom[7] = {0x00214c, 0xebebeb, 0x32006a, 0x131313, 0x090909, 0x131313, 0x1d1d1d};
+    const int w = canvas.width(), h = canvas.height();
+    const int rows[4] = {0, h * 2 / 3, h * 3 / 4, h};
+    const uint32_t* bands[3] = {top, middle, bottom};
+    for (int b = 0; b < 3; ++b)
+        for (int i = 0; i < 7; ++i)
+            canvas.rect(w * i / 7, rows[b], w * (i + 1) / 7 - w * i / 7, rows[b + 1] - rows[b], bands[b][i]);
+}
+
 void fill_gradient(Canvas& canvas, uint32_t top, uint32_t bottom) {
     const int w = canvas.width(), h = canvas.height();
     const int tr = (top >> 16) & 0xff, tg = (top >> 8) & 0xff, tb = top & 0xff;
@@ -366,11 +383,22 @@ private:
 
 void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int W = canvas.width(), H = canvas.height();
-    fill_gradient(canvas, kBgTop, kBg);
-
     // Scale everything off the display height, so the same layout works on a
     // 720p monitor in an office and a 4K screen in an auditorium.
     const int unit  = std::max(1, H / 180);         // 6 at 1080p
+
+    // Where the layout goes: the whole screen, or with the test pattern a
+    // dark panel across the colour bars, which stay in sight above and below.
+    int X0 = 0, Y0 = 0, X1 = W, Y1 = H;
+    if (info.test_pattern) {
+        fill_bars(canvas);
+        X0 = W * 3 / 100; X1 = W - X0; Y0 = H * 12 / 100; Y1 = H - Y0;
+        const int border = std::max(2, unit / 2);
+        canvas.rect(X0 - border, Y0 - border, X1 - X0 + 2 * border, Y1 - Y0 + 2 * border, 0x00c8ccd4);
+        canvas.rect(X0, Y0, X1 - X0, Y1 - Y0, kBg);
+    } else {
+        fill_gradient(canvas, kBgTop, kBg);
+    }
     const int big   = unit * 2;
     const int mid   = unit;
     const int small = std::max(1, unit * 2 / 3);
@@ -383,17 +411,17 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     // Header: what the box is, up top, with a hairline under it. Everything a
     // person standing in the room needs is below that, in one glance.
     const std::string brand = "MULTISITE PLAYER";
-    tx.draw(canvas, unit * 6, unit * 4, brand, small, kDim);
+    tx.draw(canvas, X0 + unit * 6, Y0 + unit * 4, brand, small, kDim);
     if (!info.version.empty()) {
         const std::string v = "V" + info.version;
-        tx.draw(canvas, W - unit * 6 - tx.width(v, small), unit * 4, v, small,
+        tx.draw(canvas, X1 - unit * 6 - tx.width(v, small), Y0 + unit * 4, v, small,
                 kDim);
     }
-    canvas.rect(unit * 6, unit * 11, W - unit * 12, std::max(1, unit / 3),
+    canvas.rect(X0 + unit * 6, Y0 + unit * 11, X1 - X0 - unit * 12, std::max(1, unit / 3),
                 kRule);
 
-    const int top   = unit * 16;       // below the header
-    const int floor = H - unit * 6;    // bottom margin
+    const int top   = Y0 + unit * 16;  // below the header
+    const int floor = Y1 - unit * 6;   // bottom margin
 
     // The QR tile. One box is enough: whatever the room needs to reach, the
     // web page on this box is where it starts.
@@ -402,12 +430,12 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
 #ifdef MULTISITE_HAVE_QRCODE
     QrBlock block;
     if (!info.addresses.empty()) {
-        const int avail = std::min((W * 3) / 10, floor - top);
+        const int avail = std::min(((X1 - X0) * 3) / 10, floor - top);
         if (build_qr(info.addresses.front(), std::max(unit * 12, avail),
                      block)) {
             have_qr = true;
             tile = block.side();
-            qr_x = W - unit * 6 - tile;
+            qr_x = X1 - unit * 6 - tile;
             const int caption = Canvas::text_height(small) + unit * 2;
             qr_y = top + std::max(0, (floor - top - tile - caption) / 2);
         }
@@ -420,8 +448,8 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
 
     // The words occupy the space left of the tile, centred in it — or the whole
     // width, when there is nothing to scan.
-    const int text_right = have_qr ? qr_x - unit * 4 : W - unit * 6;
-    const int cx         = (unit * 6 + text_right) / 2;
+    const int text_right = have_qr ? qr_x - unit * 4 : X1 - unit * 6;
+    const int cx         = (X0 + unit * 6 + text_right) / 2;
     auto centred = [&](int y, const std::string& s, int scale, uint32_t c) {
         tx.draw(canvas, cx - tx.width(s, scale) / 2, y, s, scale, c);
     };
@@ -435,10 +463,12 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     // column rather than letting it collide with the tile.
     std::string title = info.hostname.empty() ? "CAMPUS PLAYER"
                                               : info.hostname;
-    const int title_max = std::max(1, text_right - unit * 12);
+    const int title_max = std::max(1, text_right - X0 - unit * 12);
     while (!title.empty() && tx.width(title, big) > title_max)
         title.pop_back();
-    lines.push_back({title, big, kText, unit * 4});
+    lines.push_back({title, big, kText, info.label.empty() ? unit * 4 : unit * 2});
+    // What the box is, in its host's words, right under its name.
+    if (!info.label.empty()) lines.push_back({info.label, small, kDim, unit * 4});
     lines.push_back({"", 0, kRule, unit * 4});       // the rule
 
     if (!info.configured)
@@ -491,7 +521,7 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     for (const auto& l : lines) {
         if (l.scale == 0) {
             const int thickness = std::max(1, unit / 3);
-            canvas.rect(unit * 6, y, std::max(1, text_right - unit * 6),
+            canvas.rect(X0 + unit * 6, y, std::max(1, text_right - X0 - unit * 6),
                         thickness, l.colour);
             y += thickness + l.gap_below;
             continue;
