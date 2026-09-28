@@ -288,6 +288,9 @@ if(UNIX)
     # Each box its own AES67 group: two on 239.1.0.1 doubled every packet.
     add_test(NAME aes67_address
              COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aes67_address.sh)
+    # The kernel headers package on a Pi and on an Armbian vendor kernel (#30).
+    add_test(NAME kernel_headers
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_kernel_headers.sh)
 endif()
 
 # The signer's entire output derives from these two functions, and each

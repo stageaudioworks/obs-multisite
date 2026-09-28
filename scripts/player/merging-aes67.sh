@@ -264,6 +264,9 @@ done
 # run is self-documenting when it is pasted into a conversation later.
 KERNEL_RELEASE="$(uname -r)"
 KERNEL_HEADERS="/lib/modules/$KERNEL_RELEASE/build"
+# Which package has them, by whichever name this distribution uses.
+# shellcheck source-path=SCRIPTDIR source=kernel-headers.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kernel-headers.sh"
 
 # ── What is already here ─────────────────────────────────────────────────────
 # Printed before anything is changed, both so a --check run is useful and so a
@@ -273,8 +276,11 @@ report_state() {
     note "kernel:      $KERNEL_RELEASE"
     if [ -d "$KERNEL_HEADERS" ]; then
         note "headers:     present ($KERNEL_HEADERS)"
+    elif pkg="$(headers_package "$KERNEL_RELEASE")"; then
+        note "headers:     missing; would install $pkg"
     else
-        warn "headers:     missing — the module cannot be built without them"
+        warn "headers:     missing, and no package for them: tried"
+        warn "             $(headers_candidates "$KERNEL_RELEASE" | tr '\n' ' ')"
     fi
     note "arch:        $(uname -m)"
 
@@ -343,18 +349,19 @@ install_deps() {
         curl
     )
 
-    # The kernel headers, by whichever name this distribution uses.
+    # The kernel headers, by whichever name this distribution uses
+    # (kernel-headers.sh: the release's, Armbian's branch package, the Pi's).
+    local headers
     if [ -d "$KERNEL_HEADERS" ]; then
         note "kernel headers already present"
-    elif apt-cache show "linux-headers-$KERNEL_RELEASE" >/dev/null 2>&1; then
-        pkgs+=("linux-headers-$KERNEL_RELEASE")
-    elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
-        pkgs+=(raspberrypi-kernel-headers)
+    elif headers="$(headers_package "$KERNEL_RELEASE")"; then
+        note "kernel headers: $headers"
+        pkgs+=("$headers")
     else
-        warn "no kernel headers package found for $KERNEL_RELEASE"
+        warn "no kernel headers package found for $KERNEL_RELEASE; tried"
+        warn "  $(headers_candidates "$KERNEL_RELEASE" | tr '\n' ' ')"
         note "the module build will fail until headers matching the running"
-        note "kernel are installed; on Raspberry Pi OS that is usually"
-        note "  sudo apt install raspberrypi-kernel-headers"
+        note "kernel are installed"
     fi
 
     note "apt: ${pkgs[*]}"
