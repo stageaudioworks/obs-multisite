@@ -18,6 +18,10 @@
 // `tests/test_aes67.cpp` checks all of it on a laptop, with no Pi and no card.
 // The part that does talk to the daemon is in aes67.cpp, and is deliberately
 // not in here.
+#include <cstdio>
+#include <functional>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -230,14 +234,63 @@ inline std::string aes67_source_body(int id, int channels,
     return j.dump();
 }
 
-// What the address falls back to when the box has not been given one: a
-// documentation-range multicast group, and the one the daemon's own sample
-// configuration uses, so a box that has never been edited behaves as the
-// project intends rather than inventing something.
+// The group the daemon's own sample configuration uses. Every box used to
+// send to it when it had not been given an address, so two boxes on one
+// network sent to one group and a receiver heard every packet twice. It is now
+// only the last resort, when a box cannot tell which network card it sends on.
 inline std::string aes67_default_address() { return "239.1.0.1"; }
 
+// This box's own group: 239.1.x.y from the last two bytes of the MAC address
+// of the card it sends on, so it is the same across DHCP changes and two boxes
+// share one about once in 65,536. "" for a MAC that is not six hex bytes. The
+// old shared group itself is never handed out: 00:01 gets 239.1.0.2.
+inline std::string aes67_address_for_mac(const std::string& mac) {
+    unsigned b[6];
+    char tail = 0;
+    if (std::sscanf(mac.c_str(), "%2x:%2x:%2x:%2x:%2x:%2x%c", &b[0], &b[1], &b[2], &b[3], &b[4],
+                    &b[5], &tail) != 6)
+        return "";
+    if (b[4] == 0 && b[5] == 1) b[5] = 2;
+    return "239.1." + std::to_string(b[4]) + "." + std::to_string(b[5]);
+}
+
+// The interface the daemon sends on, from its configuration's interface_name.
+inline std::string aes67_interface_from_conf(const std::string& text) {
+    const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+    if (!j.is_object() || !j.contains("interface_name") || !j["interface_name"].is_string())
+        return "";
+    return j["interface_name"].get<std::string>();
+}
+
+// This box's own group, given the daemon's configuration and a way to read an
+// interface's MAC; the default group if either is missing. Split out so it is
+// tested without /etc or /sys.
+inline std::string aes67_box_address_from(const std::string& conf_text,
+                                          const std::function<std::string(const std::string&)>& mac_of) {
+    const std::string iface = aes67_interface_from_conf(conf_text);
+    const std::string mine = iface.empty() ? "" : aes67_address_for_mac(mac_of(iface));
+    return mine.empty() ? aes67_default_address() : mine;
+}
+
+// This box's own group, from the daemon's configuration and /sys/class/net.
+// Two small file reads and no daemon, so it lives here with the pure pieces.
+inline std::string aes67_box_address() {
+    auto slurp = [](const std::string& path) {
+        std::ifstream f(path);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        return ss.str();
+    };
+    return aes67_box_address_from(slurp(kAes67DaemonConf), [&](const std::string& iface) {
+        std::string mac = slurp("/sys/class/net/" + iface + "/address");
+        while (!mac.empty() && (mac.back() == '\n' || mac.back() == ' ')) mac.pop_back();
+        return mac;
+    });
+}
+
+// The address a box sends to: the one it was given, or its own.
 inline std::string aes67_address_or_default(const std::string& configured) {
-    return configured.empty() ? aes67_default_address() : configured;
+    return configured.empty() ? aes67_box_address() : configured;
 }
 
 // ── Reading back what the daemon says ────────────────────────────────────────

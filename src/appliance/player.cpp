@@ -1232,7 +1232,7 @@ const char* Player::aes67_reconcile_once() {
     // not a second opinion.
     const int width = aes67_channels_to_map(cfg.aes67_channels);
     const std::string address =
-        cfg.aes67_address.empty() ? aes67_default_address() : cfg.aes67_address;
+        aes67_address_or_default(cfg.aes67_address);
 
     const Aes67State st = aes67_probe(cfg.alsa_device, width, address);
     // Cached for the status line (atomics, not under m_aes67_mtx — see the

@@ -259,8 +259,31 @@ int main() {
           "an address the box was given is used");
     CHECK(!aes67_address_or_default("").empty(),
           "an unset address falls back rather than being blank");
-    CHECK(aes67_address_or_default("") == aes67_default_address(),
-          "the fallback is the daemon's own default group");
+    std::printf("== each box its own group (two boxes on 239.1.0.1 doubled every packet) ==\n");
+    CHECK(aes67_address_for_mac("02:00:00:00:00:e0") == "239.1.0.224", "from the last two bytes");
+    CHECK(aes67_address_for_mac("d8:3a:dd:12:ab:cd") == "239.1.171.205", "hex, either case");
+    CHECK(aes67_address_for_mac("D8:3A:DD:12:AB:CD") == "239.1.171.205", "upper case too");
+    CHECK(aes67_address_for_mac("02:00:00:00:00:e0") != aes67_address_for_mac("d8:3a:dd:12:ab:cd"),
+          "two boxes, two groups");
+    CHECK(aes67_address_for_mac("00:11:22:33:00:01") == "239.1.0.2", "never the old shared group");
+    CHECK(aes67_address_for_mac("").empty() && aes67_address_for_mac("02:00:00:00:00").empty() &&
+              aes67_address_for_mac("02:00:00:00:00:e0:ff").empty() &&
+              aes67_address_for_mac("zz:00:00:00:00:e0").empty(),
+          "not a MAC: nothing");
+    const std::string conf = R"({"http_port": 8081, "interface_name": "eth0"})";
+    std::string asked;
+    CHECK(aes67_box_address_from(conf, [&](const std::string& i) { asked = i; return std::string("02:00:00:00:00:e0"); })
+              == "239.1.0.224" && asked == "eth0",
+          "the MAC of the card the daemon's configuration names");
+    CHECK(aes67_box_address_from("{}", [](const std::string&) { return std::string("02:00:00:00:00:e0"); })
+              == aes67_default_address(),
+          "no interface named: the old default, as a last resort");
+    CHECK(aes67_box_address_from(conf, [](const std::string&) { return std::string(); })
+              == aes67_default_address(),
+          "an interface with no MAC to read: likewise");
+    CHECK(aes67_box_address_from("not json", [](const std::string&) { return std::string("02:00:00:00:00:e0"); })
+              == aes67_default_address(),
+          "a configuration that does not parse: likewise");
 
     // ── Finding the card to point the player at ──────────────────────────────
     // The device string is built from this, and getting it wrong means pointing

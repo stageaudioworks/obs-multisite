@@ -285,6 +285,9 @@ if(UNIX)
     # directory, never under /var/log (obs-multisite#35). Needs bash and python3.
     add_test(NAME cache_dir
              COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cache_dir.sh)
+    # Each box its own AES67 group: two on 239.1.0.1 doubled every packet.
+    add_test(NAME aes67_address
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aes67_address.sh)
 endif()
 
 # The signer's entire output derives from these two functions, and each

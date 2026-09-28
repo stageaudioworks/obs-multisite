@@ -676,6 +676,11 @@ install_daemon() {
 # The port the player's own interface is on, so the daemon can be kept off it.
 # Read from the player's config rather than assumed, because an operator may
 # have moved it.
+# This box's own multicast group (every box used to share 239.1.0.1, and a
+# receiver heard every packet twice): see aes67-address.sh.
+# shellcheck source-path=SCRIPTDIR source=aes67-address.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/aes67-address.sh"
+
 player_web_port() {
     local port=""
     if [ -f "$PLAYER_CONF" ]; then
@@ -742,8 +747,8 @@ write_config() {
   "tic_frame_size_at_1fs": 48,
   "max_tic_frame_size": 1024,
   "sample_rate": 48000,
-  "rtp_mcast_base": "239.1.0.1",
-  "rtp_mcast_base_sec": "239.1.0.1",
+  "rtp_mcast_base": "$(box_mcast_address)",
+  "rtp_mcast_base_sec": "$(box_mcast_address)",
   "rtp_port": 5004,
   "rtp_port_sec": 5004,
   "ptp_domain": 0,
@@ -974,12 +979,11 @@ create_source() {
         return 0
     fi
 
-    # The address, read out of the daemon's own configuration rather than
-    # written down a second time here: one place to change it, and no way for
-    # the two to disagree.
+    # This box's own group, as the player works it out, so the stream set up
+    # here is the one the player keeps (an address given in the player's
+    # settings replaces it there).
     local mcast
-    mcast="$(sed -n 's/.*"rtp_mcast_base"[^"]*"\([^"]*\)".*/\1/p' "$DAEMON_CONF" | head -1)"
-    mcast="${mcast:-239.1.0.1}"
+    mcast="$(box_mcast_address)"
 
     local channels="$SOURCE_CHANNELS"
     case "$channels" in
