@@ -423,8 +423,14 @@ void Session::on_confirmed(const SpooledSegment& seg) {
     // Built here and PUT below, outside m_mtx: it used to be PUT here, and
     // status() waited on the network for it every heartbeat (obs-multisite#34).
     int64_t t = now_ms();
+    // ">=", not ">": an interval of 0 means a heartbeat with every confirmed
+    // segment, and a segment confirmed in the same millisecond as the
+    // heartbeat before it (start_new's, against an instant store) measured 0,
+    // which ">" read as not yet due. That skipped it outright, and
+    // test_session 22 waited for a PUT that was never made — on CI's runners,
+    // not on a laptop. With a real interval the two differ by 1 ms.
     if (m_manifest.status != "ended" &&
-        t - m_last_heartbeat_ms.load() > (int64_t)m_cfg.heartbeat_interval_s * 1000) {
+        t - m_last_heartbeat_ms.load() >= (int64_t)m_cfg.heartbeat_interval_s * 1000) {
         m_last_heartbeat_ms = t;
         LivePointer lp;
         lp.room_id = m_cfg.room_id;
