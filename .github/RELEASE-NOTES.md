@@ -31,6 +31,32 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.28-alpha
+
+**The encoder no longer stalls on a slow link.** Two uploads — the room's
+live heartbeat and the list of cues — were sent while the encoder held the lock
+that its own status check needs. On a slow connection, every heartbeat held up
+anything asking for status, including the dock, for as long as the upload took.
+Both are now sent after the lock is released, and the order they must keep —
+one cue list at a time, and no late "live" after an event has ended — is kept
+by locks of their own.
+
+**The docks no longer grow to fit a long value.** One long value in the Status
+area, such as an AES67 audio track named after the machine sending it, could
+make the whole decoder dock wider than its space and push the Storage figures
+off the edge. Every Status value in both docks now fits the width it is given:
+it is shortened in the middle when there is not room, so both ends stay
+readable, and hovering shows it in full. When the dock is wide enough, the
+whole value shows.
+
+**The campus player's installer keeps its cache off the log disk.** On Armbian,
+the installer could mistake the RAM-backed log area for a separate drive and put
+the video cache there, filling the logs until logging stopped. It now tells a
+real drive from a bind mount, never chooses anywhere under `/var/log`, and moves
+a cache it put there before.
+
+**Captions are still not in this release**, for the same reasons as before.
+
 ## What's new in v0.1.27-alpha
 
 A small release that fixes playback on a campus that failed while it was
