@@ -170,6 +170,27 @@ int main() {
         CHECK(heartbeat_parse_server_interval("{\"interval_s\": -5}") == 0, "negative is 0");
     }
 
+    std::printf("The organisation's standing parses, and only what is known\n");
+    {
+        CHECK(heartbeat_parse_standing(
+                  "{\"interval_s\":30,\"standing\":{\"state\":\"grace\",\"plan\":\"Growth\","
+                  "\"covered\":true,\"grace_until\":\"2026-10-26T12:00:00.000Z\"}}") ==
+                  "{\"covered\":true,\"grace_until\":\"2026-10-26T12:00:00.000Z\",\"plan\":\"Growth\","
+                  "\"state\":\"grace\"}",
+              "grace, with its plan, cover and end");
+        CHECK(heartbeat_parse_standing("{\"standing\":{\"state\":\"unpaired\"}}") ==
+                  "{\"state\":\"unpaired\"}",
+              "a state on its own");
+        CHECK(heartbeat_parse_standing("{\"standing\":{\"state\":\"entitled\",\"token\":\"x\","
+                                       "\"covered\":\"yes\"}}") == "{\"state\":\"entitled\"}",
+              "unknown keys and wrong types left out");
+        CHECK(heartbeat_parse_standing("{\"interval_s\":30}").empty(), "none sent: empty");
+        CHECK(heartbeat_parse_standing("{\"standing\":{\"state\":\"suspended\"}}").empty(),
+              "a state it does not know: empty");
+        CHECK(heartbeat_parse_standing("{\"standing\":\"entitled\"}").empty(), "not an object: empty");
+        CHECK(heartbeat_parse_standing("garbage").empty(), "garbage: empty");
+    }
+
     std::printf("Envelope: plugin omits host, appliance sends best-effort\n");
     {
         HeartbeatIdentity id{"apl_01J8", "obs-decoder", "0.1.23-alpha", 41203};

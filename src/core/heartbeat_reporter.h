@@ -122,6 +122,14 @@ int heartbeat_next_interval_s(bool active, int central_interval_s,
 // absent or unparseable. Never throws.
 int heartbeat_parse_server_interval(const std::string& body);
 
+// Where the box's organisation stands, from a heartbeat response body's
+// "standing" (multisite-cloud's reporter-brief): a JSON object with "state"
+// (entitled | grace | lapsed | unpaired) and, when the collector sent them,
+// "plan", "covered" and "grace_until", and nothing else. "" when the body has
+// none, or one this does not recognise. Never throws. The host shows it; it
+// is never a reason to stop or refuse anything.
+std::string heartbeat_parse_standing(const std::string& body);
+
 struct HeartbeatIdentity {
     std::string id;               // operator-provisioned appliance id
     std::string kind;             // one of kReporterKinds

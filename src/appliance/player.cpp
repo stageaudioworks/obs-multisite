@@ -154,6 +154,11 @@ std::string Player::reporter_state() const {
     return m_reporter ? m_reporter->last_result() : std::string();
 }
 
+std::string Player::reporter_standing() const {
+    std::lock_guard<std::mutex> lk(m_obj_mtx);
+    return m_reporter ? m_reporter->standing() : std::string();
+}
+
 bool Player::store_config(const Config& cfg, std::string& error) {
     // Saving is what makes a setting survive the next power cut, so a
     // failure here is reported rather than silently applied. A player built
@@ -2346,6 +2351,7 @@ void Player::status(Status& out) const {
     out.configured        = cfg.configured();
     out.locked            = m_locked.load();
     out.reporter_state    = reporter_state();
+    out.reporter_standing = reporter_standing();
     out.playing           = m_playing.load();
     out.paused            = m_paused.load();
     out.loading           = m_loading_event.load();

@@ -181,6 +181,26 @@ int heartbeat_parse_server_interval(const std::string& body) {
     }
 }
 
+std::string heartbeat_parse_standing(const std::string& body) {
+    try {
+        const json j = json::parse(body);
+        if (!j.is_object() || !j.contains("standing")) return "";
+        const json& s = j["standing"];
+        if (!s.is_object() || !s.contains("state") || !s["state"].is_string()) return "";
+        const std::string state = s["state"].get<std::string>();
+        if (state != "entitled" && state != "grace" && state != "lapsed" && state != "unpaired")
+            return "";
+        json out{{"state", state}};
+        if (s.contains("plan") && s["plan"].is_string()) out["plan"] = s["plan"];
+        if (s.contains("covered") && s["covered"].is_boolean()) out["covered"] = s["covered"];
+        if (s.contains("grace_until") && s["grace_until"].is_string())
+            out["grace_until"] = s["grace_until"];
+        return out.dump();
+    } catch (...) {
+        return "";
+    }
+}
+
 std::string heartbeat_build(const HeartbeatIdentity& id,
                             const HeartbeatHost* host_or_null,
                             const std::string& filtered_status_json,

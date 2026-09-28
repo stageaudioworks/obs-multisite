@@ -57,6 +57,11 @@ public:
     // purpose — the worker logs only when this changes.
     std::string last_result() const;
 
+    // Where the collector last said this box's organisation stands, with
+    // "at" (when it said it) added, as JSON; "" before it has said. Shown on
+    // the page, never acted on.
+    std::string standing() const;
+
     // Device-code pairing. False from begin when no collector URL is
     // configured. The worker polls and persists the claim; the page shows
     // the code from view() and stops it with cancel().

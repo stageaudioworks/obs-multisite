@@ -167,6 +167,7 @@ struct Status {
     // words ("accepted (200)", "disabled", …) — empty before the first
     // evaluation. What the page shows beside the reporter settings.
     std::string reporter_state;
+    std::string reporter_standing;   // JSON, or "" (Reporter::standing)
 };
 
 // What the sound card is being given, with a word for why it reads as it does.
@@ -313,6 +314,7 @@ public:
     // The heartbeat's last answer for the page. Empty before the first
     // evaluation or when the reporter was never started.
     std::string reporter_state() const;
+    std::string reporter_standing() const;
 
     // Persist a full config edit: save to disk when a path exists, then
     // apply. The settings page and pairing claims both go through here, so a

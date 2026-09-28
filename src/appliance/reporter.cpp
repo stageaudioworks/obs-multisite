@@ -123,6 +123,11 @@ struct Reporter::Worker {
     bool limited = false;
     int retry_after_s = 0;
     std::string last_result;
+    // The collector's last word on where this box's organisation stands
+    // (heartbeat_parse_standing), and when it said it. Kept until the next
+    // one: a reply without it changes nothing.
+    std::string standing;
+    std::string standing_at;
     Player* player = nullptr;
     // Pairing (device-code flow). The worker asks and polls; the page shows
     // the code from pair_view() and stops it with pair_cancel(). Guarded by
@@ -220,9 +225,14 @@ void Reporter::serve_once() {
             outcome = "accepted (200)";
             const int adopted =
                 multisite::heartbeat_parse_server_interval(r.body);
+            const std::string standing = multisite::heartbeat_parse_standing(r.body);
             wait_s = multisite::heartbeat_next_interval_s(active, adopted,
                                                           false, 0);
             std::lock_guard<std::mutex> lk(m_worker->mtx);
+            if (!standing.empty()) {
+                m_worker->standing = standing;
+                m_worker->standing_at = sent_at_iso();
+            }
             m_worker->central_s = adopted;
             m_worker->limited = false;
             m_worker->retry_after_s = 0;
@@ -426,6 +436,15 @@ void Reporter::stop() {
 std::string Reporter::last_result() const {
     std::lock_guard<std::mutex> lk(m_worker->mtx);
     return m_worker->last_result;
+}
+
+std::string Reporter::standing() const {
+    std::lock_guard<std::mutex> lk(m_worker->mtx);
+    if (m_worker->standing.empty()) return "";
+    json j = json::parse(m_worker->standing, nullptr, false);
+    if (!j.is_object()) return "";
+    j["at"] = m_worker->standing_at;
+    return j.dump();
 }
 
 bool Reporter::pair_begin() {

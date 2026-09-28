@@ -66,6 +66,11 @@ json status_json(const Player& player) {
     j["configured"] = s.configured;
     // The heartbeat's last answer, for the line beside the reporter settings.
     j["reporter_state"] = s.reporter_state;
+    // Where the collector says this box's organisation stands, when it has.
+    if (!s.reporter_standing.empty()) {
+        const json st = json::parse(s.reporter_standing, nullptr, false);
+        if (st.is_object()) j["reporter_standing"] = st;
+    }
 
     j["playhead_ms"]    = s.playhead_ms;
     j["live_ms"]        = s.live_ms;
