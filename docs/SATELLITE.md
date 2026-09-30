@@ -431,9 +431,7 @@ checking the same list again, so a box that is already clean is left alone.
   sound may still be on the network — so neither is touched unless asked.
   `--purge-remote-access` removes ZeroTier and cloudflared; `--purge-aes67`
   removes Merging's kernel module and `aes67-daemon`, their configuration and
-  the build tree, and puts PulseAudio back. The legacy Digisynthetic stack is
-  never touched here; that is
-  [`purge-digisyn.sh`](../scripts/player/purge-digisyn.sh).
+  the build tree, and puts PulseAudio back.
 - **Back to stock in one command, with the way in left intact.** `--stock` is
   the whole job asked once: the player, the AES67 stack under it, and the
   packages that existed only to build the two of them. ZeroTier is the

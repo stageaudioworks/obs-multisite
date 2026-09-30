@@ -42,10 +42,6 @@
 # was never cleared at all, and the box being cleared is usually one somebody
 # has to reach afterwards.
 #
-# The legacy Digisynthetic stack is never touched here;
-# scripts/player/purge-digisyn.sh is the script for that, and was written as
-# the mirror of the vendor installer that put it there.
-#
 # Safe to run again: every step looks first, reports what it found, and does
 # nothing if the thing is already gone. --help, --check and --dry-run change
 # nothing and are allowed on a laptop — which is exactly where this wants to be
@@ -145,8 +141,7 @@ What it removes by default
 
 What it never touches
   ZeroTier, cloudflared and the open AES67 stack, unless one of the --purge-*
-  options below is given; the legacy Digisynthetic stack, which is
-  scripts/player/purge-digisyn.sh; and snd/snd-pcm, which HDMI needs too.
+  options below is given; and snd/snd-pcm, which HDMI needs too.
 
 Options
   --keep-config        Keep /etc/multisite-player and the downloaded cache.
@@ -438,12 +433,6 @@ if [ -f "$AES_CONF" ]; then
 fi
 if aes_module_loaded; then
     note "found:  the $AES_MODULE module is loaded"
-fi
-
-# The one thing this script was written next to and must not silently undo.
-if lsmod 2>/dev/null | grep -q '^Digisyn'; then
-    note "legacy: Digisynthetic's module is loaded — removed by purge-digisyn.sh,"
-    note "        not by this script"
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
@@ -907,7 +896,6 @@ if [ "$PURGE_AES67" -eq 0 ] && { aes_service_known || present_file "$AES_DAEMON"
     note "the open AES67 stack — --purge-aes67 removes it"
 fi
 note "snd and snd-pcm — the HDMI output needs them too"
-note "the legacy Digisynthetic stack — scripts/player/purge-digisyn.sh"
 if [ "$STOCK" -eq 1 ]; then
     note "clang, alsa-utils, psmisc, libsystemd-dev and the kernel headers, which"
     note "the AES67 build also wanted: ordinary things to have on a Linux box, and"
