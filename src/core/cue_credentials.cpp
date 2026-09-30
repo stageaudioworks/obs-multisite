@@ -86,11 +86,6 @@ void CueCredentials::want_event(const std::string& event_id) {
     }
 }
 
-std::string CueCredentials::wanted_event() const {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    return m_wanted;
-}
-
 CueCredentials::Due CueCredentials::tick(long long now_ms) const {
     std::lock_guard<std::mutex> lk(m_mtx);
     Due d;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "storage_health.h"
+#include "text.h"
 
 #include <cctype>
 #include <cstring>
@@ -8,13 +9,6 @@ namespace multisite {
 
 namespace {
 
-std::string trim(const std::string& v) {
-    const char* ws = " \t\r\n";
-    const size_t a = v.find_first_not_of(ws);
-    if (a == std::string::npos) return "";
-    const size_t b = v.find_last_not_of(ws);
-    return v.substr(a, b - a + 1);
-}
 
 char upper(char c) {
     return (char)std::toupper((unsigned char)c);

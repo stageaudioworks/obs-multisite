@@ -124,16 +124,6 @@ public:
     // the download still works but without a progress bar.
     int64_t event_byte_size(const std::string& event_id) const;
 
-    // Streams a whole event as one fragmented MP4: the init segment followed
-    // by every fragment in order, which is already a valid MP4 and needs no
-    // re-muxing. `sink` returns false to abandon the download — a browser
-    // closing the tab must not leave this fetching a five-gigabyte event.
-    // Reads straight from the store, deliberately bypassing the relay's cache
-    // so a download cannot evict what a live stream is about to need.
-    bool stream_event(const std::string& event_id,
-                      const std::function<bool(const uint8_t*, size_t)>& sink,
-                      std::string& error) const;
-
     // The same, given a part list already fetched — so a caller that needed
     // the size does not pay for a second listing.
     bool stream_parts(const std::vector<EventPart>& parts,

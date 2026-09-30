@@ -238,7 +238,6 @@ public:
         uint64_t have     = 0;    // how many are actually present from `want`
         bool ready() const { return known && has_init && have >= need; }
     };
-    StartPlan start_plan() const;
     // The same answer, in the units an operator reads.
     bool   can_start_now() const;
     // Whether the event loaded now is played as a RECORDING: finished,
@@ -507,7 +506,6 @@ private:
 
     std::string event_prefix() const;
     std::string segment_key(uint64_t seq) const;
-    std::string checksum_for(uint64_t seq) const;
     // How many segments the start gate requires ahead of the playhead: the
     // larger of the prebuffer cushion and the start_buffer_seconds window,
     // converted at the current segment duration.

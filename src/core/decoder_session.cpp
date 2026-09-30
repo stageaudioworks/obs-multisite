@@ -62,12 +62,6 @@ std::string DecoderSession::segment_key(uint64_t seq) const {
     return event_prefix() + "segments/" + seq_name(seq) + ".m4s";
 }
 
-std::string DecoderSession::checksum_for(uint64_t seq) const {
-    for (const auto& s : m_manifest.segments)
-        if (s.seq == seq) return s.checksum;
-    return "";     // outside the manifest window: verify not possible
-}
-
 // ── Discovery ────────────────────────────────────────────────────────────────
 RoomState DecoderSession::poll(int64_t now_override) {
     // Network fetches happen WITHOUT the state lock held.
@@ -581,11 +575,6 @@ DecoderSession::StartPlan DecoderSession::start_plan_locked() const {
     const auto idx = m_cache->cached_seqs();
     for (uint64_t s = p.want; idx.count(s); ++s) ++p.have;
     return p;
-}
-
-DecoderSession::StartPlan DecoderSession::start_plan() const {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    return start_plan_locked();
 }
 
 bool DecoderSession::plays_as_recording() const {

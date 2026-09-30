@@ -154,11 +154,6 @@ void WebUiSettings::save() const {
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-bool web_ui_running() {
-    std::lock_guard<std::mutex> lk(g_mutex);
-    return g_server != nullptr;
-}
-
 bool web_ui_stopping() { return g_stopping.load(); }
 
 std::string web_ui_problem() {
@@ -221,6 +216,7 @@ void start_web_ui() {
     if (role != Role::DecoderOnly) {
         route_file(*server, "/encoder/",           "web/encoder/index.html");
         route_file(*server, "/encoder/app.js",     "web/encoder/app.js");
+        route_file(*server, "/encoder/common.js",  "web/shared/common.js");
         route_file(*server, "/encoder/style.css",  "web/shared/style.css");
         // The mark in the page footer. Served from the plugin's own data
         // directory rather than linked from the website, because these pages
@@ -233,6 +229,7 @@ void start_web_ui() {
     if (role != Role::EncoderOnly) {
         route_file(*server, "/decoder/",           "web/decoder/index.html");
         route_file(*server, "/decoder/app.js",     "web/decoder/app.js");
+        route_file(*server, "/decoder/common.js",  "web/shared/common.js");
         route_file(*server, "/decoder/style.css",  "web/shared/style.css");
         route_file(*server, "/decoder/saw-logo.svg", "web/shared/saw-logo.svg");
         register_decoder_api(*server);

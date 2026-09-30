@@ -49,7 +49,6 @@ public:
     // Width in pixels the same call would occupy, for centring.
     static int text_width(const std::string& s, int scale);
     static int text_height(int scale) { return 7 * scale; }
-    void text_centred(int y, const std::string& s, int scale, uint32_t bgrx);
 
 private:
     int m_width, m_height;

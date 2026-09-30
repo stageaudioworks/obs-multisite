@@ -9,6 +9,7 @@
 // only writes to the local durable spool.
 //
 #include <obs-module.h>
+#include "../core/text.h"
 #include "plugin_log.h"
 #include "multisite_ui.h"
 #include "storage_secondary.h"
@@ -37,6 +38,7 @@ extern "C" {
 #include <vector>
 
 namespace multisite_obs {
+using multisite::trim;
 
 using namespace multisite;
 
@@ -214,10 +216,6 @@ static std::vector<std::string> split_csv(const std::string& s) {
     for (char c : s) { if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c; }
     if (!cur.empty()) out.push_back(cur);
     return out;
-}
-static std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t"); if (a == std::string::npos) return "";
-    size_t b = s.find_last_not_of(" \t");  return s.substr(a, b - a + 1);
 }
 
 // Build muxer track configs from the OBS encoders actually attached.

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "aws_sigv4.h"
+#include "text.h"
 #include "crypto.h"
 
 #include <ctime>
@@ -12,9 +13,6 @@ namespace multisite {
 
 // ── Low-level crypto helpers (delegate to the platform backend) ──────────────
 
-std::string SigV4Signer::sha256_hex(const uint8_t* data, size_t len) {
-    return crypto::sha256_hex(data, len);
-}
 
 std::vector<uint8_t> SigV4Signer::hmac_sha256(const std::vector<uint8_t>& key,
                                               const std::string& msg) {
@@ -78,18 +76,7 @@ ParsedUrl parse_url(const std::string& url) {
     return p;
 }
 
-std::string to_lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c){ return (char)std::tolower(c); });
-    return s;
-}
 
-std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t");
-    if (a == std::string::npos) return "";
-    size_t b = s.find_last_not_of(" \t");
-    return s.substr(a, b - a + 1);
-}
 
 // Percent-decode, so canonicalisation is independent of how the caller chose to
 // write the URL.
@@ -198,8 +185,8 @@ SignedRequest SigV4Signer::sign(const std::string& method,
 
     // Payload hash
     std::string payload_hash = payload.empty()
-        ? sha256_hex(reinterpret_cast<const uint8_t*>(""), 0)
-        : sha256_hex(payload.data(), payload.size());
+        ? crypto::sha256_hex(reinterpret_cast<const uint8_t*>(""), 0)
+        : crypto::sha256_hex(payload.data(), payload.size());
 
     // Build the set of headers to sign. Always include host + the x-amz ones.
     std::map<std::string, std::string> signed_headers;
@@ -207,7 +194,7 @@ SignedRequest SigV4Signer::sign(const std::string& method,
     signed_headers["x-amz-content-sha256"] = payload_hash;
     signed_headers["x-amz-date"] = amz_date;
     for (const auto& [k, v] : extra_headers) {
-        signed_headers[to_lower(k)] = trim(v);
+        signed_headers[lower(k)] = trim(v);
     }
 
     // Canonical headers block + signed header list
@@ -235,7 +222,7 @@ SignedRequest SigV4Signer::sign(const std::string& method,
 
     // String to sign
     std::string scope = datestamp + "/" + m_region + "/" + m_service + "/aws4_request";
-    std::string cr_hash = sha256_hex(
+    std::string cr_hash = crypto::sha256_hex(
         reinterpret_cast<const uint8_t*>(canonical_request.data()),
         canonical_request.size());
 

@@ -61,11 +61,6 @@ public:
     // SIGTERM, then SIGKILL if it does not go. Returns once it is gone.
     void stop();
 
-    // The most recent lines ffmpeg wrote to stderr. This is what turns "it
-    // failed" into something an operator can act on, so it is surfaced in the
-    // UI rather than only written to a log.
-    std::string recent_output() const;
-
     // The last line that looked like a real error, for the status line.
     std::string last_error_line() const;
 
@@ -86,9 +81,7 @@ private:
     std::atomic<bool> m_draining{false};
 
     mutable std::mutex m_out_mtx;
-    std::vector<std::string> m_lines;      // bounded ring of recent output
     std::string m_last_error_line;
-    static constexpr size_t kKeepLines = 40;
 };
 
 } // namespace multisite

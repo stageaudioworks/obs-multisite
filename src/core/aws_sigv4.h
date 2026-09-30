@@ -47,7 +47,6 @@ public:
                        const std::string& datestamp_override = "") const;
 
     // Exposed for unit testing — normally internal.
-    static std::string sha256_hex(const uint8_t* data, size_t len);
     static std::string uri_encode(const std::string& s, bool encode_slash);
     // Canonicalise a query string the way S3 does: decode what the URL carries,
     // re-encode it to the AWS rules, sort by encoded key. Listing requests are

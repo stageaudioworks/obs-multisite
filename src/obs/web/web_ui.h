@@ -55,8 +55,6 @@ void stop_web_ui();
 // gone.
 void shut_down_web_ui();
 
-bool web_ui_running();
-
 // True once a stop has begun. A handler checks this before touching anything
 // OBS owns: while the module is unloading, a control that is accepted now would
 // be a control applied to an object that is going away.

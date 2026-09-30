@@ -314,15 +314,6 @@ bool RoomFeeder::stream_parts(
     return true;
 }
 
-bool RoomFeeder::stream_event(
-        const std::string& event_id,
-        const std::function<bool(const uint8_t*, size_t)>& sink,
-        std::string& error) const {
-    const auto parts = event_parts(event_id, error);
-    if (parts.empty()) return false;
-    return stream_parts(parts, sink, error);
-}
-
 RoomSnapshot RoomFeeder::snapshot() const {
     RoomSnapshot s;
     s.room = m_session->room_state();

@@ -229,9 +229,6 @@ public:
         std::lock_guard<std::mutex> lk(m_audio_err_mtx);
         return m_audio_last_error;
     }
-    // The width the card is open at, 0 when it is not open. What the meters use
-    // to decide how many bars there are.
-    int audio_opened_channels() const { return m_audio_opened_channels.load(); }
 
     // The lock the web interface's AES67 switch and the reconciler share. Both
     // write the same source on the same daemon, and a repair that arrives a

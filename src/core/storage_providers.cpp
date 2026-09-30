@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "storage_providers.h"
+#include "text.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,11 +9,6 @@ namespace multisite {
 
 namespace {
 
-std::string to_lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    return s;
-}
 
 bool ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() &&
@@ -103,7 +99,7 @@ DerivedFields derive(StorageProvider provider, const std::string& input) {
 
 StorageProvider detect_provider(const std::string& endpoint_host,
                                 const std::string& r2_account_id) {
-    const std::string host = to_lower(endpoint_host);
+    const std::string host = lower(endpoint_host);
     if (host.empty() && !r2_account_id.empty())
         return StorageProvider::CloudflareR2;
     if (ends_with(host, ".r2.cloudflarestorage.com"))

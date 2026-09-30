@@ -188,11 +188,6 @@ void decoder_seek_media(long long media_ms) {
     for (auto* d : g_decoders) d->seek_media(media_ms);
 }
 
-void decoder_seek(unsigned long long seq) {
-    std::lock_guard<std::mutex> lk(g_mtx);
-    for (auto* d : g_decoders) d->seek(seq);
-}
-
 // ── Cues ─────────────────────────────────────────────────────────────────────
 bool encoder_cues(std::vector<CueEntry>& out) {
     std::lock_guard<std::mutex> lk(g_mtx);

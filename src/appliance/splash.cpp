@@ -181,11 +181,6 @@ void Canvas::text(int x, int y, const std::string& s, int scale,
     }
 }
 
-void Canvas::text_centred(int y, const std::string& s, int scale,
-                          uint32_t bgrx) {
-    text((m_width - text_width(s, scale)) / 2, y, s, scale, bgrx);
-}
-
 #ifdef MULTISITE_HAVE_QRCODE
 
 namespace {

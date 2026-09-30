@@ -91,7 +91,6 @@ public:
     // a small cap, so a box that has watched a hundred recordings is not
     // refreshing a hundred credentials.
     void want_event(const std::string& event_id);
-    std::string wanted_event() const;
 
     // Whether the reporter thread should fetch now, and for which event.
     struct Due {

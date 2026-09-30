@@ -582,12 +582,10 @@ struct SourceCtx : DecoderControls {
     void snapshot(DecoderSnapshot& out) const override;
     void jump_to_marker(const std::string& id) override;
     void add_cue(const std::string& label, std::string& error) override;
-    void seek(unsigned long long seq) override;
     void seek_media(long long media_ms) override;
     void reconfigure() override;
     void play() override;
     void stop_playback() override;
-    bool is_playing() const override { return playing.load(); }
     void seek_to_time(long long wall_ms) override;
     void jog(double seconds) override;
     void set_delay_from_live(double seconds) override;
@@ -3246,33 +3244,6 @@ void SourceCtx::seek_media(long long media_ms) {
     seek_target_ms = media_ms;
 
     mlog_info("source: went to %.3fs on the media timeline", media_ms / 1000.0);
-}
-
-void SourceCtx::seek(unsigned long long seq) {
-    auto sess = get_session(this);
-    if (!sess) return;
-    if (!sess->seek((uint64_t)seq)) {
-        mlog_warn("source: cannot seek to segment %llu (outside the retained "
-                  "window)", seq);
-        return;
-    }
-    // A click on the timeline is a jump like any other, and has to be
-    // acknowledged like one.
-    //
-    // This used to move only the session's head and leave everything else to
-    // the poll loop, which notices a discontinuity on its NEXT pass — up to a
-    // whole poll interval (3 s by default) later. So a click appeared to do
-    // nothing at all: no provisional time in the dock, no movement, and then
-    // the picture jumped and played some seconds afterwards. Worse, the old
-    // decoder kept delivering frames from the position just left for that same
-    // window, which is the stale-frame fault the jog path was already fixed
-    // for. after_jump does exactly what a jog does — flush what is queued,
-    // release the decoder, re-anchor the clock, and set the position the dock
-    // shows as provisional — so the click is confirmed the moment it lands
-    // instead of being indistinguishable from a dropped one.
-    after_jump((long long)sess->playhead_media_ms());
-    mlog_info("source: seeked to segment %llu (%.0fs behind live)", seq,
-              sess->behind_live_s());
 }
 
 // Property buttons delegate to the same methods the hotkeys use.

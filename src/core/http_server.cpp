@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "http_server.h"
+#include "text.h"
 
 #include <algorithm>
 #include <cctype>
@@ -179,11 +180,6 @@ void http_log(HttpLogLevel level, const std::string& text) {
 
 // ── Small shared helpers ─────────────────────────────────────────────────────
 
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    return s;
-}
 
 const char* status_text(int code) {
     switch (code) {

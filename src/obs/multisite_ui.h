@@ -135,7 +135,6 @@ struct DecoderControls {
     // Drop a cue with an operator-typed name (shared cues). Fails with a
     // reason when this box has no site name or nowhere to write it.
     virtual void add_cue(const std::string& label, std::string& error) = 0;
-    virtual void seek(unsigned long long seq) = 0;
     // Seek by MEDIA time (segment number x one segment) — what a click on the
     // timeline is in. The dock used to turn that into a segment number itself
     // and drop the remainder, so every click landed up to 6 s from where it was
@@ -148,7 +147,6 @@ struct DecoderControls {
     // Load/Play separation: loading buffers, playing goes to air.
     virtual void play() = 0;
     virtual void stop_playback() = 0;
-    virtual bool is_playing() const = 0;
     // Seek by TIME OF DAY. Kept for the Companion module, whose published
     // action sends one and which is a separate repo on its own release cycle;
     // changing what `ms` means underneath it would break every button already
@@ -328,7 +326,6 @@ void decoder_jog(double seconds);
 void decoder_set_delay(double seconds);
 void decoder_set_locked(bool locked);
 void decoder_jump_to_marker(const std::string& id);
-void decoder_seek(unsigned long long seq);
 void decoder_seek_media(long long media_ms);
 
 // ── Cues ─────────────────────────────────────────────────────────────────────
