@@ -301,12 +301,29 @@ StreamPlan plan_stream(const Manifest& manifest,
         if (!is_packed(t)) sendable.push_back(t);
     if (sendable.empty()) return packed_refusal(tracks[0]);
 
+    // Every sendable track, when asked for: one sound stream each, which
+    // only MPEG-TS can carry.
+    std::vector<int> chosen_idx;
+    if (dest.audio.all) {
+        if (proto != Protocol::Srt) {
+            p.problem = "This destination is set to send every sound feed, and "
+                        "RTMP carries only one.";
+            p.remedy  = "Send it over SRT, or choose one sound feed.";
+            return p;
+        }
+        for (size_t i = 0; i < tracks.size(); ++i)
+            if (!is_packed(tracks[i])) chosen_idx.push_back((int)i);
+    }
+
     // Resolve the operator's choice. By label, always — the UI never shows an
     // index, and a saved destination must keep meaning the same thing even if
     // the encoder operator reorders their tracks between events.
     int index = -1;
     std::string label;
-    if (dest.audio.label.empty()) {
+    if (!chosen_idx.empty()) {
+        index = chosen_idx.front();
+        label = tracks[(size_t)index].label;
+    } else if (dest.audio.label.empty()) {
         // The main mix, by convention: the first track that can be sent.
         for (size_t i = 0; i < tracks.size(); ++i) {
             if (is_packed(tracks[i])) continue;
@@ -331,29 +348,33 @@ StreamPlan plan_stream(const Manifest& manifest,
         }
     }
 
+    if (chosen_idx.empty()) chosen_idx.push_back(index);
     const AudioTrack& chosen = tracks[(size_t)index];
 
-    // The manifest publishes each track's position among the audio streams as
-    // `idx`. ffmpeg's -map 0:a:N counts the same way, so the two agree — but
-    // only if the encoder wrote them in order. A feed where they disagree
-    // would send the wrong track while looking perfectly correct, so it is
-    // refused rather than trusted.
-    if (chosen.idx != index) {
-        p.problem = "The main site's description of its sound feeds does not "
-                    "line up with the recording itself.";
-        p.remedy  = "Sending it could put the wrong microphone on air, so it "
-                    "has been stopped. Please report this.";
-        return p;
-    }
+    for (int i : chosen_idx) {
+        const AudioTrack& t = tracks[(size_t)i];
+        // The manifest publishes each track's position among the audio streams as
+        // `idx`. ffmpeg's -map 0:a:N counts the same way, so the two agree — but
+        // only if the encoder wrote them in order. A feed where they disagree
+        // would send the wrong track while looking perfectly correct, so it is
+        // refused rather than trusted.
+        if (t.idx != i) {
+            p.problem = "The main site's description of its sound feeds does not "
+                        "line up with the recording itself.";
+            p.remedy  = "Sending it could put the wrong microphone on air, so it "
+                        "has been stopped. Please report this.";
+            return p;
+        }
 
-    std::string ac = chosen.codec;
-    std::transform(ac.begin(), ac.end(), ac.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    if (ac != "aac") {
-        p.problem = "The sound feed \"" + label + "\" is " + ac +
-                    ", and streaming sites need AAC.";
-        p.remedy  = "Set the main site's encoder to AAC audio.";
-        return p;
+        std::string ac = t.codec;
+        std::transform(ac.begin(), ac.end(), ac.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        if (ac != "aac") {
+            p.problem = "The sound feed \"" + t.label + "\" is " + ac +
+                        ", and streaming sites need AAC.";
+            p.remedy  = "Set the main site's encoder to AAC audio.";
+            return p;
+        }
     }
 
     // ── The invocation ───────────────────────────────────────────────────────
@@ -373,9 +394,17 @@ StreamPlan plan_stream(const Manifest& manifest,
         // writes IS the clock.
         "-i", input,
         "-map", "0:v:0",
-        "-map", "0:a:" + std::to_string(index),
-        "-c", "copy",
     };
+    for (int i : chosen_idx) p.args.insert(p.args.end(), {"-map", "0:a:" + std::to_string(i)});
+    // Each sound stream's language where it is known: what MPEG-TS carries
+    // of a track (a title it drops), and what a far end builds its language
+    // menu from.
+    for (size_t k = 0; k < chosen_idx.size(); ++k) {
+        const std::string& lang = tracks[(size_t)chosen_idx[k]].language;
+        if (!lang.empty())
+            p.args.insert(p.args.end(), {"-metadata:s:a:" + std::to_string(k), "language=" + lang});
+    }
+    p.args.insert(p.args.end(), {"-c", "copy"});
     if (proto == Protocol::Srt) {
         // The tables that say what is in the stream go out repeatedly rather
         // than only at the start. Anything that attaches partway through — a
@@ -410,8 +439,15 @@ StreamPlan plan_stream(const Manifest& manifest,
     // could not be sent at all, and a lie the moment it could.
     const std::string codec_word =
         vc == "hevc" ? "HEVC" : (vc == "av1" ? "AV1" : "H.264");
-    p.summary = "sending " + res + codec_word + " video with the \"" + label +
-                "\" sound feed (" + channels_word(chosen.channels) + ")";
+    if (chosen_idx.size() > 1) {
+        std::string names;
+        for (int i : chosen_idx) names += (names.empty() ? "\"" : ", \"") + tracks[(size_t)i].label + "\"";
+        p.summary = "sending " + res + codec_word + " video with " +
+                    std::to_string(chosen_idx.size()) + " sound feeds (" + names + ")";
+    } else {
+        p.summary = "sending " + res + codec_word + " video with the \"" + label +
+                    "\" sound feed (" + channels_word(chosen.channels) + ")";
+    }
     if (proto == Protocol::Srt)
         p.summary += dest.srt_mode == SrtMode::Listener
                        ? ", over SRT, waiting for the far end to connect"

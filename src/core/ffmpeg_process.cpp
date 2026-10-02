@@ -143,12 +143,16 @@ void FfmpegProcess::drain_stderr() {
         partial.append(buf, (size_t)n);
         size_t nl;
         // ffmpeg's progress lines end in \r, not \n; treating both as line
-        // ends keeps `partial` from growing into one enormous line.
+        // ends keeps the ring buffer from filling with one enormous line.
         while ((nl = partial.find_first_of("\r\n")) != std::string::npos) {
             std::string line = partial.substr(0, nl);
             partial.erase(0, nl + 1);
             if (line.empty()) continue;
             std::lock_guard<std::mutex> lk(m_out_mtx);
+            m_lines.push_back(line);
+            if (m_lines.size() > kKeepLines)
+                m_lines.erase(m_lines.begin(),
+                              m_lines.begin() + (long)(m_lines.size() - kKeepLines));
             if (looks_like_an_error(line)) m_last_error_line = line;
         }
     }
@@ -197,6 +201,13 @@ void FfmpegProcess::stop() {
     close_input();
     if (m_stderr_fd >= 0) { ::close(m_stderr_fd); m_stderr_fd = -1; }
     m_pid = -1;
+}
+
+std::string FfmpegProcess::recent_output() const {
+    std::lock_guard<std::mutex> lk(m_out_mtx);
+    std::string out;
+    for (const auto& l : m_lines) { out += l; out += "\n"; }
+    return out;
 }
 
 std::string FfmpegProcess::last_error_line() const {
