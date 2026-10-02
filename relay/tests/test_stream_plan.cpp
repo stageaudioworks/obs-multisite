@@ -503,6 +503,48 @@ int main() {
               "the reason still reaches the operator");
     }
 
+    // ── Every sound feed, over SRT ───────────────────────────────────────────
+    // A church's languages as separate sound streams, for the far end to offer
+    // as a language menu: the Outpost encoder's web stream.
+    {
+        Manifest m = ordinary();
+        m.audio_tracks = { track(0, "Programme", 2), track(1, "English", 2),
+                           track(2, "isiZulu", 2) };
+        Destination d = srt_dest();
+        d.audio.all = true;
+        auto p = plan_stream(m, d, "pipe:0");
+        CHECK(p.ok, "every sound feed can be sent over SRT");
+        CHECK(has_pair(p.args, "-map", "0:a:0") && has_pair(p.args, "-map", "0:a:1") &&
+                  has_pair(p.args, "-map", "0:a:2"),
+              "ffmpeg takes all three");
+        CHECK(has_pair(p.args, "-metadata:s:a:1", "title=English") &&
+                  has_pair(p.args, "-metadata:s:a:2", "title=isiZulu"),
+              "each named, so the far end can offer it by name");
+        CHECK(p.audio_index == 0, "the programme is first");
+        CHECK(p.summary.find("3 sound feeds") != std::string::npos &&
+                  p.summary.find("isiZulu") != std::string::npos,
+              "the summary says how many, and which");
+
+        m.audio_tracks.push_back(track(3, "All channels", 8));
+        p = plan_stream(m, d, "pipe:0");
+        CHECK(p.ok && !has_pair(p.args, "-map", "0:a:3"),
+              "a packed track is still never sent");
+
+        m.audio_tracks = { track(0, "Programme", 2), track(2, "English", 2) };
+        p = plan_stream(m, d, "pipe:0");
+        CHECK(!p.ok, "a track list out of line with the recording is refused for every track");
+
+        Destination r = dest();
+        r.audio.all = true;
+        p = plan_stream(ordinary(), r, "pipe:0");
+        CHECK(!p.ok && p.problem.find("RTMP") != std::string::npos,
+              "RTMP carries one, and says so");
+
+        Destination a = srt_dest(), b = srt_dest();
+        b.audio.all = true;
+        CHECK(affects_stream(a, b), "turning it on changes the stream");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL STREAM PLAN TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;
