@@ -31,6 +31,49 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.29-alpha
+
+**An encoder slow to give its video settings no longer stops the broadcast.**
+Some video encoders, Apple's hardware HEVC encoder among them, give their
+settings only with their first frame, so the start finishes then, while the
+first files are written to storage. With three audio tracks the plugin ran out
+of room to hold the stream while it waited, in about five seconds, stopped
+with "the video encoder never produced a codec config", and left the event it
+had just created looking live with nothing in it. It now allows for the audio,
+and the same start waits up to 15 seconds. A test fails on the old
+behaviour.
+
+**Ending such a broadcast no longer crashes OBS.** When the plugin stopped
+itself like that, pressing End then closed OBS. End now finishes the event and
+stops cleanly, and if the plugin ever does have to stop on its own, the dock
+ends the broadcast and says why rather than still showing it live.
+
+**Segments at 29.97 fps are six seconds long again, not twelve.** OBS places
+the keyframe a fraction of a frame before the six seconds, and the plugin
+waited for the next one, so every segment was twice the length set. Rates
+such as 25 or 30 fps were not affected. A test fails on the old behaviour.
+
+**One campus player can drive two screens from one feed.** A feed laid out as
+two pictures side by side can go out with the left half on one screen and the
+right half on the other, from one download and one decode (#29).
+
+**Each campus player sends AES67 to a group of its own.** Players with no
+address set all sent to the same group, so a receiver on a network with two
+players heard both streams at once. Each now picks its own, from its network
+card, and an address set in the player's settings still wins. The installer
+also finds the kernel headers it needs on Armbian vendor kernels such as the
+ROCK 5B's (#30), and installs the AES67 daemon at a tested version (v4.0.2)
+rather than whatever was newest that day.
+
+**A campus player can show what it is until it has something to play.**
+Colour bars with its name, until the first picture arrives; off unless it is
+turned on.
+
+**The campus player shows where its account stands** with Multisite Cloud
+(entitled, in grace, or lapsed), for information only.
+
+**Captions are still not in this release**, for the same reasons as before.
+
 ## What's new in v0.1.28-alpha
 
 **The encoder no longer stalls on a slow link.** Two uploads — the room's
