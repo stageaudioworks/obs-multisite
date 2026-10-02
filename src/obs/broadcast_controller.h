@@ -239,6 +239,12 @@ public:
     bool is_live() const;
     BroadcastStatus status() const;
 
+    // An output that stopped by itself (an encoder fault) while the dock still
+    // shows the broadcast live: end the broadcast as End would, so the event
+    // is marked ended, and return why it stopped. Empty when nothing stopped.
+    // Called from the dock's refresh, on OBS's UI thread.
+    std::string end_if_stopped_by_itself();
+
     // Drop a marker on the running broadcast.
     void drop_marker(const std::string& label);
 

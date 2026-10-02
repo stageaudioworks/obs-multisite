@@ -247,6 +247,20 @@ each, so the history is findable without being 1,100 lines in the way.
 
   The OBS decoder fixes were verified live on 2026-09-23; the End Broadcast
   line, the Pi changes and captions were not.
+- **29.97 fps segments ran to ~12 s instead of 6** (2026-10-02). OBS truncates
+  the keyframe interval to whole frames, so the 6 s keyframe falls 27 ms short
+  of the target and was skipped. A keyframe within a frame of the target now
+  cuts (`segment_cut.h`, `test_segment_cut`). FIXED.
+- **A delayed-config encoder stopped the output, left the event live, and End
+  crashed OBS** (2026-10-02 and -03, VideoToolbox HEVC, three audio tracks).
+  Three faults in a row: the hold limit counted audio packets, so 900 went in
+  5.3 s while the start was still writing to the bucket (`hold_budget.h`,
+  `test_hold_budget`); `obs_output_signal_stop` never calls the output's stop,
+  so the event stayed live and End destroyed a running `std::thread` →
+  `std::terminate` (destroy now stops first); the dock showed live throughout
+  (it now ends the broadcast and says why). FIXED; the trap is that a
+  self-stopped output's stop callback is never called. Plugin builds; not yet
+  verified in OBS with HEVC.
 
 ---
 

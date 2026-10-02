@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // test_segment_cut.cpp — a keyframe one frame short of the target still cuts.
 //
-// BUGS.md #8. OBS truncates the keyframe interval to whole frames, so at the
+// OBS truncates the keyframe interval to whole frames, so at the
 // broadcast rates (23.976, 29.97, 59.94) the interval keyframe arrives just
 // before the target segment length. The old rule — cut at or past the target —
 // skipped it, and every segment ran to the next keyframe, twice as long as set.

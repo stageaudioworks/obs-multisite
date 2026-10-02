@@ -1440,6 +1440,15 @@ void EncoderDock::setLiveState(bool live) {
 }
 
 void EncoderDock::refresh() {
+    // First: if the output stopped by itself, the broadcast is over, and the
+    // operator has to be told so, not left looking at a dock that says live.
+    {
+        const std::string why = BroadcastController::instance().end_if_stopped_by_itself();
+        if (!why.empty()) {
+            setLiveState(false);
+            QMessageBox::warning(this, tr_("Dock.BroadcastStopped"), QString::fromStdString(why));
+        }
+    }
     // The update check is about this machine, not about the broadcast, so it is
     // answered first and is shown whether or not anything is going out. Nothing
     // is said when the check could not reach GitHub, or when this build is

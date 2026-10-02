@@ -507,6 +507,15 @@ void BroadcastController::end_broadcast() {
     start_idle_monitor();
 }
 
+std::string BroadcastController::end_if_stopped_by_itself() {
+    if (!m_output || obs_output_active(m_output)) return {};
+    const char* le = obs_output_get_last_error(m_output);
+    std::string why = le && *le ? le : "The output stopped by itself. See the OBS log.";
+    mlog_warn("the output stopped by itself (%s); ending the broadcast", why.c_str());
+    end_broadcast();
+    return why;
+}
+
 void BroadcastController::release_all() {
     for (obs_encoder_t* e : m_aencs) if (e) obs_encoder_release(e);
     m_aencs.clear();

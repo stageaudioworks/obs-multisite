@@ -10,6 +10,7 @@
 //
 #include <obs-module.h>
 #include "../core/text.h"
+#include "../core/hold_budget.h"
 #include "plugin_log.h"
 #include "multisite_ui.h"
 #include "storage_secondary.h"
@@ -190,7 +191,7 @@ struct OutputCtx : EncoderControls {
     std::atomic<bool>       completing{false};   // hand-off happens once
     std::deque<HeldPacket>  held;
     std::mutex              held_mtx;
-    size_t                  held_bytes = 0;
+    multisite::HoldBudget   held_budget;     // what may be held (hold_budget.h)
     uint64_t                deferred_since_ms = 0;
 
     // diagnostics
@@ -461,7 +462,16 @@ static void* out_create(obs_data_t*, obs_output_t* output) {
     ctx->output = output;
     return ctx;
 }
-static void out_destroy(void* data) { delete static_cast<OutputCtx*>(data); }
+static void stop_output(OutputCtx* ctx, bool from_obs);
+
+// An output OBS destroys without having stopped it is stopped here first, so
+// the event is ended in the bucket and no thread is left running. stop_output
+// does nothing for one that was stopped (or never started).
+static void out_destroy(void* data) {
+    auto* ctx = static_cast<OutputCtx*>(data);
+    stop_output(ctx, false);
+    delete ctx;
+}
 
 static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_ROOM, "main-auditorium");
@@ -534,8 +544,12 @@ static void finish_deferred_start(OutputCtx* ctx) {
 
     if (!complete_start(ctx)) {
         mlog_error("could not start the event once the codec config arrived");
-        if (ctx->accepting.exchange(false))
+        if (ctx->accepting.exchange(false)) {
+            // Said before stopping: the dock reads it to tell the operator why.
+            obs_output_set_last_error(ctx->output,
+                "The event could not be started once the video encoder was ready. See the OBS log.");
             obs_output_signal_stop(ctx->output, OBS_OUTPUT_ERROR);
+        }
         return;
     }
 
@@ -547,7 +561,7 @@ static void finish_deferred_start(OutputCtx* ctx) {
     {
         std::lock_guard<std::mutex> lk(ctx->held_mtx);
         held.swap(ctx->held);
-        ctx->held_bytes = 0;
+        ctx->held_budget.reset();
     }
     // Checked again: start_new() talks to the bucket and can take a while, and
     // a stop may have begun during it. Pushing into a muxer out_stop has
@@ -1103,8 +1117,13 @@ static bool out_start(void* data) {
 // holding the registry waiting for ctx->mtx. OBS then never finished quitting,
 // which reads as a crash once somebody force-quits it — and OBS reports it as
 // one on the next launch.
-static void out_stop(void* data, uint64_t) {
-    auto* ctx = static_cast<OutputCtx*>(data);
+// The stop itself, from OBS's stop (out_stop) or, when OBS never called that,
+// from destroy. An output that stops itself (obs_output_signal_stop) has its
+// data capture ended by libobs but its stop callback never called, so its
+// writer thread was still running, its event still live in the bucket, and
+// destroying it hit the running std::thread: std::terminate, OBS gone, on
+// 2026-10-02 and -03 when End was pressed after such a stop.
+static void stop_output(OutputCtx* ctx, bool from_obs) {
 
     // Outside the lock, and first: nothing else may reach this output through
     // the registry once it is stopping, and taking it here is what keeps the
@@ -1119,7 +1138,9 @@ static void out_stop(void* data, uint64_t) {
     // then touch the muxer — otherwise the muxer can be destroyed mid-write
     // (a use-after-free that crashes inside avformat).
     ctx->accepting = false;
-    obs_output_end_data_capture(ctx->output);
+    // From destroy, libobs has already ended capture (that is how it got
+    // there), and is part way through tearing the output down.
+    if (from_obs) obs_output_end_data_capture(ctx->output);
 
     {
         std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
@@ -1175,6 +1196,10 @@ static void out_stop(void* data, uint64_t) {
     ctx->muxer.reset(); ctx->transport.reset();
 }
 
+static void out_stop(void* data, uint64_t) {
+    stop_output(static_cast<OutputCtx*>(data), true);
+}
+
 // Lets OBS (and scripts via obs_output_get_total_bytes) show upload volume.
 static uint64_t out_total_bytes(void* data) {
     auto* ctx = static_cast<OutputCtx*>(data);
@@ -1205,15 +1230,9 @@ static bool h_is_video_and_config_ready(OutputCtx* ctx,
     return obs_encoder_get_extra_data(venc, &hdr, &hdr_size) && hdr && hdr_size;
 }
 
-// How much may be held while waiting for a codec config, before giving up.
-//
-// A keyframe is due immediately — encoders emit one first — so this should hold
-// a handful of packets for a fraction of a second. These bounds exist for the
-// case where it never arrives at all, so that a stuck encoder ends as a stopped
-// output with a reason rather than as memory climbing until something dies.
-static constexpr size_t kMaxHeldPackets = 900;      // ~30s of 30fps video
-static constexpr size_t kMaxHeldBytes   = 64u << 20;
-static constexpr int64_t kMaxHeldMs     = 15000;
+// How much may be held while waiting for a codec config is HoldBudget's to
+// say (core/hold_budget.h), where it is tested: a start that finishes on the
+// first keyframe goes on holding while it writes to the bucket, for seconds.
 
 static void out_packet(void* data, struct encoder_packet* pkt) {
     auto* ctx = static_cast<OutputCtx*>(data);
@@ -1233,20 +1252,22 @@ static void out_packet(void* data, struct encoder_packet* pkt) {
         bool overflowed = false;
         {
             std::lock_guard<std::mutex> lk(ctx->held_mtx);
-            ctx->held_bytes += h.data.size();
+            ctx->held_budget.add(h.is_video, h.data.size());
             ctx->held.push_back(std::move(h));
-            overflowed = ctx->held.size() > kMaxHeldPackets ||
-                         ctx->held_bytes > kMaxHeldBytes ||
-                         (now_ms() - (int64_t)ctx->deferred_since_ms) > kMaxHeldMs;
+            overflowed = ctx->held_budget.exceeded(
+                now_ms() - (int64_t)ctx->deferred_since_ms);
         }
 
         if (overflowed) {
             // Only once: accepting is cleared first so no further packet can
             // take this branch and stop the output a second time.
             if (ctx->accepting.exchange(false)) {
-                mlog_error("the video encoder never produced a codec config — "
+                mlog_error("the video encoder gave no codec config in time — "
                            "nothing can be published without it. Stopping. Try "
                            "the x264 encoder, which provides one immediately.");
+                obs_output_set_last_error(ctx->output,
+                    "The video encoder gave no codec config in time, so nothing could be published. "
+                    "Try the x264 encoder, which provides one immediately.");
                 obs_output_signal_stop(ctx->output, OBS_OUTPUT_ENCODE_ERROR);
             }
             return;
