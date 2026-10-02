@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cmaf_muxer.h"
+#include "segment_cut.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -166,6 +167,12 @@ struct CmafMuxer::Impl {
         if (cb) cb(idx, std::move(seg), dur, start);
     }
 
+    double video_frame_s() const {
+        if (video_track < 0) return 0.0;
+        const CmafTrack& v = tracks[video_track];
+        return v.fps_num > 0 && v.fps_den > 0 ? (double)v.fps_den / v.fps_num : 0.0;
+    }
+
     void push(const CmafPacket& in) {
         if (!ok || !header_written) return;
         if (in.track < 0 || in.track >= (int)stream_index.size()) return;
@@ -173,9 +180,12 @@ struct CmafMuxer::Impl {
         bool is_video = (in.track == video_track);
         double pts_s = (double)in.pts_ns / 1e9;
 
-        // Cut a segment at a video keyframe once we've reached the target.
+        // Cut a segment at a video keyframe once we've reached the target —
+        // within a frame of it, because OBS truncates the keyframe interval
+        // (segment_cut.h).
         if (is_video && in.keyframe && seg_open &&
-            (pts_s - seg_start_pts_s) >= target_s) {
+            keyframe_starts_segment(pts_s - seg_start_pts_s, target_s,
+                                    video_frame_s())) {
             flush_fragment();
         }
         if (!seg_open) {
