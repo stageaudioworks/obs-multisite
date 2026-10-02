@@ -396,11 +396,13 @@ StreamPlan plan_stream(const Manifest& manifest,
         "-map", "0:v:0",
     };
     for (int i : chosen_idx) p.args.insert(p.args.end(), {"-map", "0:a:" + std::to_string(i)});
-    if (chosen_idx.size() > 1) {
-        // Each sound stream named, so the far end can offer them by name.
-        for (size_t k = 0; k < chosen_idx.size(); ++k)
-            p.args.insert(p.args.end(), {"-metadata:s:a:" + std::to_string(k),
-                                         "title=" + tracks[(size_t)chosen_idx[k]].label});
+    // Each sound stream's language where it is known: what MPEG-TS carries
+    // of a track (a title it drops), and what a far end builds its language
+    // menu from.
+    for (size_t k = 0; k < chosen_idx.size(); ++k) {
+        const std::string& lang = tracks[(size_t)chosen_idx[k]].language;
+        if (!lang.empty())
+            p.args.insert(p.args.end(), {"-metadata:s:a:" + std::to_string(k), "language=" + lang});
     }
     p.args.insert(p.args.end(), {"-c", "copy"});
     if (proto == Protocol::Srt) {

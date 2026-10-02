@@ -69,6 +69,11 @@ struct AudioTrack {
     // speaker layout (FL/FR/LFE/...) are meaningless here and are ignored.
     // Empty for ordinary stereo tracks.
     std::vector<std::string> channel_labels;
+    // What the track is spoken in, as MPEG-TS names it (ISO 639-2: "eng",
+    // "zul"), for a stream that sends every track (destination.h,
+    // AudioSelection::all). Empty for unknown. Not in the manifest. Last, so
+    // a track written out field by field still means what it did.
+    std::string language;
 };
 
 // How one encoded picture is divided into discrete ones at the satellite.

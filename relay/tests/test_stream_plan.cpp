@@ -510,6 +510,8 @@ int main() {
         Manifest m = ordinary();
         m.audio_tracks = { track(0, "Programme", 2), track(1, "English", 2),
                            track(2, "isiZulu", 2) };
+        m.audio_tracks[1].language = "eng";
+        m.audio_tracks[2].language = "zul";
         Destination d = srt_dest();
         d.audio.all = true;
         auto p = plan_stream(m, d, "pipe:0");
@@ -517,9 +519,10 @@ int main() {
         CHECK(has_pair(p.args, "-map", "0:a:0") && has_pair(p.args, "-map", "0:a:1") &&
                   has_pair(p.args, "-map", "0:a:2"),
               "ffmpeg takes all three");
-        CHECK(has_pair(p.args, "-metadata:s:a:1", "title=English") &&
-                  has_pair(p.args, "-metadata:s:a:2", "title=isiZulu"),
-              "each named, so the far end can offer it by name");
+        CHECK(has_pair(p.args, "-metadata:s:a:1", "language=eng") &&
+                  has_pair(p.args, "-metadata:s:a:2", "language=zul"),
+              "each with its language, for the far end's language menu");
+        CHECK(!has_arg(p.args, "-metadata:s:a:0"), "and none claimed for one whose language is unknown");
         CHECK(p.audio_index == 0, "the programme is first");
         CHECK(p.summary.find("3 sound feeds") != std::string::npos &&
                   p.summary.find("isiZulu") != std::string::npos,

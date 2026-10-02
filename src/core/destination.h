@@ -31,8 +31,8 @@ struct AudioSelection {
     // Resolved at start time from the label. -1 until then.
     int         resolved_index = -1;
     // Instead of one: every track that can be sent (none packed), in order,
-    // the programme first, each named — a church's languages, for the service
-    // to offer as a language menu. SRT only, as FLV carries one sound stream.
+    // the programme first, each with its language where known — a church's
+    // languages, for the service to offer as a language menu. SRT only, as FLV carries one sound stream.
     // The Outpost encoder sets it; the relay's destinations do not.
     bool        all = false;
 };
