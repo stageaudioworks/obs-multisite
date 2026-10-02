@@ -63,11 +63,15 @@
 set -euo pipefail
 
 # ── What this installs, and where ────────────────────────────────────────────
-# The project, pinned to master by default. Set MERGING_REF to a tag or commit
-# once you have found one that works here, so a fresh install is not a moving
-# target.
+# The project, pinned to a release that has been checked against everything
+# the player talks to: the REST endpoints, the SDP it parses, the cmake flags
+# below, the WebUI asset. Following master meant every fresh box built whatever
+# upstream had merged that morning, while a box that reran the installer stayed
+# where it was — so two boxes could differ and neither would say so. Moving this
+# is a deliberate change, made after that check. MERGING_REF=master still
+# follows upstream for anyone who wants to.
 MERGING_URL="${MERGING_URL:-https://github.com/bondagit/aes67-linux-daemon.git}"
-MERGING_REF="${MERGING_REF:-master}"
+MERGING_REF="${MERGING_REF:-v4.0.2}"
 BUILD_DIR="${BUILD_DIR:-/var/tmp/aes67-merging}"
 
 # The daemon's CMake has no install target — it builds into daemon/ and has to
@@ -204,7 +208,7 @@ replaces their Butler) on this box without disturbing anything already here.
   sudo bash merging-aes67.sh [options]
 
 Options
-  --ref <tag|commit>   Build this revision instead of master.
+  --ref <tag|commit>   Build this revision instead of the pinned release.
   --build-dir <dir>    Where to clone and build. Default /var/tmp/aes67-merging.
   --rewrite-config     Overwrite /etc/daemon.conf, keeping a .bak.
   --point-player       Also set the player's alsa_device to the new card and
@@ -412,7 +416,12 @@ fetch_source() {
         if [ -z "$(git -C "$BUILD_DIR" status --porcelain)" ]; then
             note "checking out $MERGING_REF"
             git -C "$BUILD_DIR" fetch --all --tags --quiet || true
-            git -C "$BUILD_DIR" checkout "$MERGING_REF"
+            # A branch name goes to the remote's copy of it. `checkout master`
+            # on a reused clone stays wherever master was when the box was
+            # first installed, so a rerun quietly rebuilt the old daemon while
+            # saying it had checked out master. A tag or commit is itself.
+            git -C "$BUILD_DIR" checkout --quiet --detach "origin/$MERGING_REF" 2>/dev/null \
+                || git -C "$BUILD_DIR" checkout --quiet --detach "$MERGING_REF"
         else
             warn "build tree has local changes — not moving it to $MERGING_REF"
         fi
@@ -559,18 +568,28 @@ install_module() {
 build_daemon() {
     say "The WebUI"
     mkdir -p "$WEBUI_ROOT"
-    if [ -f "$WEBUI_DIST/index.html" ]; then
-        note "already extracted at $WEBUI_DIST"
+    # The WebUI that goes with the daemon being built, not whatever is newest:
+    # a release tag has its own asset, and anything else falls back to latest.
+    # The version is stamped beside it, so moving the pin replaces the WebUI
+    # rather than leaving the old one in place because a file already exists.
+    local webui_url="https://github.com/bondagit/aes67-linux-daemon/releases/latest/download/webui.tar.gz"
+    case "$MERGING_REF" in
+        v[0-9]*) webui_url="https://github.com/bondagit/aes67-linux-daemon/releases/download/$MERGING_REF/webui.tar.gz" ;;
+    esac
+    if [ -f "$WEBUI_DIST/index.html" ] &&
+       [ "$(cat "$WEBUI_ROOT/.webui-ref" 2>/dev/null)" = "$MERGING_REF" ]; then
+        note "already extracted at $WEBUI_DIST ($MERGING_REF)"
     else
         # The project's build.sh fetches a prebuilt archive rather than running
         # npm; the same here, so node is not a dependency.
         local tarball="$BUILD_DIR/webui/webui.tar.gz"
         mkdir -p "$(dirname "$tarball")"
         note "downloading the released WebUI"
-        wget --timestamping -O "$tarball" \
-            "https://github.com/bondagit/aes67-linux-daemon/releases/latest/download/webui.tar.gz" \
-            || die "could not download the WebUI release"
+        wget -O "$tarball" "$webui_url" \
+            || die "could not download the WebUI release from $webui_url"
+        rm -rf "$WEBUI_DIST"
         tar -xzf "$tarball" -C "$WEBUI_ROOT"
+        printf '%s\n' "$MERGING_REF" > "$WEBUI_ROOT/.webui-ref"
         [ -f "$WEBUI_DIST/index.html" ] || \
             warn "extracted, but $WEBUI_DIST/index.html is not there — the archive layout may have changed"
         note "extracted to $WEBUI_DIST"
