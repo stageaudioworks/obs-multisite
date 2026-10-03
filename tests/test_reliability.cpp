@@ -279,7 +279,7 @@ int main() {
             seg.key = "seg/" + std::to_string(s);
             q.enqueue(std::move(seg));
         }
-        fs::resize_file(fs::path(dir) / "00000002.seg", 100);   // the damage
+        fs::resize_file(fs::path(dir) / "01EVENT" / "00000002.seg", 100);   // the damage
 
         FlakyTransport tx;
         UploaderConfig cfg;

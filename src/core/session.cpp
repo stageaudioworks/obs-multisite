@@ -777,6 +777,10 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
     m_spool->mark_ended();
+    // Nothing left to send: the event's spool folder goes. Anything the drain
+    // did not reach stays in it, ended, for EventFinisher to upload after —
+    // it used to stay only until the next Go Live deleted it.
+    m_spool->remove_if_done();
     return last_error().empty();
 }
 

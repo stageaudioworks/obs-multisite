@@ -378,7 +378,16 @@ is more use to an operator than an event that silently is not there.
 - **Durable encoder queue.** Segments are written to disk before upload, bounded
   only by disk. Survives OBS crash and power loss. Plain files with atomic
   write-then-rename, deliberately not a database: that gives the durability
-  guarantee needed here and is trivial to reason about and to test.
+  guarantee needed here and is trivial to reason about and to test. **One
+  folder per event**, so nothing ever deletes another event's backlog.
+- **An event ends on air at once, and finishes uploading after.** End drains
+  the queue only to a deadline, so campuses stop following the event promptly;
+  whatever is left stays in that event's folder and is uploaded in the
+  background (`EventFinisher`), each segment added to the event's manifest as it
+  lands, the live event's own uploads always first. A backlog left when the
+  application quits carries on at the next launch. It is deleted only when the
+  operator says so. It used to be marked ended with the event and deleted by
+  the next Go Live, which cost the end of the recording on a slow uplink.
 - **Retry with backoff.** Failed uploads retry with exponential backoff and
   jitter, in strict sequence order, for as long as the event is live. No segment
   is abandoned.
@@ -477,6 +486,13 @@ before it happens, not leave it implicit in a wipe on disk.
   like every other Go-Live setting, but never persisted — it means nothing
   outside the one Go Live it was set for); the encoder's own start-up logic
   just obeys it, deciding nothing itself.
+
+**Since 2026-10-03, "start new" no longer deletes anything.** The spool keeps
+one folder per event, and `begin_event()` ends the previous event instead of
+clearing it; its unsent segments are uploaded in the background like any ended
+event's backlog (§5). So the dialog now says those segments will finish
+uploading, not that they are abandoned. The text above is kept as it was
+written; this paragraph is what changed.
 
 **What this must never do:**
 

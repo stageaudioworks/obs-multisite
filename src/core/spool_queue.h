@@ -15,10 +15,19 @@
 // SpoolDrop. This is a deliberate, bounded trade of "never lose a frame" for
 // "never fill the operator's disk"; it does not fire in normal operation.
 //
-// On-disk layout (all under `dir`):
-//   state.json                 event_id, first_seq, last_enqueued, last_confirmed, ended
-//   <seq:08d>.seg              raw segment bytes (written tmp+rename → crash-safe)
-//   <seq:08d>.meta             JSON sidecar: seq, duration_s, pts_offset_s, checksum, key
+// On-disk layout: one folder per event under the root,
+//   <root>/<event_id>/state.json      event_id, first_seq, last_enqueued, …, ended
+//   <root>/<event_id>/<seq:08d>.seg   raw segment bytes (written tmp+rename → crash-safe)
+//   <root>/<event_id>/<seq:08d>.meta  JSON sidecar: seq, duration_s, pts_offset_s, checksum, key
+//
+// One folder per event so a new event never deletes an old one's backlog. The
+// spool used to be one folder, and begin_event() cleared it: segments an event
+// had not yet uploaded — End's drain runs to a deadline — were deleted by the
+// next Go Live without a word. Now the previous event is marked ended and left
+// in its folder, where EventFinisher uploads what remains. A SpoolQueue still
+// works on ONE event, its current one; the others are only scanned
+// (finishing_events) or opened by id. A spool in the old single-folder layout
+// is moved into its event's folder on first open.
 //
 // This is deliberately dependency-free (no SQLite): plain files with atomic
 // write-then-rename give the durability guarantees we need and are trivial to
@@ -119,13 +128,29 @@ public:
     // rather than the newest: it is the choice most likely to already be
     // stale to a live viewer, and the one that unblocks the strict in-order
     // uploader fastest.
-    explicit SpoolQueue(std::string dir, uint64_t max_bytes = 0);
+    //
+    // `root` holds one folder per event. With `event_id` empty, the current
+    // event is the one still unfinished (resumable), if any — and any OTHER
+    // unfinished one is marked ended, since only one can be resumed. Given an
+    // `event_id`, that event's folder is opened as it is (EventFinisher).
+    explicit SpoolQueue(std::string root, uint64_t max_bytes = 0,
+                        const std::string& event_id = std::string());
+
+    // Events under `root` that have ended with segments still to upload,
+    // oldest first: EventFinisher's work.
+    static std::vector<std::string> finishing_events(const std::string& root);
+    // Remove an event's folder, segments and all: abandoning its backlog.
+    static void discard_event(const std::string& root, const std::string& event_id);
+    // The current event's folder, once it has ended with nothing left to send,
+    // is removed. True when it was.
+    bool remove_if_done();
 
     // Inspect an existing spool without starting a new event. Used at startup to
     // drive the "resume previous event, or start new?" prompt.
     ResumeInfo inspect() const;
 
-    // Begin a fresh event: clears any old spool and writes new state.
+    // Begin a fresh event in its own folder. The previous current event, if it
+    // never ended, is marked ended and left for EventFinisher — never deleted.
     void begin_event(const std::string& event_id, uint64_t first_seq);
 
     // Resume the existing on-disk event (keeps pending segments).
@@ -195,7 +220,8 @@ public:
     void set_drop_callback(DropCallback cb) { m_on_drop = std::move(cb); }
 
 private:
-    std::string m_dir;
+    std::string m_root;
+    std::string m_dir;     // the current event's folder; empty when there is none
     uint64_t    m_max_bytes = 0;
     mutable std::mutex m_mtx;
     SpoolState  m_state;

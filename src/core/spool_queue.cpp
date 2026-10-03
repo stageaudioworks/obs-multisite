@@ -27,9 +27,97 @@ static std::string seq_name(uint64_t seq) {
     return b;
 }
 
-SpoolQueue::SpoolQueue(std::string dir, uint64_t max_bytes)
-    : m_dir(std::move(dir)), m_max_bytes(max_bytes) {
-    fs::create_directories(m_dir);
+namespace {
+
+// state.json of one event folder, or an invalid state when it has none or it
+// does not parse.
+SpoolState read_state_file(const fs::path& file) {
+    SpoolState st;
+    std::ifstream f(file);
+    if (!f) return st;
+    try {
+        json j; f >> j;
+        st.event_id       = j.value("event_id", "");
+        st.first_seq      = j.value("first_seq", (uint64_t)0);
+        st.last_enqueued  = j.value("last_enqueued", (uint64_t)0);
+        st.last_confirmed = j.value("last_confirmed", (uint64_t)0);
+        st.targets        = j.value("targets", 1);
+        st.last_confirmed_2 = j.value("last_confirmed_2", (uint64_t)0);
+        st.any_confirmed  = j.value("any_confirmed", false);
+        st.any_confirmed_2 = j.value("any_confirmed_2", false);
+        st.ended          = j.value("ended", false);
+        st.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
+        st.media_end_s    = j.value("media_end_s", 0.0);
+        st.valid          = true;
+    } catch (...) {
+        st = SpoolState{};   // corrupt state → treat as none
+    }
+    return st;
+}
+
+bool has_segments(const fs::path& dir) {
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(dir, ec))
+        if (e.path().extension() == ".seg") return true;
+    return false;
+}
+
+// The single-folder layout this replaced: state.json and the segments sat in
+// the root. Moved into the event's own folder, once, so an upgrade carries on
+// with whatever was pending rather than stranding it.
+void migrate_single_folder(const fs::path& root) {
+    const fs::path old_state = root / "state.json";
+    if (!fs::exists(old_state)) return;
+    const SpoolState st = read_state_file(old_state);
+    const fs::path dest = root / (st.valid && !st.event_id.empty() ? st.event_id
+                                                                   : std::string("unknown-event"));
+    std::error_code ec;
+    fs::create_directories(dest, ec);
+    for (auto& e : fs::directory_iterator(root, ec)) {
+        if (!e.is_regular_file()) continue;
+        const auto ext = e.path().extension();
+        if (ext == ".tmp") { fs::remove(e.path(), ec); continue; }
+        if (ext == ".seg" || ext == ".meta" || e.path().filename() == "state.json")
+            fs::rename(e.path(), dest / e.path().filename(), ec);
+    }
+}
+
+} // namespace
+
+SpoolQueue::SpoolQueue(std::string root, uint64_t max_bytes,
+                       const std::string& event_id)
+    : m_root(std::move(root)), m_max_bytes(max_bytes) {
+    fs::create_directories(m_root);
+    migrate_single_folder(m_root);
+
+    if (!event_id.empty()) {
+        m_dir = (fs::path(m_root) / event_id).string();
+    } else {
+        // The one event still unfinished is the current (resumable) one. If
+        // more than one is — not reachable through begin_event, which ends the
+        // previous, but a crash or an old layout could leave it — only the most
+        // recently active can be resumed, so the rest are ended and left for
+        // EventFinisher, never stranded.
+        std::string best;
+        int64_t best_ms = -1;
+        std::vector<std::pair<fs::path, SpoolState>> unfinished;
+        std::error_code ec;
+        for (auto& e : fs::directory_iterator(m_root, ec)) {
+            if (!e.is_directory()) continue;
+            SpoolState st = read_state_file(e.path() / "state.json");
+            if (!st.valid || st.ended) continue;
+            unfinished.emplace_back(e.path(), st);
+            if (st.last_activity_ms > best_ms) { best_ms = st.last_activity_ms; best = e.path().string(); }
+        }
+        for (auto& [dir, st] : unfinished) {
+            if (dir.string() == best) continue;
+            m_dir = dir.string();
+            m_state = st;
+            m_state.ended = true;
+            save_state();
+        }
+        m_dir = best;
+    }
     load_state();
     // Recompute pending bytes from what's actually on disk (not persisted:
     // trivial to get wrong across a crash, trivial to recompute here).
@@ -38,6 +126,37 @@ SpoolQueue::SpoolQueue(std::string dir, uint64_t max_bytes)
         auto sz = fs::file_size(seg_path(seq), ec);
         if (!ec) m_bytes_pending += sz;
     }
+}
+
+std::vector<std::string> SpoolQueue::finishing_events(const std::string& root) {
+    std::vector<std::pair<int64_t, std::string>> found;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(root, ec)) {
+        if (!e.is_directory()) continue;
+        const SpoolState st = read_state_file(e.path() / "state.json");
+        if (st.valid && st.ended && has_segments(e.path()))
+            found.emplace_back(st.last_activity_ms, e.path().filename().string());
+    }
+    std::sort(found.begin(), found.end());
+    std::vector<std::string> ids;
+    for (auto& f : found) ids.push_back(f.second);
+    return ids;
+}
+
+void SpoolQueue::discard_event(const std::string& root, const std::string& event_id) {
+    if (event_id.empty()) return;
+    std::error_code ec;
+    fs::remove_all(fs::path(root) / event_id, ec);
+}
+
+bool SpoolQueue::remove_if_done() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (m_dir.empty() || !m_state.ended || has_segments(m_dir)) return false;
+    std::error_code ec;
+    fs::remove_all(m_dir, ec);
+    m_dir.clear();
+    m_bytes_pending = 0;
+    return true;
 }
 
 std::string SpoolQueue::seg_path(uint64_t seq) const {
@@ -84,29 +203,11 @@ static void atomic_write(const std::string& path, const void* data, size_t n) {
 }
 
 void SpoolQueue::load_state() {
-    m_state = SpoolState{};
-    std::ifstream f(state_path());
-    if (!f) return;
-    try {
-        json j; f >> j;
-        m_state.event_id       = j.value("event_id", "");
-        m_state.first_seq      = j.value("first_seq", (uint64_t)0);
-        m_state.last_enqueued  = j.value("last_enqueued", (uint64_t)0);
-        m_state.last_confirmed = j.value("last_confirmed", (uint64_t)0);
-        m_state.targets        = j.value("targets", 1);
-        m_state.last_confirmed_2 = j.value("last_confirmed_2", (uint64_t)0);
-        m_state.any_confirmed  = j.value("any_confirmed", false);
-        m_state.any_confirmed_2 = j.value("any_confirmed_2", false);
-        m_state.ended          = j.value("ended", false);
-        m_state.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
-        m_state.media_end_s    = j.value("media_end_s", 0.0);
-        m_state.valid          = true;
-    } catch (...) {
-        m_state = SpoolState{}; // corrupt state → treat as none
-    }
+    m_state = m_dir.empty() ? SpoolState{} : read_state_file(state_path());
 }
 
 void SpoolQueue::save_state() {
+    if (m_dir.empty()) return;   // no current event: nothing of its own to record
     json j;
     j["event_id"]       = m_state.event_id;
     j["first_seq"]      = m_state.first_seq;
@@ -125,7 +226,7 @@ void SpoolQueue::save_state() {
 
 std::vector<uint64_t> SpoolQueue::pending_seqs() const {
     std::vector<uint64_t> out;
-    if (!fs::exists(m_dir)) return out;
+    if (m_dir.empty() || !fs::exists(m_dir)) return out;
     for (auto& e : fs::directory_iterator(m_dir)) {
         auto p = e.path();
         if (p.extension() == ".seg") {
@@ -156,10 +257,20 @@ ResumeInfo SpoolQueue::inspect() const {
 
 void SpoolQueue::begin_event(const std::string& event_id, uint64_t first_seq) {
     std::lock_guard<std::mutex> lk(m_mtx);
-    // clear old spool
-    for (auto& e : fs::directory_iterator(m_dir)) {
-        auto ext = e.path().extension();
-        if (ext == ".seg" || ext == ".meta") fs::remove(e.path());
+    // The previous event is NOT cleared. It used to be — every .seg and .meta
+    // deleted — which threw away whatever it had not yet uploaded. Now it is
+    // ended and left in its folder for EventFinisher, or removed if there is
+    // nothing left in it to send.
+    if (!m_dir.empty() && m_state.valid) {
+        m_state.ended = true;
+        save_state();
+        if (!has_segments(m_dir)) { std::error_code ec; fs::remove_all(m_dir, ec); }
+    }
+    m_dir = (fs::path(m_root) / event_id).string();
+    {
+        std::error_code ec;
+        fs::remove_all(m_dir, ec);   // a fresh id; nothing of its own to keep
+        fs::create_directories(m_dir);
     }
     // How many targets there are is CONFIGURATION, not event state — a new
     // event does not un-configure the second bucket. Everything else here is
@@ -192,6 +303,7 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
     std::string checksum;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
+        if (m_dir.empty()) throw std::runtime_error("spool: no event begun");
         seg.checksum = sha256_hex(seg.data);
         checksum = seg.checksum;
 

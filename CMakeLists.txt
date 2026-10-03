@@ -90,6 +90,10 @@ add_library(multisite_core STATIC
     # A paired decoder's second credential, for its own cue file per event
     # (multisite-cloud TELEMETRY.md §4). Same lifecycle as the one above.
     src/core/cue_credentials.cpp
+    # Uploads what an ended event still had queued, after it is over: End's
+    # drain runs to a deadline, and the rest used to be deleted by the next
+    # Go Live. One spool folder per event (spool_queue.h) makes it possible.
+    src/core/event_finisher.cpp
     src/core/http_date.cpp
     # Comparing this build against the published one. No network here: only the
     # part that can be wrong (is one tag newer than another) so it is tested
@@ -382,6 +386,10 @@ add_test(NAME heartbeat_reporter COMMAND test_heartbeat_reporter)
 add_executable(test_cloud_identity tests/test_cloud_identity.cpp)
 target_link_libraries(test_cloud_identity PRIVATE multisite_core)
 add_test(NAME cloud_identity COMMAND test_cloud_identity)
+
+add_executable(test_event_finisher tests/test_event_finisher.cpp)
+target_link_libraries(test_event_finisher PRIVATE multisite_core)
+add_test(NAME event_finisher COMMAND test_event_finisher)
 
 add_executable(test_cue_credentials tests/test_cue_credentials.cpp)
 target_link_libraries(test_cue_credentials PRIVATE multisite_core)
