@@ -31,6 +31,58 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.30-alpha
+
+This release is about one promise: **what the main site records reaches
+storage, and every campus can play it.** An audit of the store-and-forward
+design found several ways that promise could quietly break. Each is fixed
+here, and each fix has a test that fails without it.
+
+**End broadcast no longer loses the end of the service.** End waits only a
+few seconds for the upload queue, so the event finishes on air promptly.
+Whatever was still waiting used to be deleted by the next Go Live, so on a
+slow connection the last minutes of a service never reached storage. Now
+the rest uploads in the background after End, and the recording simply gets
+longer. Your next broadcast always goes first. The encoder dock shows
+*"Last event still uploading"* while it runs, it is safe to quit OBS (it
+carries on next time), and nothing is deleted unless you press **Stop
+uploading it**. Starting a new event over an interrupted one no longer throws
+the old one's unsent segments away either.
+
+**An End during an outage is finished later.** If the connection is down
+when you press End, campuses could not be told the event was over, and after
+ten minutes they called it *interrupted*. The plugin now tells them as soon
+as the connection is back. It never marks a newer broadcast in the same room
+as ended.
+
+**Resuming after a crash keeps the event whole.** A resume used to start the
+event's record afresh, so everything before the crash became unplayable,
+though it was still in storage. Its timeline jumped back to the start, and
+its codec setup was replaced. Now the event carries on as one recording with
+one timeline. If the encoder's settings changed between the crash and the
+resume (resolution, codec or audio tracks), the two halves cannot be one
+event, so a new event is started instead and the log says why.
+
+**Power cuts.** The encoder's upload queue is now flushed to disk as it is
+written, as the design always promised. A segment damaged on disk anyway is
+never uploaded; it is skipped and logged rather than sent to every campus
+broken.
+
+**Campuses skip what will never arrive.** A segment that is missing or
+damaged in storage used to freeze a campus's picture at that point, for
+good. A campus now skips it after a few tries. A long outage that filled the
+encoder's disk used to hide everything recorded before it as well; now only
+the segments actually lost are skipped.
+
+**Smaller things.** The encoder dock no longer shows "Waiting to send"
+figures from the last broadcast once it has ended.
+
+**Upgrading.** The upload queue's folder layout changes (one folder per
+event). An existing queue is moved over automatically the first time OBS
+starts, and an interrupted event in it is still offered for resume.
+
+**Captions are still not in this release**, for the same reasons as before.
+
 ## What's new in v0.1.29-alpha
 
 **An encoder slow to give its video settings no longer stops the broadcast.**
