@@ -268,6 +268,15 @@ Decoders discover the live edge from the window but can address any segment from
 `first_available_seq` to `latest_seq` by deterministic key, so playback is not
 limited to the manifest window — essential for timeslipping.
 
+`gaps` lists, for the whole event, the segments that will never exist, as
+inclusive `[from, to]` ranges: evicted from the encoder's spool under disk
+pressure before they were sent, or found damaged on its disk. A decoder skips
+a listed range at once and never requests inside it. An eviction used to raise
+`first_available_seq` instead, which hid every segment below it, sent or not.
+The field is additive, so `protocol_version` is unchanged (§4.8): a reader that
+predates it still gets past each missing segment by the refusal rule in §5,
+only more slowly.
+
 ### 4.5 Markers
 
 `markers.json` is append-only:

@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -583,9 +584,13 @@ int main() {
 
         Manifest m = Manifest::from_json(
             store.text("events/" + ses.event_id() + "/manifest.json"));
-        CHECK(m.first_available_seq > 0,
-              "the manifest floor advanced past what was dropped once a publish "
-              "happened, so a decoder does not wait forever on it");
+        // Said as a gap, so a decoder skips exactly the dropped segments and
+        // does not wait on them. (This used to raise the manifest's floor,
+        // which hid every segment below it too — test 28.)
+        CHECK(!m.gaps.empty() && m.gap_end(0).has_value() &&
+                  m.first_available_seq == 0,
+              "what was dropped is listed as a gap once a publish happened, "
+              "so a decoder does not wait forever on it");
         ses.end();
     }
 
@@ -1190,6 +1195,71 @@ int main() {
               "event.json is the original's, start time and first_seq included");
         CHECK(get(pre + "init.mp4") == init_before, "init.mp4 is the original's");
         ses2.end();
+    }
+
+    std::printf("== 27. the manifest's gap list ==\n");
+    {
+        Manifest m;
+        for (uint64_t q : {5, 3, 4, 9, 7, 8}) m.add_gap(q);
+        CHECK((m.gaps.size() == 2 && m.gaps[0] == std::make_pair<uint64_t, uint64_t>(3, 5) &&
+                  m.gaps[1] == std::make_pair<uint64_t, uint64_t>(7, 9)),
+              "single seqs merge into ranges, in any order");
+        m.add_gap(6);
+        CHECK((m.gaps.size() == 1 && m.gaps[0] == std::make_pair<uint64_t, uint64_t>(3, 9)),
+              "and the seq between two ranges joins them");
+        CHECK(m.gap_end(4) == std::optional<uint64_t>(9) && !m.gap_end(2) && !m.gap_end(10),
+              "gap_end answers for a seq inside, and nothing outside");
+        const Manifest back = Manifest::from_json(m.to_json());
+        CHECK(back.gaps == m.gaps, "the list survives a JSON round trip");
+        const Manifest odd = Manifest::from_json(
+            "{\"event_id\":\"e\",\"gaps\":[[4,2],[1],\"x\",[6,7]]}");
+        CHECK(odd.gaps.size() == 1 && odd.gaps[0].first == 6,
+              "malformed entries are ignored, good ones kept");
+        CHECK(Manifest::from_json("{\"event_id\":\"e\"}").gaps.empty(),
+              "a manifest from before the field reads as no gaps");
+    }
+
+    std::printf("== 28. an outage that overflows the spool lists a gap, and hides nothing ==\n");
+    {
+        // Before: each eviction raised first_available_seq above the evicted
+        // segment, hiding every segment below it, uploaded or not.
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s28").string();
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        cfg.max_spool_bytes = 3 * 4096;          // room for three segments
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        const std::string pre = "events/" + ses.event_id() + "/";
+        for (uint64_t i = 0; i < 2; ++i) ses.publish_segment(blob(i + 1, 4000), 6.0, i * 6.0);
+        for (int i = 0; i < 400 && ses.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        store.fail_budget = 1000000;              // the link goes down
+        for (uint64_t i = 2; i < 10; ++i) ses.publish_segment(blob(i + 1, 4000), 6.0, i * 6.0);
+        store.fail_budget = 0;                    // and comes back
+        for (int i = 0; i < 600 && ses.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ses.end();
+        Manifest m;
+        {
+            std::lock_guard<std::mutex> lk(store.mtx);
+            const auto& b = store.objects[pre + "manifest.json"];
+            m = Manifest::from_json(std::string(b.begin(), b.end()));
+        }
+        CHECK(m.first_available_seq == 0,
+              "the floor stays at 0: segments sent before the outage stay playable");
+        CHECK(!m.gaps.empty() && m.gaps.front().first == 2,
+              "the evicted segments are listed as a gap, from the first one lost");
+        bool every = true;
+        for (uint64_t q = 0; q <= m.latest_seq; ++q) {
+            char k[32]; std::snprintf(k, sizeof k, "segments/%08llu.m4s", (unsigned long long)q);
+            std::lock_guard<std::mutex> lk(store.mtx);
+            if (!m.gap_end(q) && !store.objects.count(pre + k)) every = false;
+        }
+        CHECK(every && m.latest_seq == 9,
+              "every segment to the end is either in the bucket or in a gap");
+        std::string listed;
+        for (auto& g : m.gaps) listed += std::to_string(g.first) + "-" + std::to_string(g.second) + " ";
+        std::printf("         gaps: %s\n", listed.c_str());
     }
 
     fs::remove_all(base);

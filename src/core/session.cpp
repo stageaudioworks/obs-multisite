@@ -59,6 +59,12 @@ Session::Session(SessionConfig cfg, Transport& transport)
     ucfg.max_backoff_ms  = m_cfg.max_backoff_ms;
     ucfg.jitter          = m_cfg.backoff_jitter;
     m_uploader = std::make_unique<RetryUploader>(*m_spool, m_tx, ucfg);
+    // A segment the uploader found damaged on this disk is never uploaded
+    // (RetryUploader::upload_one); it is a gap, said so in the manifest.
+    m_uploader->set_skipped_callback([this](uint64_t seq) {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_manifest.add_gap(seq);
+    });
     m_uploader->set_confirm_callback(
         [this](const SpooledSegment& s) { on_confirmed(s); });
     // Progress is reported after the spool entry clears, so the counters the
@@ -509,12 +515,16 @@ void Session::on_confirmed(const SpooledSegment& seg) {
 // ever be uploaded (see SessionConfig::max_spool_bytes). Nothing here may
 // touch the network: this runs on the encode thread via SpoolQueue's drop
 // callback, and publish_segment() is documented to never block on it. The
-// advanced floor is folded into whichever manifest publish happens next
-// (on_confirmed, or end()) rather than sent immediately.
+// gap is folded into whichever manifest publish happens next (on_confirmed,
+// or end()) rather than sent immediately.
+//
+// A GAP, not a raised floor. This used to move first_available_seq above the
+// dropped segment, which hid every segment below it as well — including all
+// the ones already uploaded — so a long outage could make the first hour of a
+// service unplayable though it was all in the bucket.
 void Session::on_dropped(const SpoolDrop& d) {
     std::lock_guard<std::mutex> lk(m_mtx);
-    if (d.new_floor > m_manifest.first_available_seq)
-        m_manifest.first_available_seq = d.new_floor;
+    m_manifest.add_gap(d.seq);
     ++m_dropped_total;
     set_error("local spool cap reached: dropped queued segment " +
               std::to_string(d.seq) + " before it could be uploaded "

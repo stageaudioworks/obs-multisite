@@ -39,6 +39,7 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
                   "the checksum taken when it was captured) — not uploading it; "
                   "campuses will skip this segment", seg.key.c_str(), seg.data.size());
         m_spool.confirm(seg.seq, m_cfg.target);
+        if (m_on_skipped) m_on_skipped(seg.seq);
         return true;
     }
     int attempt = 0;

@@ -4,6 +4,7 @@
 // model.h — the storage-protocol data model: live pointer, event descriptor,
 // rolling manifest, and markers. JSON (de)serialisation via nlohmann.
 //
+#include <optional>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -201,6 +202,17 @@ struct Manifest {
     VideoInfo   video;
     std::vector<AudioTrack>    audio_tracks;
     std::vector<ManifestSegment> segments;
+    // Segments that will never exist, as inclusive [from, to] ranges, for the
+    // whole event (not just the window): evicted from the encoder's spool
+    // under disk pressure before they were sent, or damaged on its disk.
+    // Additive, so no protocol bump: a reader that predates it still gets
+    // past each one by its refusal rule, only more slowly. Before this an
+    // eviction moved first_available_seq above the evicted segment, which
+    // hid every segment below it too, sent or not.
+    std::vector<std::pair<uint64_t, uint64_t>> gaps;
+    void add_gap(uint64_t seq);
+    // The last seq of the gap holding `seq`, or nullopt when it is not in one.
+    std::optional<uint64_t> gap_end(uint64_t seq) const;
     std::string to_json() const;
     static Manifest from_json(const std::string&);
 

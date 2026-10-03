@@ -290,8 +290,33 @@ std::string Manifest::to_json() const {
         segs.push_back({ {"seq", s.seq}, {"duration_s", s.duration_s},
                          {"checksum", s.checksum}, {"at_ms", s.at_ms} });
     j["segments"] = segs;
+    json gp = json::array();
+    for (const auto& g : gaps) gp.push_back({ g.first, g.second });
+    j["gaps"] = gp;
     return j.dump();
 }
+
+void Manifest::add_gap(uint64_t seq) {
+    if (gap_end(seq)) return;
+    gaps.emplace_back(seq, seq);
+    std::sort(gaps.begin(), gaps.end());
+    // Touching ranges become one, including two that `seq` has just bridged.
+    for (size_t i = 1; i < gaps.size();) {
+        if (gaps[i].first <= gaps[i - 1].second + 1) {
+            gaps[i - 1].second = std::max(gaps[i - 1].second, gaps[i].second);
+            gaps.erase(gaps.begin() + (long)i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+std::optional<uint64_t> Manifest::gap_end(uint64_t seq) const {
+    for (const auto& g : gaps)
+        if (seq >= g.first && seq <= g.second) return g.second;
+    return std::nullopt;
+}
+
 Manifest Manifest::from_json(const std::string& s) {
     json j = json::parse(s);
     Manifest m;
@@ -317,6 +342,11 @@ Manifest Manifest::from_json(const std::string& s) {
             m.segments.push_back(ms);
         }
     }
+    if (j.contains("gaps") && j["gaps"].is_array())
+        for (const auto& g : j["gaps"])
+            if (g.is_array() && g.size() == 2 && g[0].is_number_unsigned() &&
+                g[1].is_number_unsigned() && g[0].get<uint64_t>() <= g[1].get<uint64_t>())
+                m.gaps.emplace_back(g[0].get<uint64_t>(), g[1].get<uint64_t>());
     return m;
 }
 

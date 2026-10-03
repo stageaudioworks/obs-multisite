@@ -1488,6 +1488,59 @@ int main() {
         CHECK(dec.stats().gap_skips == 2, "each skip is counted");
     }
 
+    std::printf("== 24f. A gap the manifest lists is skipped at once and never fetched ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTLISTEDGAPLISTEDGAPS");
+        enc.publish_start();
+        for (int i = 0; i < 10; ++i) enc.publish_segment();
+        const std::string segs = "events/" + enc.event + "/segments/";
+        for (const char* k : {"00000003.m4s", "00000004.m4s", "00000005.m4s"})
+            store.objects.erase(segs + k);
+        enc.manifest.gaps = { {3, 5} };
+        enc.end();
+
+        // Counts reads of the listed segments: there should be none.
+        class Counting : public Transport {
+        public:
+            explicit Counting(FakeStore& s) : m_s(s) {}
+            std::atomic<int> gap_reads{0};
+            PutResult put(const std::string& k, const std::vector<uint8_t>& b,
+                          const std::string& c, const std::map<std::string,std::string>& t) override {
+                return m_s.put(k, b, c, t);
+            }
+            GetResult get(const std::string& k) override {
+                if (k.find("/segments/0000000") != std::string::npos &&
+                    (k.find("3.m4s") != std::string::npos || k.find("4.m4s") != std::string::npos ||
+                     k.find("5.m4s") != std::string::npos))
+                    ++gap_reads;
+                return m_s.get(k);
+            }
+            ListResult list(const std::string& p, const std::string& d,
+                            const std::string& c, int m) override { return m_s.list(p, d, c, m); }
+        private:
+            FakeStore& m_s;
+        } tx(store);
+
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_listedgap").string();
+        cfg.prebuffer_segments = 1;
+        cfg.start_buffer_seconds = 0;
+        DecoderSession dec(cfg, tx);
+        dec.poll(enc.clock_ms);
+        std::vector<uint64_t> served;
+        for (int i = 0; i < 200 && (served.empty() || served.back() < 9); ++i) {
+            dec.pump_downloads(8);
+            if (dec.play_state() != PlayState::Playing) dec.start();
+            if (auto sg = dec.next_segment()) served.push_back(sg->seq);
+        }
+        CHECK(served == std::vector<uint64_t>({0, 1, 2, 6, 7, 8, 9}),
+              "playback runs straight from 2 to 6");
+        CHECK(dec.stats().gap_skips == 1, "the whole range is one skip");
+        CHECK(tx.gap_reads.load() == 0, "and nothing inside it was ever requested");
+    }
+
     std::printf("== 25. A cue on a RECORDING lands at the playhead, not the end ==\n");
     {
         FakeStore store;

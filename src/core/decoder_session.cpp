@@ -426,6 +426,10 @@ int DecoderSession::pump_downloads(int max) {
         const auto have = m_cache->cached_seqs();
         for (uint64_t sq = from; sq <= to && (int)wanted.size() < max; ++sq) {
             if (have.count(sq)) continue;
+            if (const auto end = m_manifest.gap_end(sq)) {   // never coming
+                sq = *end;
+                continue;
+            }
             std::string sum;
             for (const auto& ms : m_manifest.segments)
                 if (ms.seq == sq) { sum = ms.checksum; break; }
@@ -708,6 +712,17 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
             m_stats.gap_skips++;
             want = m_head.load();
             if (want > m_latest_seq.load()) return std::nullopt;
+        }
+        if (const auto end = m_manifest.gap_end(want)) {
+            // The encoder listed this as a gap: lost before upload (evicted
+            // from its spool, or damaged on its disk). Nothing to wait for or
+            // to try — skip the whole range at once, as an eviction is skipped.
+            log_info("segments %llu-%llu were lost before upload — skipping them",
+                     (unsigned long long)want, (unsigned long long)*end);
+            m_head = *end + 1;
+            ++m_discontinuity;
+            m_stats.gap_skips++;
+            return std::nullopt;   // the next call serves the one after
         }
         if (!m_cache->has(want)) {
             const auto bad = m_unavailable.find(want);

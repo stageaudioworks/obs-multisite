@@ -70,6 +70,9 @@ public:
     void set_confirm_callback(ConfirmCallback cb) { m_on_confirm = std::move(cb); }
     // Fires after the spool entry is cleared, so status() counters are accurate.
     void set_post_confirm_callback(ConfirmCallback cb) { m_on_confirmed_after = std::move(cb); }
+    // Fires when a segment is skipped as damaged on this disk instead of
+    // uploaded, so the caller can list it as a gap.
+    void set_skipped_callback(std::function<void(uint64_t seq)> cb) { m_on_skipped = std::move(cb); }
 
     void start();
     void stop();
@@ -97,6 +100,7 @@ private:
     UploaderStats  m_stats;
     ConfirmCallback m_on_confirm;
     ConfirmCallback m_on_confirmed_after;
+    std::function<void(uint64_t)> m_on_skipped;
 
     std::string          m_last_verify_note;
     // Guards only the note above. Its own mutex rather than the Session's,
