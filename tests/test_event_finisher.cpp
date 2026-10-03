@@ -35,14 +35,22 @@ public:
     mutable std::mutex mtx;
     std::atomic<bool> segments_down{false};
     std::atomic<bool> all_down{false};   // the whole link, control objects too
+    // Sticky, as S3Transport's is: once cancelled (RetryUploader::stop() does
+    // it, so a join never waits out a request), every request fails at once
+    // until resume_pending(). A fake without this hid a finisher that
+    // published through a transport its own uploader had just cancelled.
+    std::atomic<bool> cancelled{false};
+    void cancel_pending() override { cancelled = true; }
+    void resume_pending() override { cancelled = false; }
     PutResult put(const std::string& k, const std::vector<uint8_t>& b, const std::string&,
                   const std::map<std::string,std::string>&) override {
+        if (cancelled) return {false, 0, true, "cancelled"};
         if (all_down || (segments_down && k.find("/segments/") != std::string::npos))
             return {false, 0, true, "network down"};
         std::lock_guard<std::mutex> l(mtx); objects[k] = b; return {true, 200, true, ""};
     }
     GetResult get(const std::string& k) override {
-        if (all_down) { GetResult r; r.error = "network down"; return r; }
+        if (cancelled || all_down) { GetResult r; r.error = "network down"; return r; }
         std::lock_guard<std::mutex> l(mtx); GetResult r; auto it = objects.find(k);
         if (it == objects.end()) { r.http_status = 404; return r; }
         r.success = true; r.http_status = 200; r.body = it->second; return r;

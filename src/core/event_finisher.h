@@ -87,6 +87,8 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_abandon{false};
     std::mutex        m_work_mtx;   // held while an event is being finished
+    std::string       m_announced;  // the event last logged as being worked on
+                                    // (finisher thread only)
 };
 
 } // namespace multisite

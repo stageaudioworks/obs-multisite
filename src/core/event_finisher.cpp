@@ -148,12 +148,17 @@ bool EventFinisher::finish(const std::string& event_id) {
     SpoolQueue q(m_cfg.spool_root, 0, event_id);
     q.set_targets(1);   // the primary only (see the header)
     const size_t total = q.pending_count();
-    if (total > 0)
-        log_info("upload: finishing event %s in the background — %zu segment(s) left",
-                 event_id.c_str(), total);
-    else
-        log_info("upload: telling storage that event %s has ended, which End "
-                 "could not", event_id.c_str());
+    // Once per event, not once per pass: a pass that cannot finish is retried
+    // every few seconds, and the log should say what is happening, not count.
+    if (m_announced != event_id) {
+        m_announced = event_id;
+        if (total > 0)
+            log_info("upload: finishing event %s in the background — %zu segment(s) left",
+                     event_id.c_str(), total);
+        else
+            log_info("upload: telling storage that event %s has ended, which End "
+                     "could not", event_id.c_str());
+    }
 
     UploaderConfig ucfg;
     ucfg.base_backoff_ms = m_cfg.base_backoff_ms;
@@ -187,6 +192,13 @@ bool EventFinisher::finish(const std::string& event_id) {
     while (m_running.load() && !m_abandon.load() && q.pending_count() > 0)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     up.stop();
+    // stop() cancels the transport so its join never waits out a request, and
+    // that cancel is sticky. Everything below goes through the same transport,
+    // so re-arm it — the trap Session::end() documents. Missing this, every
+    // ending was published into a cancelled transport and failed at once: the
+    // backlog uploaded, and the "ended" manifest and live.json never did
+    // (seen live 2026-10-03, retried every few seconds for ever).
+    tx->resume_pending();
     if (q.pending_count() > 0) return false;   // stopped, abandoned, or yielding
 
     // The last manifest is the one that says the event is complete; a failed
