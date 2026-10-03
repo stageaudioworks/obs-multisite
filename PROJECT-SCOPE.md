@@ -381,7 +381,11 @@ is more use to an operator than an event that silently is not there.
   decides that, and when it is safe to decide it silently, is §5.1.
 - **Decoder-side durability.** Downloads are cached locally and verified;
   missing or corrupt segments are re-requested. A gap causes a wait-and-retry,
-  never a crash.
+  never a crash. Behind the live edge a refusal is final — uploads are in order
+  and only confirmed segments are listed — so a segment refused three times
+  there (missing, or failing its checksum) is skipped, as an eviction is,
+  rather than waited on for ever. The encoder, in turn, never uploads a
+  spooled segment whose bytes no longer match the checksum taken at capture.
 - **Stale detection.** If a room's `live.json`/manifest has not updated within a
   threshold (e.g. 10 minutes), decoders treat the room as **Offline** instead of
   polling a dead event forever.

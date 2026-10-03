@@ -11,6 +11,7 @@
 #include "../src/core/log.h"
 #include "test_tmpdir.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -1443,6 +1444,48 @@ int main() {
         CHECK(!dec.add_cue("Misdirected", err), "the cue is refused");
         CHECK(writer->puts.empty() && store.objects.count(elsewhere) == 0,
               "and nothing was written anywhere");
+    }
+
+    std::printf("== 24e. A segment that will never come right is skipped, not waited on for ever ==\n");
+    {
+        // A recording whose segment 2 is damaged in the bucket (the manifest's
+        // checksum is of the good bytes) and whose segment 4 is missing.
+        // Behind the live edge both answers are final — uploads are in order
+        // and only confirmed segments are listed — so holding on them froze
+        // the picture there for good.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTGAPGAPGAPGAPGAPGAPG");
+        enc.publish_start();
+        for (int i = 0; i < 8; ++i) enc.publish_segment();
+        enc.end();
+        const std::string segs = "events/" + enc.event + "/segments/";
+        store.objects[segs + "00000002.m4s"][10] ^= 0xFF;   // damaged
+        store.objects.erase(segs + "00000004.m4s");          // missing
+
+        DecoderConfig cfg;
+        cfg.room_id = "r";
+        cfg.cache_dir = (base / "cache_gap").string();
+        cfg.prebuffer_segments = 1;
+        cfg.start_buffer_seconds = 0;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        std::vector<uint64_t> served;
+        for (int i = 0; i < 200 && (served.empty() || served.back() < 7); ++i) {
+            dec.pump_downloads(8);
+            if (dec.play_state() != PlayState::Playing) dec.start();
+            if (auto sg = dec.next_segment()) served.push_back(sg->seq);
+        }
+        std::string got;
+        for (auto q : served) got += std::to_string(q) + " ";
+        std::printf("         served: %s\n", got.c_str());
+        CHECK(!served.empty() && served.back() == 7, "playback reaches the end of the recording");
+        CHECK(std::find(served.begin(), served.end(), 2) == served.end() &&
+                  std::find(served.begin(), served.end(), 4) == served.end(),
+              "the damaged and the missing segment are never served");
+        CHECK(served == std::vector<uint64_t>({0, 1, 3, 5, 6, 7}),
+              "and everything else is, in order");
+        CHECK(dec.stats().gap_skips == 2, "each skip is counted");
     }
 
     std::printf("== 25. A cue on a RECORDING lands at the playhead, not the end ==\n");

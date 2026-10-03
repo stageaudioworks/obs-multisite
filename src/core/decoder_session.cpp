@@ -161,6 +161,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
             m_saw_live = false;     // a new event has not been seen live yet
             m_end_hold_done = false;   // ...and it has not been seen to end yet
             ++m_discontinuity;      // new event: new init segment and timeline
+            m_unavailable.clear();
         }
         event_id = m_event_id;
         if (now - m_markers_checked_ms > 5000) {
@@ -457,6 +458,7 @@ int DecoderSession::pump_downloads(int max) {
     int fetched = 0;
     uint64_t dl = 0, dlfail = 0, ckfail = 0;
     std::string err;
+    std::vector<uint64_t> got, refused;   // for m_unavailable, under the lock below
     for (const auto& w : wanted) {
         char name[16];
         std::snprintf(name, sizeof(name), "%08llu",
@@ -475,6 +477,7 @@ int DecoderSession::pump_downloads(int max) {
                 err = "segment " + std::to_string(w.first) + ": HTTP " +
                       std::to_string(r.http_status) + " " + r.error;
             }
+            if (r.http_status == 404) refused.push_back(w.first);
             continue;
         }
         if (!m_cache->store(w.first, r.body, w.second)) {
@@ -483,8 +486,10 @@ int DecoderSession::pump_downloads(int max) {
             ++ckfail;
             err = "segment " + std::to_string(w.first) +
                   " failed checksum verification";
+            refused.push_back(w.first);
             continue;
         }
+        got.push_back(w.first);
         ++dl;
         ++fetched;
     }
@@ -495,6 +500,10 @@ int DecoderSession::pump_downloads(int max) {
         m_stats.downloaded        += dl;
         m_stats.download_failures += dlfail;
         m_stats.checksum_failures += ckfail;
+        // Only behind the live edge is a refusal final (see m_unavailable).
+        for (uint64_t sq : refused)
+            if (sq < m_latest_seq.load()) ++m_unavailable[sq];
+        for (uint64_t sq : got) m_unavailable.erase(sq);
         if (!err.empty()) {
             std::lock_guard<std::mutex> elk(m_err_mtx);
             m_last_error = err;
@@ -701,6 +710,22 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
             if (want > m_latest_seq.load()) return std::nullopt;
         }
         if (!m_cache->has(want)) {
+            const auto bad = m_unavailable.find(want);
+            if (bad != m_unavailable.end() && bad->second >= kGapAttempts &&
+                want < m_latest_seq.load()) {
+                // Refused kGapAttempts times behind the live edge: it will
+                // never arrive. Skip it like an eviction rather than freeze
+                // the picture here for good — the one gap this used to hold
+                // on for ever (a segment damaged before upload, or one the
+                // encoder skipped as damaged on its own disk).
+                log_warn("segment %llu is missing or damaged in storage (%d tries) "
+                         "— skipping it", (unsigned long long)want, bad->second);
+                m_unavailable.erase(bad);
+                m_head = want + 1;
+                ++m_discontinuity;
+                m_stats.gap_skips++;
+                return std::nullopt;   // the next call serves the one after
+            }
             // Waiting on a segment: hold position rather than skipping, so
             // nothing is silently dropped from the programme.
             m_stats.gaps_waited++;

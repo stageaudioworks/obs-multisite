@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -499,6 +500,14 @@ private:
     bool     m_init_sent = false;
     std::atomic<uint64_t> m_discontinuity{0};
     int64_t  m_pending_skip_ms = 0;   // applied to the next served segment
+    // Segments behind the live edge that came back missing (404) or failing
+    // their checksum, and how many times. Uploads are strictly in order and a
+    // segment is listed only once confirmed, so either answer behind the edge
+    // is final: the segment will never come right. After kGapAttempts the
+    // head skips it, as it does an eviction, instead of holding for ever.
+    // Guarded by m_mtx; cleared with the event.
+    std::map<uint64_t, int> m_unavailable;
+    static constexpr int kGapAttempts = 3;
 
     Stats m_stats;
     LinkTracker m_link;
