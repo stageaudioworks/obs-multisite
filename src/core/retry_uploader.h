@@ -52,6 +52,9 @@ struct UploaderStats {
     std::atomic<uint64_t> retries{0};
     std::atomic<uint64_t> permanent_failures{0};
     std::atomic<uint64_t> verify_failures{0};
+    // Segments whose spooled bytes no longer matched the checksum taken when
+    // they were captured — damaged on this disk — and so were never uploaded.
+    std::atomic<uint64_t> damaged_skipped{0};
 };
 
 // Called after each segment is confirmed durable, so the caller can update the

@@ -15,6 +15,7 @@
 #include "../src/core/session.h"   // for now_ms()
 #include "test_tmpdir.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -262,6 +263,44 @@ int main() {
         CHECK(info.resumable, "unfinished event still offered for resume");
         CHECK(info.last_activity_ms >= before,
               "last_activity_ms survived the crash instead of resetting to 0");
+    }
+
+    std::printf("== 10. A segment damaged on disk is skipped, never uploaded or listed ==\n");
+    {
+        // What a power cut can leave: a spooled file renamed into place but
+        // truncated, with its .meta still holding the checksum of the bytes it
+        // should have had. It used to be uploaded as it was, under that
+        // checksum, so every campus failed it for ever.
+        std::string dir = (base / "spool10").string();
+        SpoolQueue q(dir);
+        q.begin_event("01EVENT", 1);
+        for (uint64_t s = 1; s <= 3; ++s) {
+            SpooledSegment seg; seg.seq = s; seg.data = fake_segment(s);
+            seg.key = "seg/" + std::to_string(s);
+            q.enqueue(std::move(seg));
+        }
+        fs::resize_file(fs::path(dir) / "00000002.seg", 100);   // the damage
+
+        FlakyTransport tx;
+        UploaderConfig cfg;
+        cfg.base_backoff_ms = 1; cfg.max_backoff_ms = 4; cfg.jitter = 0.0;
+        RetryUploader up(q, tx, cfg);
+        std::vector<uint64_t> listed;   // what would reach the manifest
+        up.set_confirm_callback([&](const SpooledSegment& sg) { listed.push_back(sg.seq); });
+
+        const bool drained = up.drain_blocking(std::chrono::milliseconds(5000));
+        CHECK(drained, "the queue drains past the damaged segment");
+        {
+            std::lock_guard<std::mutex> lk(tx.mtx);
+            CHECK(std::find(tx.confirmed_keys.begin(), tx.confirmed_keys.end(), "seg/2")
+                      == tx.confirmed_keys.end(),
+                  "the damaged segment was not uploaded");
+            CHECK(tx.confirmed_keys.size() == 2, "the two good segments were");
+        }
+        CHECK(listed.size() == 2 && listed[0] == 1 && listed[1] == 3,
+              "and only the good ones are listed in the manifest");
+        CHECK(up.stats().damaged_skipped.load() == 1, "the skip is counted");
+        CHECK(q.pending_count() == 0, "and nothing is left behind in the spool");
     }
 
     fs::remove_all(base);

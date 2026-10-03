@@ -9,6 +9,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
+#if defined(_WIN32)
+#include <io.h>        // _commit, _fileno
+#else
+#include <fcntl.h>     // open
+#include <unistd.h>    // fsync, close
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -44,16 +50,37 @@ std::string SpoolQueue::state_path() const {
     return (fs::path(m_dir) / "state.json").string();
 }
 
-// Atomic write: write to <path>.tmp then rename over <path>.
+// Atomic AND durable: write <path>.tmp, flush it to the disk, rename it over
+// <path>, then flush the directory so the rename itself survives.
+//
+// The flushes are the "durable" half. This used to stop at ofstream::flush(),
+// which only reaches the OS cache: an OBS crash was survived, but a power cut
+// could bring a renamed segment back empty or truncated — and a truncated
+// segment was uploaded as it was, under the checksum of the bytes it should
+// have held, failing at every campus. PROJECT-SCOPE §5 promises power loss.
+// One sync per segment (every few seconds) is nothing next to the upload.
+// ponytail: fsync, not F_FULLFSYNC — a Mac's own disk cache is trusted, as
+// every other app trusts it; switch if a Mac ever loses a synced segment.
 static void atomic_write(const std::string& path, const void* data, size_t n) {
     std::string tmp = path + ".tmp";
     {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        FILE* f = std::fopen(tmp.c_str(), "wb");
         if (!f) throw std::runtime_error("spool: cannot open " + tmp);
-        f.write(reinterpret_cast<const char*>(data), (std::streamsize)n);
-        f.flush();
+        const bool ok = std::fwrite(data, 1, n, f) == n && std::fflush(f) == 0 &&
+#if defined(_WIN32)
+                        _commit(_fileno(f)) == 0;
+#else
+                        ::fsync(::fileno(f)) == 0;
+#endif
+        std::fclose(f);
+        if (!ok) throw std::runtime_error("spool: cannot write " + tmp);
     }
     fs::rename(tmp, path); // atomic on POSIX and Windows same-volume
+#if !defined(_WIN32)
+    // NTFS journals the rename; a POSIX filesystem needs the directory synced.
+    const int dfd = ::open(fs::path(path).parent_path().string().c_str(), O_RDONLY);
+    if (dfd >= 0) { ::fsync(dfd); ::close(dfd); }
+#endif
 }
 
 void SpoolQueue::load_state() {

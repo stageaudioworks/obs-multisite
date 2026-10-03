@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "retry_uploader.h"
 #include "log.h"
+#include "checksum.h"
 #include <random>
 #include <cmath>
 #include <algorithm>
@@ -25,6 +26,21 @@ int RetryUploader::backoff_ms(int attempt) const {
 
 bool RetryUploader::upload_one(const SpooledSegment& seg,
                                 std::optional<std::chrono::steady_clock::time_point> deadline) {
+    // The bytes on disk must still be the bytes that were captured. A power cut
+    // can bring a spooled file back truncated, and uploading it would put
+    // damage in the bucket under the checksum of the good bytes: every campus
+    // would fail it, for ever. So a damaged segment is not uploaded and not
+    // listed — a gap a decoder skips — and the queue moves on. It is marked
+    // done for this target only through the spool, never through m_on_confirm,
+    // which is what lists a segment in the manifest.
+    if (!seg.checksum.empty() && !verify_sha256(seg.data, seg.checksum)) {
+        m_stats.damaged_skipped++;
+        log_error("upload: %s is damaged on this disk (%zu bytes no longer match "
+                  "the checksum taken when it was captured) — not uploading it; "
+                  "campuses will skip this segment", seg.key.c_str(), seg.data.size());
+        m_spool.confirm(seg.seq, m_cfg.target);
+        return true;
+    }
     int attempt = 0;
     while (m_running) {
         // A retry can sit here for a long time (that is the whole point of
