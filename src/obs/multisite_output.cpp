@@ -861,12 +861,14 @@ static bool complete_start(OutputCtx* ctx) {
         if (!ok && ctx->session->resume_refused()) {
             // The encoder's settings changed since the event started, so its
             // segments cannot share an init with these. A new event, at media
-            // time 0, rather than no broadcast at all.
+            // time 0, rather than no broadcast at all. The old event's
+            // unsent segments are not lost: start_new ends it, and the
+            // finisher uploads them in the background.
             mlog_warn("%s — starting a new event instead%s",
                       ctx->session->last_error().c_str(),
                       resume.pending_count
-                          ? (", abandoning " + std::to_string(resume.pending_count) +
-                             " of its segment(s) that were never uploaded").c_str()
+                          ? ("; its " + std::to_string(resume.pending_count) +
+                             " segment(s) not yet uploaded will upload in the background").c_str()
                           : "");
             ok = make_muxer(-1.0) &&
                  ctx->session->start_new(ctx->muxer->init_segment(), vinfo, ainfo);
@@ -874,7 +876,8 @@ static bool complete_start(OutputCtx* ctx) {
     } else {
         if (resume.resumable)
             mlog_info("operator chose to start a new event over the "
-                       "interrupted one (%s, %zu segments were pending)",
+                       "interrupted one (%s; its %zu segment(s) not yet uploaded will "
+                       "upload in the background)",
                        resume.event_id.c_str(), resume.pending_count);
         ok = ctx->session->start_new(ctx->muxer->init_segment(), vinfo, ainfo);
     }
