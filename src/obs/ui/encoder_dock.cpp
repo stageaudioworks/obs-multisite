@@ -1627,6 +1627,17 @@ void EncoderDock::refresh() {
         m_state->setText(tr_("Dock.Idle"));
         m_state->setStyleSheet("font-weight: bold; color: palette(mid);");
         m_uptime->setText("—");
+        // The live figures belong to a broadcast, and the idle branch used to
+        // leave them as the last refresh had set them — "Waiting to send 30
+        // sec" long after the background upload had sent everything. Idle,
+        // the only thing that can be waiting is an ended event's backlog.
+        const double seg_s = m_segDur ? m_segDur->value() : 6.0;
+        m_queue->setText(st.finishing_segments == 0
+                           ? tr_("Dock.NothingWaiting")
+                           : friendly_duration((double)st.finishing_segments * seg_s));
+        m_confirmed->setText("—");
+        m_retries->setText("—");
+        m_data->setText("—");
         showLink(false);
         showDisk();
         showLan();
