@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "../core/event_finisher.h"
 #include "caption_bridge.h"
 //
 // broadcast_controller.h — owns the encoder-side broadcast.
@@ -157,6 +158,11 @@ struct BroadcastStatus {
     // interrupted event rather than starting fresh — empty means this run
     // started with start_new(). The dock shows this persistently, not just
     // once, so "what actually happened" stays visible (PROJECT-SCOPE.md §5.1).
+    // Events that ended with segments still to upload, which EventFinisher is
+    // sending in the background (the live event first). The dock says so, and
+    // offers to abandon them — the only way they are ever deleted.
+    size_t      finishing_events = 0;
+    size_t      finishing_segments = 0;
     std::string resumed_event_id;
     long long   resumed_event_started_ms = 0;   // 0 if unknown
     unsigned long long resumed_already_confirmed = 0;
@@ -248,6 +254,14 @@ public:
     // Drop a marker on the running broadcast.
     void drop_marker(const std::string& label);
 
+    // The background upload of ended events' backlogs (EventFinisher). Started
+    // once the plugin has loaded, stopped in unload(), rebuilt when the spool
+    // folder setting changes.
+    void start_finisher();
+    // The operator's explicit choice: stop uploading every ended event's
+    // backlog and delete it.
+    void abandon_backlog();
+
 private:
     BroadcastController() = default;
     ~BroadcastController();   // stops the idle monitor; defined where IdleMonitor is complete
@@ -273,6 +287,8 @@ private:
     uint64_t m_started_ns = 0;
 
     std::unique_ptr<IdleMonitor> m_idle;
+    std::unique_ptr<multisite::EventFinisher> m_finisher;
+    std::string m_finisher_root;
 };
 
 } // namespace multisite_obs

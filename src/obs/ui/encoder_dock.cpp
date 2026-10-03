@@ -171,6 +171,28 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_endAndFresh, &QPushButton::clicked,
             this, &EncoderDock::onEndAndStartFresh);
 
+    // An ended event still uploading in the background (EventFinisher), shown
+    // idle or live, with the one way to throw it away: asked for, never
+    // assumed. It used to be deleted by the next Go Live without a word.
+    m_backlog = new QLabel(QString(), statusBox);
+    m_backlog->setWordWrap(true);
+    m_backlog->hide();
+    grid->addWidget(m_backlog, 8, 0, 1, 3);
+    m_abandonBacklog = new QPushButton(tr_("Dock.AbandonBacklog"), statusBox);
+    m_abandonBacklog->hide();
+    grid->addWidget(m_abandonBacklog, 8, 3);
+    connect(m_abandonBacklog, &QPushButton::clicked, this, [this] {
+        const auto st = BroadcastController::instance().status();
+        if (QMessageBox::question(this, tr_("Dock.AbandonBacklog"),
+                                  tr_("Dock.AbandonBacklogConfirm")
+                                      .arg((qulonglong)st.finishing_segments),
+                                  QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No) != QMessageBox::Yes)
+            return;
+        BroadcastController::instance().abandon_backlog();
+        refresh();
+    });
+
     root->addWidget(statusBox);
 
     // ── Event name / Go live ─────────────────────────────────────────────────
@@ -1330,7 +1352,7 @@ void EncoderDock::onGoLive() {
             : tr_("Dock.ResumeUnknownTime");
         QString text = tr_("Dock.ResumeStaleBody").arg(when);
         if (resume.pending_count > 0)
-            text += QString(" ") + tr_("Dock.ResumeAbandonsPending")
+            text += QString(" ") + tr_("Dock.ResumeFinishesPending")
                         .arg((qulonglong)resume.pending_count);
 
         QMessageBox box(this);
@@ -1339,8 +1361,10 @@ void EncoderDock::onGoLive() {
         box.setText(text);
         QPushButton* resumeBtn = box.addButton(tr_("Dock.ResumeEvent"),
                                                QMessageBox::AcceptRole);
+        // Not destructive any more: the interrupted event's unsent segments
+        // finish uploading in the background (EventFinisher).
         QPushButton* newBtn = box.addButton(tr_("Dock.StartNewEvent"),
-                                            QMessageBox::DestructiveRole);
+                                            QMessageBox::ActionRole);
         box.addButton(QMessageBox::Cancel);
         box.setDefaultButton(resumeBtn);
         box.exec();
@@ -1448,6 +1472,15 @@ void EncoderDock::refresh() {
             setLiveState(false);
             QMessageBox::warning(this, tr_("Dock.BroadcastStopped"), QString::fromStdString(why));
         }
+    }
+    {
+        const auto bs = BroadcastController::instance().status();
+        const bool on = bs.finishing_segments > 0;
+        if (on)
+            m_backlog->setText(tr_("Dock.BacklogUploading")
+                                   .arg((qulonglong)bs.finishing_segments));
+        m_backlog->setVisible(on);
+        m_abandonBacklog->setVisible(on);
     }
     // The update check is about this machine, not about the broadcast, so it is
     // answered first and is shown whether or not anything is going out. Nothing

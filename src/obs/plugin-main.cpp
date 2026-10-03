@@ -94,4 +94,13 @@ void obs_module_unload(void) {
 // logs one line and returns — hotkeys, docks and pages are unaffected.
 void obs_module_post_load(void) {
     multisite_obs::register_vendor_api();
+    // Any event that ended with segments still to upload — End's drain runs to
+    // a deadline, and OBS may have quit since — is finished in the background,
+    // the live event first. Settings are loaded here as the encoder dock loads
+    // them (idempotent), so a build without docks finishes its backlog too.
+    auto& bc = multisite_obs::BroadcastController::instance();
+    auto cfg = bc.settings();
+    cfg.load();
+    bc.set_settings(cfg);
+    bc.start_finisher();
 }

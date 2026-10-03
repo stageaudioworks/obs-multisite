@@ -293,6 +293,8 @@ void BroadcastController::set_settings(const BroadcastSettings& s) {
     // Idle monitor follows the settings: any change to credentials or room
     // rebuilds the transport and re-probes.
     start_idle_monitor();
+    // A different spool folder is a different backlog to look after.
+    if (m_finisher) start_finisher();
 }
 
 bool BroadcastController::is_live() const { return m_output != nullptr; }
@@ -485,7 +487,65 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
     return true;
 }
 
+static std::string spool_dir_path(const std::string& configured);   // below
+
+// The bucket the encoder uploads to, built from the settings as they are now:
+// paired (Multisite Cloud) or typed keys, as the operator chose. Null when
+// there is nothing to upload through — cloud off, or not configured yet.
+// ponytail: the third copy of this choice (the output and the idle monitor
+// make it inline); fold them onto this if a fourth appears.
+static std::shared_ptr<multisite::Transport> make_upload_transport(
+        const BroadcastSettings& cfg) {
+    if (!cfg.cloud_enabled) return nullptr;
+    auto identity = reporter_cloud_identity(multisite::CloudRole::Encoder);
+    if (cfg.storage_provider == "multisite_cloud") {
+        if (!identity || !identity->paired() || !identity->credentials().present())
+            return nullptr;
+        multisite::CloudStorageConfig csc;
+        csc.region = cfg.region;
+        // The transport holds a reference to the identity; keep it alive too.
+        return std::shared_ptr<multisite::Transport>(
+            new multisite::CloudTransport(*identity, multisite::CloudRole::Encoder, csc),
+            [identity](multisite::Transport* t) { delete t; });
+    }
+    if (cfg.bucket.empty() || (cfg.endpoint_host.empty() && cfg.r2_account_id.empty()) ||
+        cfg.access_key_id.empty() || cfg.secret_access_key.empty())
+        return nullptr;
+    multisite::S3Config s3;
+    s3.endpoint_host     = cfg.endpoint_host;
+    s3.r2_account_id     = cfg.r2_account_id;
+    s3.bucket            = cfg.bucket;
+    s3.access_key_id     = cfg.access_key_id;
+    s3.secret_access_key = cfg.secret_access_key;
+    s3.region            = cfg.region;
+    return std::make_shared<multisite::S3Transport>(s3);
+}
+
+void BroadcastController::start_finisher() {
+    const std::string root = spool_dir_path(settings_copy().cache_dir);
+    if (m_finisher && root == m_finisher_root) return;
+    if (m_finisher) m_finisher->stop();
+    multisite::FinisherConfig fc;
+    fc.spool_root = root;
+    fc.manifest_window = multisite::SessionConfig{}.manifest_window;
+    fc.transport = [this] { return make_upload_transport(settings_copy()); };
+    // The live event first: only while it has nothing waiting. encoder_stats()
+    // takes the controls registry's lock, so this is safe off the UI thread.
+    fc.may_upload = [] {
+        EncoderStats es;
+        return !encoder_stats(es) || es.pending == 0;
+    };
+    m_finisher = std::make_unique<multisite::EventFinisher>(fc);
+    m_finisher_root = root;
+    m_finisher->start();
+}
+
+void BroadcastController::abandon_backlog() {
+    if (m_finisher) m_finisher->abandon();
+}
+
 void BroadcastController::unload() {
+    if (m_finisher) m_finisher->stop();
     // The bridge holds a libobs signal handler and a libobs output pointer.
     // Both are gone by the time this object's destructor would run — it is a
     // function-local static, destroyed during __cxa_finalize at process exit —
@@ -573,6 +633,11 @@ BroadcastStatus BroadcastController::status() const {
     st.lan_enabled = m_cfg.lan_enabled;   // true whether idle or live: what
                                            // Go Live will do next time
     st.cloud_enabled = m_cfg.cloud_enabled;
+    if (m_finisher) {
+        const auto fs = m_finisher->status();
+        st.finishing_events   = fs.events;
+        st.finishing_segments = fs.segments;
+    }
     if (st.live) {
         st.bytes = obs_output_get_total_bytes(m_output);
         st.uptime_s = m_started_ns

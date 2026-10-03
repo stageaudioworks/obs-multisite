@@ -208,6 +208,8 @@ private:
     // otherwise. See PROJECT-SCOPE.md §5.1.
     QLabel*      m_resumedNote = nullptr;
     QPushButton* m_endAndFresh = nullptr;
+    QLabel*      m_backlog = nullptr;          // an ended event still uploading
+    QPushButton* m_abandonBacklog = nullptr;
     QTimer* m_timer = nullptr;
 
     // Settings live in a modal dialog rather than in the dock: they are

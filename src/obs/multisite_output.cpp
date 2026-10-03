@@ -1197,8 +1197,9 @@ static void stop_output(OutputCtx* ctx, bool from_obs) {
                   (unsigned long long)ctx->segments_muxed);
         if (st.pending)
             mlog_warn("%zu segment(s) were still unsent when the drain "
-                      "deadline passed — they remain in the spool and will be "
-                      "uploaded if this event is resumed", st.pending);
+                      "deadline passed — they stay in this event's spool folder "
+                      "and finish uploading in the background, after any live "
+                      "event's own", st.pending);
         // Worth its own line, and a loud one: the segments are recoverable,
         // this is not. A satellite learns an event is over by reading
         // live.json, so an event that stopped without being marked ended
