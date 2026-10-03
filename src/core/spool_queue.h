@@ -90,6 +90,10 @@ struct SpoolState {
     // taken (pts_offset_s + duration_s). A resume continues the timeline from
     // here, so a decoder playing across the join never sees time go back.
     double      media_end_s = 0.0;
+    // The event ended, but End could not publish that (manifest.json and
+    // live.json saying "ended") — the link was down. EventFinisher owes it, so
+    // the folder is kept even with no segments left.
+    bool        end_unpublished = false;
 };
 
 // Result of opening a spool dir: tells the caller whether a prior, unfinished
@@ -198,7 +202,8 @@ public:
     size_t pending_count() const;
 
     // Mark the event ended (clean shutdown) so it is not offered for resume.
-    void mark_ended();
+    // `published` false: End could not tell storage, and EventFinisher must.
+    void mark_ended(bool published = true);
 
     SpoolState state() const;
 

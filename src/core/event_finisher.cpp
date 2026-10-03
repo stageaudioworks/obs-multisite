@@ -68,6 +68,36 @@ void EventFinisher::run_once() {
     if (!was_running) m_running = false;
 }
 
+// The room's live.json says "ended" for this event — unless it already does,
+// or it names another event: a newer broadcast in the same room owns the
+// pointer now, and must never be told it has ended. True when there is
+// nothing left to do. ponytail: a new event starting between this read and
+// the write is not guarded; its own heartbeat rewrites the pointer within
+// seconds, which bounds it.
+bool EventFinisher::end_live_pointer(Transport& tx, const std::string& event_id) {
+    auto e = tx.get(event_prefix_for(event_id) + "event.json");
+    if (!e.success) return e.http_status == 404;   // no descriptor: no room to fix
+    std::string room;
+    try { room = EventInfo::from_json(std::string(e.body.begin(), e.body.end())).room_id; }
+    catch (...) { return true; }
+    if (room.empty()) return true;
+    const std::string key = live_pointer_key(room);
+    auto r = tx.get(key);
+    if (!r.success) return r.http_status == 404;
+    LivePointer lp;
+    try { lp = LivePointer::from_json(std::string(r.body.begin(), r.body.end())); }
+    catch (...) { return true; }
+    if (lp.event_id != event_id || lp.status == "ended") return true;
+    lp.status = "ended";
+    lp.updated_at_ms = now_ms();
+    const std::string j = lp.to_json();
+    if (!tx.put(key, std::vector<uint8_t>(j.begin(), j.end()), "application/json", {}).success)
+        return false;
+    log_info("upload: room %s's live.json now says event %s has ended",
+             room.c_str(), event_id.c_str());
+    return true;
+}
+
 bool EventFinisher::finish(const std::string& event_id) {
     std::shared_ptr<Transport> tx = m_cfg.transport ? m_cfg.transport() : nullptr;
     if (!tx) return false;
@@ -118,8 +148,12 @@ bool EventFinisher::finish(const std::string& event_id) {
     SpoolQueue q(m_cfg.spool_root, 0, event_id);
     q.set_targets(1);   // the primary only (see the header)
     const size_t total = q.pending_count();
-    log_info("upload: finishing event %s in the background — %zu segment(s) left",
-             event_id.c_str(), total);
+    if (total > 0)
+        log_info("upload: finishing event %s in the background — %zu segment(s) left",
+                 event_id.c_str(), total);
+    else
+        log_info("upload: telling storage that event %s has ended, which End "
+                 "could not", event_id.c_str());
 
     UploaderConfig ucfg;
     ucfg.base_backoff_ms = m_cfg.base_backoff_ms;
@@ -156,12 +190,16 @@ bool EventFinisher::finish(const std::string& event_id) {
     if (q.pending_count() > 0) return false;   // stopped, abandoned, or yielding
 
     // The last manifest is the one that says the event is complete; a failed
-    // per-segment one is superseded by the next, but nothing follows this.
-    for (int attempt = 0; attempt < 5 && !publish(); ++attempt)
-        std::this_thread::sleep_for(std::chrono::seconds(1 + attempt));
+    // per-segment one is superseded by the next, but nothing follows this. And
+    // the room's live.json, which End may not have reached either. Until both
+    // land the folder stays, and the next pass tries again.
+    if (!publish() || !end_live_pointer(*tx, event_id)) return false;
     SpoolQueue::discard_event(m_cfg.spool_root, event_id);
-    log_info("upload: event %s is complete in storage — the %zu segment(s) left "
-             "at its end are uploaded", event_id.c_str(), total);
+    if (total > 0)
+        log_info("upload: event %s is complete in storage — the %zu segment(s) left "
+                 "at its end are uploaded", event_id.c_str(), total);
+    else
+        log_info("upload: event %s is marked ended in storage", event_id.c_str());
     return true;
 }
 

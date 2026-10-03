@@ -48,6 +48,7 @@ SpoolState read_state_file(const fs::path& file) {
         st.ended          = j.value("ended", false);
         st.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
         st.media_end_s    = j.value("media_end_s", 0.0);
+        st.end_unpublished = j.value("end_unpublished", false);
         st.valid          = true;
     } catch (...) {
         st = SpoolState{};   // corrupt state → treat as none
@@ -114,6 +115,7 @@ SpoolQueue::SpoolQueue(std::string root, uint64_t max_bytes,
             m_dir = dir.string();
             m_state = st;
             m_state.ended = true;
+            m_state.end_unpublished = true;   // it never had an End: owed
             save_state();
         }
         m_dir = best;
@@ -134,7 +136,7 @@ std::vector<std::string> SpoolQueue::finishing_events(const std::string& root) {
     for (auto& e : fs::directory_iterator(root, ec)) {
         if (!e.is_directory()) continue;
         const SpoolState st = read_state_file(e.path() / "state.json");
-        if (st.valid && st.ended && has_segments(e.path()))
+        if (st.valid && st.ended && (has_segments(e.path()) || st.end_unpublished))
             found.emplace_back(st.last_activity_ms, e.path().filename().string());
     }
     std::sort(found.begin(), found.end());
@@ -151,7 +153,8 @@ void SpoolQueue::discard_event(const std::string& root, const std::string& event
 
 bool SpoolQueue::remove_if_done() {
     std::lock_guard<std::mutex> lk(m_mtx);
-    if (m_dir.empty() || !m_state.ended || has_segments(m_dir)) return false;
+    if (m_dir.empty() || !m_state.ended || m_state.end_unpublished ||
+        has_segments(m_dir)) return false;
     std::error_code ec;
     fs::remove_all(m_dir, ec);
     m_dir.clear();
@@ -220,6 +223,7 @@ void SpoolQueue::save_state() {
     j["ended"]          = m_state.ended;
     j["last_activity_ms"] = m_state.last_activity_ms;
     j["media_end_s"]    = m_state.media_end_s;
+    j["end_unpublished"] = m_state.end_unpublished;
     std::string s = j.dump();
     atomic_write(state_path(), s.data(), s.size());
 }
@@ -262,9 +266,14 @@ void SpoolQueue::begin_event(const std::string& event_id, uint64_t first_seq) {
     // ended and left in its folder for EventFinisher, or removed if there is
     // nothing left in it to send.
     if (!m_dir.empty() && m_state.valid) {
+        // An event left unfinished (it was never Ended) is over now; storage
+        // has never been told, so that is owed too, with whatever it had left.
+        if (!m_state.ended) m_state.end_unpublished = true;
         m_state.ended = true;
         save_state();
-        if (!has_segments(m_dir)) { std::error_code ec; fs::remove_all(m_dir, ec); }
+        if (!has_segments(m_dir) && !m_state.end_unpublished) {
+            std::error_code ec; fs::remove_all(m_dir, ec);
+        }
     }
     m_dir = (fs::path(m_root) / event_id).string();
     {
@@ -508,9 +517,10 @@ size_t SpoolQueue::pending_count() const {
     return pending_seqs().size();
 }
 
-void SpoolQueue::mark_ended() {
+void SpoolQueue::mark_ended(bool published) {
     std::lock_guard<std::mutex> lk(m_mtx);
     m_state.ended = true;
+    m_state.end_unpublished = !published;
     save_state();
 }
 

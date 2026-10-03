@@ -386,7 +386,11 @@ is more use to an operator than an event that silently is not there.
   background (`EventFinisher`), each segment added to the event's manifest as it
   lands, the live event's own uploads always first. A backlog left when the
   application quits carries on at the next launch. It is deleted only when the
-  operator says so. It used to be marked ended with the event and deleted by
+  operator says so. The same goes for the ending itself: if End could not
+  publish "ended" (manifest.json and the room's live.json) because the link was
+  down, the folder is kept and the finisher publishes it once it can — live.json
+  only while it still names this event, never over a newer broadcast. An event
+  abandoned by starting a new one over it is owed its ending the same way. It used to be marked ended with the event and deleted by
   the next Go Live, which cost the end of the recording on a slow uplink.
 - **Retry with backoff.** Failed uploads retry with exponential backoff and
   jitter, in strict sequence order, for as long as the event is live. No segment

@@ -776,7 +776,11 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     stop_manifest_publisher();
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
-    m_spool->mark_ended();
+    // If either write failed — the link was down at End — the ending is owed:
+    // the folder is kept and EventFinisher publishes it once it can. It used
+    // to be logged and forgotten, so campuses called a finished event
+    // "interrupted" ten minutes later.
+    m_spool->mark_ended(/*published=*/last_error().empty());
     // Nothing left to send: the event's spool folder goes. Anything the drain
     // did not reach stays in it, ended, for EventFinisher to upload after —
     // it used to stay only until the next Go Live deleted it.

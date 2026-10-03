@@ -13,6 +13,11 @@
 // event's manifest as it lands, and removes the folder once it is empty. The
 // recording simply gets longer.
 //
+// It also owes what End could not say: when the link was down at End, the
+// event's "ended" manifest.json and live.json never landed, and campuses
+// called a finished event "interrupted". The folder is kept for that
+// (SpoolState::end_unpublished) and the ending is published from here.
+//
 // The live event always comes first: `may_upload` is asked before every
 // segment (the mirror's yield rule), so a backlog never competes with the
 // programme going out now. It survives a restart for free — the folders are on
@@ -75,6 +80,7 @@ private:
     // Upload `event_id`'s backlog and keep its manifest up to date. True once
     // its folder is empty and removed.
     bool finish(const std::string& event_id);
+    bool end_live_pointer(Transport& tx, const std::string& event_id);
 
     FinisherConfig    m_cfg;
     std::thread       m_thread;

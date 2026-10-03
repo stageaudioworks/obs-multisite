@@ -34,18 +34,26 @@ public:
     std::map<std::string, std::vector<uint8_t>> objects;
     mutable std::mutex mtx;
     std::atomic<bool> segments_down{false};
+    std::atomic<bool> all_down{false};   // the whole link, control objects too
     PutResult put(const std::string& k, const std::vector<uint8_t>& b, const std::string&,
                   const std::map<std::string,std::string>&) override {
-        if (segments_down && k.find("/segments/") != std::string::npos)
+        if (all_down || (segments_down && k.find("/segments/") != std::string::npos))
             return {false, 0, true, "network down"};
         std::lock_guard<std::mutex> l(mtx); objects[k] = b; return {true, 200, true, ""};
     }
     GetResult get(const std::string& k) override {
+        if (all_down) { GetResult r; r.error = "network down"; return r; }
         std::lock_guard<std::mutex> l(mtx); GetResult r; auto it = objects.find(k);
         if (it == objects.end()) { r.http_status = 404; return r; }
         r.success = true; r.http_status = 200; r.body = it->second; return r;
     }
     bool has(const std::string& k) const { std::lock_guard<std::mutex> l(mtx); return objects.count(k) > 0; }
+    LivePointer live(const std::string& room) const {
+        std::lock_guard<std::mutex> l(mtx);
+        auto it = objects.find(live_pointer_key(room));
+        if (it == objects.end()) return LivePointer{};
+        return LivePointer::from_json(std::string(it->second.begin(), it->second.end()));
+    }
     Manifest manifest(const std::string& id) const {
         std::lock_guard<std::mutex> l(mtx);
         auto it = objects.find("events/" + id + "/manifest.json");
@@ -157,6 +165,113 @@ int main() {
         fin.abandon();
         CHECK(fin.status().events == 0 && SpoolQueue::finishing_events(root.string()).empty(),
               "abandon() removes it, and only when asked");
+    }
+
+    std::printf("== An End the link could not carry is published once it can ==\n");
+    {
+        // Seen live 2026-10-03: End during an outage, the final manifest.json
+        // and live.json PUTs timed out, and live.json went on saying "live" —
+        // campuses would call a finished event "interrupted".
+        const fs::path r2 = unique_temp_dir("multisite_finisher_end");
+        fs::remove_all(r2);
+        Store st;
+        SessionConfig c; c.room_id = "r"; c.spool_dir = r2.string();
+        c.base_backoff_ms = 2; c.max_backoff_ms = 10; c.backoff_jitter = 0.0;
+        std::string id;
+        {
+            Session s1(c, st);
+            s1.start_new(blob(0, 300), video, tracks);
+            id = s1.event_id();
+            s1.publish_segment(blob(1), 6.0, 0.0);
+            for (int i = 0; i < 200 && s1.status().pending > 0; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            st.all_down = true;                 // the link goes, then End
+            s1.end(std::chrono::milliseconds(50));
+        }
+        CHECK(st.live("r").status == "live",
+              "End could not say so: live.json still says live");
+        CHECK(fs::exists(r2 / id) && seg_files(r2 / id) == 0,
+              "the event's folder is kept, with no segments, because the ending is owed");
+        CHECK(SpoolQueue::finishing_events(r2.string()) == std::vector<std::string>{id},
+              "and the finisher has it as work");
+
+        FinisherConfig fc; fc.spool_root = r2.string();
+        fc.transport = [&]() -> std::shared_ptr<Transport> {
+            return std::shared_ptr<Transport>(&st, [](Transport*) {});
+        };
+        EventFinisher fin(fc);
+        fin.run_once();
+        CHECK(fs::exists(r2 / id), "while the link is down, nothing is lost and it waits");
+        st.all_down = false;
+        fin.run_once();
+        CHECK(st.manifest(id).status == "ended", "once it is back, the manifest says ended");
+        CHECK(st.live("r").status == "ended" && st.live("r").event_id == id,
+              "and so does live.json, for this event");
+        CHECK(!fs::exists(r2 / id), "then the folder goes");
+        fs::remove_all(r2);
+    }
+
+    std::printf("== A newer broadcast's live.json is never told it has ended ==\n");
+    {
+        const fs::path r3 = unique_temp_dir("multisite_finisher_newer");
+        fs::remove_all(r3);
+        Store st;
+        SessionConfig c; c.room_id = "r"; c.spool_dir = r3.string();
+        c.base_backoff_ms = 2; c.max_backoff_ms = 10; c.backoff_jitter = 0.0;
+        std::string old_id, new_id;
+        {
+            Session s1(c, st);
+            s1.start_new(blob(0, 300), video, tracks);
+            old_id = s1.event_id();
+            st.all_down = true;
+            s1.end(std::chrono::milliseconds(50));
+        }
+        st.all_down = false;
+        {
+            Session s2(c, st);
+            s2.start_new(blob(0, 300), video, tracks);   // the room's next broadcast
+            new_id = s2.event_id();
+            FinisherConfig fc; fc.spool_root = r3.string();
+            fc.transport = [&]() -> std::shared_ptr<Transport> {
+                return std::shared_ptr<Transport>(&st, [](Transport*) {});
+            };
+            EventFinisher fin(fc);
+            fin.run_once();
+            CHECK(st.manifest(old_id).status == "ended", "the old event's manifest is ended");
+            CHECK(st.live("r").event_id == new_id && st.live("r").status == "live",
+                  "but live.json, which names the newer broadcast, is left alone");
+            CHECK(!fs::exists(r3 / old_id), "and the old folder goes");
+            s2.end();
+        }
+        fs::remove_all(r3);
+    }
+
+    std::printf("== Starting a new event over an unfinished one owes the old one its End ==\n");
+    {
+        const fs::path r4 = unique_temp_dir("multisite_finisher_crash");
+        fs::remove_all(r4);
+        Store st;
+        SessionConfig c; c.room_id = "r"; c.spool_dir = r4.string();
+        std::string crashed;
+        {
+            Session s1(c, st);
+            s1.start_new(blob(0, 300), video, tracks);
+            crashed = s1.event_id();
+        }   // a crash: never Ended
+        {
+            Session s2(c, st);
+            s2.start_new(blob(0, 300), video, tracks);   // "start new", not resume
+            FinisherConfig fc; fc.spool_root = r4.string();
+            fc.transport = [&]() -> std::shared_ptr<Transport> {
+                return std::shared_ptr<Transport>(&st, [](Transport*) {});
+            };
+            EventFinisher fin(fc);
+            fin.run_once();
+            CHECK(st.manifest(crashed).status == "ended",
+                  "the abandoned event is published as ended, not left looking interrupted");
+            s2.end();
+        }
+        fs::remove_all(r4);
     }
 
     std::printf("== A spool in the old single-folder layout carries on ==\n");
