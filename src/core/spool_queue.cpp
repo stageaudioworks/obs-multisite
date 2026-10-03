@@ -145,6 +145,19 @@ std::vector<std::string> SpoolQueue::finishing_events(const std::string& root) {
     return ids;
 }
 
+size_t SpoolQueue::remove_finished(const std::string& root) {
+    std::vector<fs::path> done;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(root, ec)) {
+        if (!e.is_directory()) continue;
+        const SpoolState st = read_state_file(e.path() / "state.json");
+        if (st.valid && st.ended && !st.end_unpublished && !has_segments(e.path()))
+            done.push_back(e.path());
+    }
+    for (const auto& d : done) fs::remove_all(d, ec);
+    return done.size();
+}
+
 void SpoolQueue::discard_event(const std::string& root, const std::string& event_id) {
     if (event_id.empty()) return;
     std::error_code ec;

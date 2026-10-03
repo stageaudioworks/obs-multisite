@@ -143,6 +143,11 @@ public:
     // Events under `root` that have ended with segments still to upload,
     // oldest first: EventFinisher's work.
     static std::vector<std::string> finishing_events(const std::string& root);
+    // Remove every event folder that has ended with nothing left to send or to
+    // publish — the empties a layout migration or a crash can leave behind. A
+    // folder whose state.json cannot be read is left alone: it may still hold
+    // segments. Returns how many were removed.
+    static size_t remove_finished(const std::string& root);
     // Remove an event's folder, segments and all: abandoning its backlog.
     static void discard_event(const std::string& root, const std::string& event_id);
     // The current event's folder, once it has ended with nothing left to send,

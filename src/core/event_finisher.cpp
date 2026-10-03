@@ -59,6 +59,8 @@ void EventFinisher::loop() {
 void EventFinisher::run_once() {
     // Called directly (a test), there is no thread to say it is running.
     const bool was_running = m_running.exchange(true);
+    // Tidy first: ended folders with nothing owed are only clutter.
+    SpoolQueue::remove_finished(m_cfg.spool_root);
     for (const auto& id : SpoolQueue::finishing_events(m_cfg.spool_root)) {
         if (m_abandon.load() || !m_running.load()) break;
         if (m_cfg.may_upload && !m_cfg.may_upload()) break;

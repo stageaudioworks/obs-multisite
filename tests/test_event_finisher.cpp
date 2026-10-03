@@ -282,6 +282,31 @@ int main() {
         fs::remove_all(r4);
     }
 
+    std::printf("== Ended folders with nothing owed are tidied away ==\n");
+    {
+        const fs::path r5 = unique_temp_dir("multisite_finisher_tidy");
+        fs::remove_all(r5);
+        auto folder = [&](const char* id, bool ended, bool owed, bool seg) {
+            fs::create_directories(r5 / id);
+            std::ofstream(r5 / id / "state.json")
+                << "{\"event_id\":\"" << id << "\",\"ended\":" << (ended ? "true" : "false")
+                << ",\"end_unpublished\":" << (owed ? "true" : "false") << "}";
+            if (seg) std::ofstream(r5 / id / "00000001.seg") << "bytes";
+        };
+        folder("01EMPTYENDED", true, false, false);   // what the migration left
+        folder("01OWEDEND", true, true, false);       // its ending is still owed
+        folder("01BACKLOG", true, false, true);       // segments still to send
+        folder("01LIVE", false, false, false);        // the live (resumable) event
+        fs::create_directories(r5 / "01UNREADABLE");  // no state.json: leave it
+        CHECK(SpoolQueue::remove_finished(r5.string()) == 1,
+              "exactly one folder is removed");
+        CHECK(!fs::exists(r5 / "01EMPTYENDED"), "the empty, ended one");
+        CHECK(fs::exists(r5 / "01OWEDEND") && fs::exists(r5 / "01BACKLOG") &&
+                  fs::exists(r5 / "01LIVE") && fs::exists(r5 / "01UNREADABLE"),
+              "and none that is owed anything, still live, or unreadable");
+        fs::remove_all(r5);
+    }
+
     std::printf("== A spool in the old single-folder layout carries on ==\n");
     {
         const fs::path old = unique_temp_dir("multisite_oldspool");
