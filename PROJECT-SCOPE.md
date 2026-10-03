@@ -375,10 +375,17 @@ is more use to an operator than an event that silently is not there.
   is abandoned.
 - **Checksums.** Each segment's hash is recorded in the manifest; decoders verify
   after download and re-fetch on mismatch.
-- **Resume-after-crash.** Event state (event_id, last sequence, queue) is
-  persisted, so a crashed or power-cycled encoder can continue the same event
-  rather than starting a new one with a gap in the middle. Who actually
-  decides that, and when it is safe to decide it silently, is §5.1.
+- **Resume-after-crash.** Event state (event_id, last sequence, queue, and how
+  far media time had reached) is persisted, so a crashed or power-cycled
+  encoder can continue the same event rather than starting a new one with a
+  gap in the middle. A resume continues the event's *record* as well as its
+  sequence: event.json, the room index entry and init.mp4 are the original's
+  and are not rewritten, the manifest carries on from the stored one (its
+  floor, start time and window), and media time runs on from the end of the
+  last segment rather than from zero. A resume whose init segment differs from
+  the stored one — the encoder's settings changed — is refused, and a new
+  event is started instead, saying so. Who actually decides to resume, and
+  when it is safe to decide it silently, is §5.1.
 - **Decoder-side durability.** Downloads are cached locally and verified;
   missing or corrupt segments are re-requested. A gap causes a wait-and-retry,
   never a crash. Behind the live edge a refusal is final — uploads are in order

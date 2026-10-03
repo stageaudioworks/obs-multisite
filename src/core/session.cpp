@@ -241,7 +241,8 @@ ResumeInfo peek_resumable(const std::string& spool_dir,
 
 bool Session::begin_common(const std::vector<uint8_t>& init,
                            const VideoInfo& video,
-                           const std::vector<AudioTrack>& tracks) {
+                           const std::vector<AudioTrack>& tracks,
+                           const Continuing* cont) {
     clear_error();
     // Started before anything is queued, so the first manifest has somewhere
     // to go rather than sitting until the next segment.
@@ -255,18 +256,24 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     // the one point where a Session starts issuing requests, rather than
     // relying on every caller to hand over a factory-fresh transport.
     m_tx.resume_pending();
-    // event.json — static descriptor
+    // event.json — static descriptor, written once. A resume keeps the
+    // original: its start time is what every time of day in the event is
+    // measured from, and its first_seq is where the event begins.
     EventInfo ev;
-    ev.event_id           = m_event_id;
-    ev.room_id            = m_cfg.room_id;
-    ev.name               = m_cfg.event_name;
-    ev.started_at_ms      = now_ms();
-    ev.first_seq          = m_next_seq;
-    ev.segment_duration_s = m_cfg.segment_duration_s;
-    ev.init               = "init.mp4";
-    ev.video              = video;
-    ev.audio_tracks       = tracks;
-    if (!put_json(event_prefix() + "event.json", ev.to_json())) return false;
+    if (cont && cont->have_event) {
+        ev = cont->event;
+    } else {
+        ev.event_id           = m_event_id;
+        ev.room_id            = m_cfg.room_id;
+        ev.name               = m_cfg.event_name;
+        ev.started_at_ms      = now_ms();
+        ev.first_seq          = m_next_seq;
+        ev.segment_duration_s = m_cfg.segment_duration_s;
+        ev.init               = "init.mp4";
+        ev.video              = video;
+        ev.audio_tracks       = tracks;
+        if (!put_json(event_prefix() + "event.json", ev.to_json())) return false;
+    }
 
     // rooms/{room}/events/{id}.json — the per-room index the event list reads.
     // Deliberately NOT fatal: this only makes a past event easier to find, and
@@ -278,12 +285,16 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     idx.room_id       = m_cfg.room_id;
     idx.name          = m_cfg.event_name;
     idx.started_at_ms = ev.started_at_ms;
-    if (!put_json(room_event_key(m_cfg.room_id, m_event_id), idx.to_json())) {
+    if (!(cont && cont->have_event) &&
+        !put_json(room_event_key(m_cfg.room_id, m_event_id), idx.to_json())) {
         clear_error();   // reported above; not a go-live failure
     }
 
-    // init.mp4 — must exist before any segment is referenced
-    if (!put_bytes(event_prefix() + "init.mp4", init, "video/mp4")) return false;
+    // init.mp4 — must exist before any segment is referenced. Never replaced
+    // on a resume: resume() has already refused one whose init differs, so
+    // what is stored is exactly these bytes.
+    if (!(cont && cont->init_stored) &&
+        !put_bytes(event_prefix() + "init.mp4", init, "video/mp4")) return false;
 
     // A LAN satellite bootstraps from exactly these two things — the same
     // event.json just published and the same init bytes — fired unlocked, on
@@ -294,15 +305,22 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     std::string manifest_json;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
-        m_manifest = Manifest{};
-        m_manifest.event_id            = m_event_id;
+        if (cont && cont->have_manifest) {
+            // Carry on from the bucket's manifest: its floor, its window and
+            // its start time. A fresh one put the floor at the resume point,
+            // and every decoder clamps to the floor.
+            m_manifest = cont->manifest;
+        } else {
+            m_manifest = Manifest{};
+            m_manifest.event_id            = m_event_id;
+            m_manifest.name                = m_cfg.event_name;
+            m_manifest.init                = "init.mp4";
+            m_manifest.video               = video;
+            m_manifest.audio_tracks        = tracks;
+            m_manifest.first_available_seq = ev.first_seq;
+            m_manifest.started_at_ms       = ev.started_at_ms;
+        }
         m_manifest.status              = "live";
-        m_manifest.name                = m_cfg.event_name;
-        m_manifest.init                = "init.mp4";
-        m_manifest.video               = video;
-        m_manifest.audio_tracks        = tracks;
-        m_manifest.first_available_seq = m_next_seq;
-        m_manifest.started_at_ms       = ev.started_at_ms;
         m_manifest.updated_at_ms       = now_ms();
         manifest_json = queue_manifest_locked();
     }
@@ -341,28 +359,56 @@ bool Session::start_new(const std::vector<uint8_t>& init,
 bool Session::resume(const std::vector<uint8_t>& init,
                      const VideoInfo& video,
                      const std::vector<AudioTrack>& tracks) {
+    m_resume_refused = false;
     auto info = m_spool->inspect();
     if (!info.resumable) return false;
     m_event_id = info.event_id;
     m_next_seq = info.last_enqueued + 1;   // continue the sequence
+    // Requests are about to be made on a transport an earlier Session may have
+    // cancelled on its way out (see begin_common).
+    m_tx.resume_pending();
 
-    // Read the original event.json back for two things the spool alone
-    // doesn't record: the operator's original name (kept unless they typed a
-    // new one) and the wall-clock time the event actually started, which is
-    // what the dock's "Resumed event from ..." line names (see
-    // PROJECT-SCOPE.md §5.1). event_prefix() already uses m_event_id, set
-    // above, so this reads the very event being resumed. Best-effort: a
-    // failed read still resumes the event, it just can't name a time for it.
+    // What the bucket already holds for this event — kept, not rewritten (see
+    // the header). Each read distinguishes "not there" (404: the crash came
+    // before it was written, so write it now) from "could not ask": a resume
+    // that cannot check the init must not go ahead and risk mixing two.
+    Continuing cont;
+    {
+        auto r = m_tx.get(event_prefix() + "init.mp4");
+        if (r.success) {
+            if (r.body != init) {
+                m_resume_refused = true;
+                set_error("event " + m_event_id + " cannot be resumed: the "
+                          "encoder's settings have changed since it started (its "
+                          "init segment differs), so the segments before and after "
+                          "would need different inits");
+                return false;
+            }
+            cont.init_stored = true;
+        } else if (r.http_status != 404) {
+            set_error("init.mp4: HTTP " + std::to_string(r.http_status) + " " + r.error);
+            return false;
+        }
+    }
     int64_t started_at_ms = 0;
     {
         auto r = m_tx.get(event_prefix() + "event.json");
         if (r.success) {
             try {
-                EventInfo old = EventInfo::from_json(
-                    std::string(r.body.begin(), r.body.end()));
-                if (m_cfg.event_name.empty() && !old.name.empty())
-                    m_cfg.event_name = old.name;
-                started_at_ms = old.started_at_ms;
+                cont.event = EventInfo::from_json(std::string(r.body.begin(), r.body.end()));
+                cont.have_event = true;
+                if (m_cfg.event_name.empty() && !cont.event.name.empty())
+                    m_cfg.event_name = cont.event.name;
+                started_at_ms = cont.event.started_at_ms;
+            } catch (...) {}
+        }
+    }
+    {
+        auto r = m_tx.get(event_prefix() + "manifest.json");
+        if (r.success) {
+            try {
+                cont.manifest = Manifest::from_json(std::string(r.body.begin(), r.body.end()));
+                cont.have_manifest = cont.manifest.event_id == m_event_id;
             } catch (...) {}
         }
     }
@@ -379,7 +425,7 @@ bool Session::resume(const std::vector<uint8_t>& init,
     }
 
     m_spool->resume_event();
-    return begin_common(init, video, tracks);
+    return begin_common(init, video, tracks, &cont);
 }
 
 uint64_t Session::publish_segment(std::vector<uint8_t> fragment,

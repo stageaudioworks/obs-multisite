@@ -2,6 +2,8 @@
 #include "cmaf_muxer.h"
 #include "segment_cut.h"
 
+#include <cmath>
+
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -69,6 +71,11 @@ struct CmafMuxer::Impl {
     double   last_video_pts_s = 0.0;
     int      video_track = -1;
     bool     keep_input_timestamps = false;
+    // resume_from_s (see the header): first packet's time becomes rebase_to_ns.
+    bool     rebase = false;
+    int64_t  rebase_to_ns = 0;
+    bool     have_base = false;
+    int64_t  base_ns = 0;
 
     static int write_cb(void* opaque, MS_AVIO_WRITE_BUF data, int size) {
         auto* self = static_cast<Impl*>(opaque);
@@ -178,7 +185,14 @@ struct CmafMuxer::Impl {
         if (in.track < 0 || in.track >= (int)stream_index.size()) return;
 
         bool is_video = (in.track == video_track);
-        double pts_s = (double)in.pts_ns / 1e9;
+        // Packets arrive in DTS order, so the first one has the earliest time.
+        int64_t pts_ns = in.pts_ns, dts_ns = in.dts_ns;
+        if (rebase) {
+            if (!have_base) { have_base = true; base_ns = dts_ns; }
+            pts_ns = pts_ns - base_ns + rebase_to_ns;
+            dts_ns = dts_ns - base_ns + rebase_to_ns;
+        }
+        double pts_s = (double)pts_ns / 1e9;
 
         // Cut a segment at a video keyframe once we've reached the target —
         // within a frame of it, because OBS truncates the keyframe interval
@@ -198,8 +212,8 @@ struct CmafMuxer::Impl {
         pkt->stream_index = st->index;
         pkt->data = const_cast<uint8_t*>(in.data.data());
         pkt->size = (int)in.data.size();
-        pkt->pts = av_rescale_q(in.pts_ns, NS_TB, st->time_base);
-        pkt->dts = av_rescale_q(in.dts_ns, NS_TB, st->time_base);
+        pkt->pts = av_rescale_q(pts_ns, NS_TB, st->time_base);
+        pkt->dts = av_rescale_q(dts_ns, NS_TB, st->time_base);
         pkt->duration = in.duration_ns > 0
             ? av_rescale_q(in.duration_ns, NS_TB, st->time_base) : 0;
         if (in.keyframe) pkt->flags |= AV_PKT_FLAG_KEY;
@@ -230,11 +244,13 @@ struct CmafMuxer::Impl {
 };
 
 CmafMuxer::CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s,
-                     bool keep_input_timestamps)
+                     bool keep_input_timestamps, double resume_from_s)
     : d(std::make_unique<Impl>()) {
     d->tracks = std::move(tracks);
     d->target_s = target_segment_s;
-    d->keep_input_timestamps = keep_input_timestamps;
+    d->keep_input_timestamps = keep_input_timestamps || resume_from_s >= 0.0;
+    d->rebase = resume_from_s >= 0.0;
+    d->rebase_to_ns = d->rebase ? (int64_t)std::llround(resume_from_s * 1e9) : 0;
     d->setup();
 }
 CmafMuxer::~CmafMuxer() = default;

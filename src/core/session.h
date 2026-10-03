@@ -115,10 +115,23 @@ public:
                    const VideoInfo& video,
                    const std::vector<AudioTrack>& audio_tracks);
 
-    // Resume the on-disk event, continuing its sequence numbering.
+    // Resume the on-disk event, continuing its sequence numbering — and its
+    // record: event.json, the room index entry and init.mp4 are the original's
+    // and are not rewritten, and the manifest carries on from the one in the
+    // bucket (its floor, start time and window). A resume used to publish all
+    // of them afresh, which put everything before the crash below the
+    // manifest's floor — unplayable though still stored — and replaced the
+    // init the earlier segments were encoded against.
+    //
+    // Refused (false, resume_refused() true) when the bucket's init.mp4 is not
+    // `init` byte for byte: the encoder's settings changed, so segments on each
+    // side of the crash need different inits and cannot be one event. The
+    // muxer writes identical init bytes for identical settings, so this is
+    // exact. The caller starts a new event instead.
     bool resume(const std::vector<uint8_t>& init,
                 const VideoInfo& video,
                 const std::vector<AudioTrack>& audio_tracks);
+    bool resume_refused() const { return m_resume_refused; }
 
     // Durably enqueue a finished media fragment. Returns its sequence number.
     // Safe to call from the encode thread; never blocks on the network.
@@ -415,9 +428,17 @@ private:
                     const std::string& content_type);
     std::string publish_manifest_locked();
     void  publish_live(const std::string& status);
+    // What a resume found already in the bucket, for begin_common to keep.
+    struct Continuing {
+        bool      have_event = false;     EventInfo event;
+        bool      have_manifest = false;  Manifest  manifest;
+        bool      init_stored = false;    // the bucket already holds this init
+    };
+    bool  m_resume_refused = false;
     bool  begin_common(const std::vector<uint8_t>& init,
                        const VideoInfo& video,
-                       const std::vector<AudioTrack>& tracks);
+                       const std::vector<AudioTrack>& tracks,
+                       const Continuing* cont = nullptr);
     void  on_confirmed(const SpooledSegment& seg);
     // Called (on the encode thread, via SpoolQueue's drop callback) when a
     // segment had to be evicted for disk space. Must never touch the network:

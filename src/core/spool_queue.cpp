@@ -99,6 +99,7 @@ void SpoolQueue::load_state() {
         m_state.any_confirmed_2 = j.value("any_confirmed_2", false);
         m_state.ended          = j.value("ended", false);
         m_state.last_activity_ms = j.value("last_activity_ms", (int64_t)0);
+        m_state.media_end_s    = j.value("media_end_s", 0.0);
         m_state.valid          = true;
     } catch (...) {
         m_state = SpoolState{}; // corrupt state → treat as none
@@ -117,6 +118,7 @@ void SpoolQueue::save_state() {
     j["any_confirmed_2"] = m_state.any_confirmed_2;
     j["ended"]          = m_state.ended;
     j["last_activity_ms"] = m_state.last_activity_ms;
+    j["media_end_s"]    = m_state.media_end_s;
     std::string s = j.dump();
     atomic_write(state_path(), s.data(), s.size());
 }
@@ -148,6 +150,7 @@ ResumeInfo SpoolQueue::inspect() const {
     r.last_enqueued  = m_state.last_enqueued;
     r.pending_count  = pend.size();
     r.last_activity_ms = m_state.last_activity_ms;
+    r.media_end_s    = m_state.media_end_s;
     return r;
 }
 
@@ -207,6 +210,8 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
         atomic_write(meta_path(seg.seq), ms.data(), ms.size());
 
         if (seg.seq > m_state.last_enqueued) m_state.last_enqueued = seg.seq;
+        m_state.media_end_s = std::max(m_state.media_end_s,
+                                       seg.pts_offset_s + seg.duration_s);
         m_state.last_activity_ms = now_ms();
         m_bytes_pending += seg.data.size();
 

@@ -77,6 +77,10 @@ struct SpoolState {
     // PROJECT-SCOPE.md §5.1: this is what tells a genuine crash-and-restart,
     // minutes old, apart from a stale leftover event nobody cleaned up.
     int64_t     last_activity_ms = 0;
+    // Where the event's media time had reached: the end of the furthest segment
+    // taken (pts_offset_s + duration_s). A resume continues the timeline from
+    // here, so a decoder playing across the join never sees time go back.
+    double      media_end_s = 0.0;
 };
 
 // Result of opening a spool dir: tells the caller whether a prior, unfinished
@@ -91,6 +95,7 @@ struct ResumeInfo {
     // stale, since that threshold is a Session-level policy
     // (SessionConfig::resume_stale_after_ms). See Session::check_resumable().
     int64_t     last_activity_ms = 0;
+    double      media_end_s = 0.0;   // see SpoolState::media_end_s
     // Always false from SpoolQueue::inspect() itself. Session::check_resumable()
     // sets this before returning, once it has a threshold to compare against.
     bool        stale = false;

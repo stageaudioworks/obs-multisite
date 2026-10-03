@@ -1125,6 +1125,73 @@ int main() {
         CHECK(lp.status == "ended", "live.json says ended, not a late heartbeat's live");
     }
 
+    std::printf("== 26. a resume keeps the event's record, and refuses a changed encoder ==\n");
+    {
+        // Measured before this fix with the same steps: after a crash and a
+        // resume the manifest's floor jumped from 0 to the resume point (every
+        // decoder clamps to it, so the part before the crash was unplayable
+        // though stored), event.json took the resume time as its start, and
+        // init.mp4 was replaced with the new encoder's.
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s26").string();
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        auto get = [&](const std::string& k) {
+            std::lock_guard<std::mutex> lk(store.mtx);
+            auto it = store.objects.find(k);
+            return it == store.objects.end() ? std::string()
+                                             : std::string(it->second.begin(), it->second.end());
+        };
+        auto wait_edge = [&](const std::string& key, uint64_t seq) {
+            for (int i = 0; i < 400; ++i) {
+                const std::string j = get(key);
+                try { if (!j.empty() && Manifest::from_json(j).latest_seq >= seq) return; }
+                catch (...) {}
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        };
+        const auto initA = blob(500, 300), initB = blob(501, 300);
+        std::string id, event_before, init_before;
+        {
+            Session ses(cfg, store);
+            ses.start_new(initA, video, tracks);
+            id = ses.event_id();
+            for (uint64_t i = 0; i < 4; ++i)
+                ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+            for (int i = 0; i < 400 && ses.status().pending > 0; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            wait_edge("events/" + id + "/manifest.json", 3);
+            event_before = get("events/" + id + "/event.json");
+            init_before  = get("events/" + id + "/init.mp4");
+        }   // crash: no end()
+        const std::string pre = "events/" + id + "/";
+
+        {
+            Session refused(cfg, store);
+            CHECK(refused.check_resumable().media_end_s == 24.0,
+                  "the spool remembers where media time had reached (24 s)");
+            CHECK(!refused.resume(initB, video, tracks) && refused.resume_refused(),
+                  "a resume whose init differs is refused, and says so");
+            CHECK(get(pre + "init.mp4") == init_before && get(pre + "event.json") == event_before,
+                  "and the refusal changed nothing in the bucket");
+        }
+
+        Session ses2(cfg, store);
+        CHECK(ses2.resume(initA, video, tracks), "the same encoder resumes");
+        ses2.publish_segment(blob(9), 6.0, 24.0);
+        for (int i = 0; i < 400 && ses2.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        wait_edge(pre + "manifest.json", 4);
+        const Manifest m = Manifest::from_json(get(pre + "manifest.json"));
+        CHECK(m.first_available_seq == 0,
+              "the manifest's floor is still 0: the part before the crash stays playable");
+        CHECK(!m.segments.empty() && m.segments.front().seq == 0 && m.latest_seq == 4,
+              "and its window runs on from segment 0 to 4");
+        CHECK(get(pre + "event.json") == event_before,
+              "event.json is the original's, start time and first_seq included");
+        CHECK(get(pre + "init.mp4") == init_before, "init.mp4 is the original's");
+        ses2.end();
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

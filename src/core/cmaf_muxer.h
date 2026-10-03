@@ -57,8 +57,15 @@ public:
     // a part after a signal drop, or a resume after a restart — starts its
     // media time at zero again, and a decoder following the event sees time
     // go backwards at the join. On, no packet may have a negative time.
+    //
+    // `resume_from_s` >= 0: this muxer continues an event after a resume, so
+    // its media time must run on from where the event's last segment ended,
+    // not start again at zero. It takes its first packet as zero — the caller's
+    // clock restarts with each start, so its raw times mean nothing here — and
+    // adds `resume_from_s`, writing those times as given (implies
+    // keep_input_timestamps). The init segment is the same bytes either way.
     CmafMuxer(std::vector<CmafTrack> tracks, double target_segment_s,
-              bool keep_input_timestamps = false);
+              bool keep_input_timestamps = false, double resume_from_s = -1.0);
     ~CmafMuxer();
 
     // The init segment (ftyp+moov). Available immediately after construction.

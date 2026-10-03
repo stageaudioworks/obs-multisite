@@ -660,20 +660,34 @@ static bool complete_start(OutputCtx* ctx) {
                       ctx->pending_chan_labels, ctx->pending_layout))
         return false;
 
+    // A resume carries on the event's media time from where its last segment
+    // ended; a new event starts at 0. Decided here, before the muxer exists,
+    // because the muxer is what stamps the times. Without it every resume
+    // started media time at zero again, and a campus playing across the crash
+    // saw the programme's clock jump back to the start of the event.
+    double resume_from = -1.0;
+    if (!ctx->pending_force_new_event) {
+        const ResumeInfo pk = peek_resumable(ctx->pending_sc.spool_dir, 0);
+        if (pk.resumable && pk.media_end_s > 0.0) resume_from = pk.media_end_s;
+    }
+
     // Under the lock, because this can now run on the writer thread while
     // out_stop resets the same pointer from OBS's UI thread. Two unassisted
     // unique_ptr writes to one pointer is a data race and, with the wrong
     // interleaving, a double free.
-    {
+    auto make_muxer = [&](double from) {
         auto m = std::make_unique<CmafMuxer>(tracks,
-                                             ctx->pending_sc.segment_duration_s);
+                                             ctx->pending_sc.segment_duration_s,
+                                             false, from);
         if (!m->ok()) {
             mlog_error("muxer init failed: %s", m->error().c_str());
             return false;
         }
         std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
         ctx->muxer = std::move(m);
-    }
+        return true;
+    };
+    if (!make_muxer(resume_from)) return false;
 
     mlog_info("init segment: %zu bytes (carries the codec config for the event)",
               ctx->muxer->init_segment().size());
@@ -844,6 +858,19 @@ static bool complete_start(OutputCtx* ctx) {
         mlog_info("resuming interrupted event %s (%zu segments pending)",
                   resume.event_id.c_str(), resume.pending_count);
         ok = ctx->session->resume(ctx->muxer->init_segment(), vinfo, ainfo);
+        if (!ok && ctx->session->resume_refused()) {
+            // The encoder's settings changed since the event started, so its
+            // segments cannot share an init with these. A new event, at media
+            // time 0, rather than no broadcast at all.
+            mlog_warn("%s — starting a new event instead%s",
+                      ctx->session->last_error().c_str(),
+                      resume.pending_count
+                          ? (", abandoning " + std::to_string(resume.pending_count) +
+                             " of its segment(s) that were never uploaded").c_str()
+                          : "");
+            ok = make_muxer(-1.0) &&
+                 ctx->session->start_new(ctx->muxer->init_segment(), vinfo, ainfo);
+        }
     } else {
         if (resume.resumable)
             mlog_info("operator chose to start a new event over the "

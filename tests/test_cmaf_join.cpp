@@ -44,7 +44,8 @@ struct Part {
 
 // `frames` pictures from `first_frame` on, through a fresh encoder and a fresh
 // muxer, one keyframe a second and one-second segments.
-static bool encode_part(int first_frame, int frames, bool keep, Part& out) {
+static bool encode_part(int first_frame, int frames, bool keep, Part& out,
+                        double resume_from_s = -1.0) {
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
     if (!codec) return false;
     AVCodecContext* c = avcodec_alloc_context3(codec);
@@ -66,7 +67,7 @@ static bool encode_part(int first_frame, int frames, bool keep, Part& out) {
     v.fps_num = kFps;
     v.fps_den = 1;
     v.extradata.assign(c->extradata, c->extradata + c->extradata_size);
-    CmafMuxer mux({v}, 1.0, keep);
+    CmafMuxer mux({v}, 1.0, keep, resume_from_s);
     out.init = mux.init_segment();
     mux.on_segment([&](uint64_t, std::vector<uint8_t> b, double, double start) {
         if (out.first_seg_start_s < 0) out.first_seg_start_s = start;
@@ -158,6 +159,25 @@ int main() {
         CHECK(a.first_seg_start_s == 0.0, "the first part starts at 0");
         CHECK(b.first_seg_start_s > 2.99 && b.first_seg_start_s < 3.01,
               "the second part's segment says 3 s");
+        const Seen s = play(a, b);
+        std::printf("  played %d frames, pts %.3f..%.3f s\n", s.frames, s.first / 1e9, s.last / 1e9);
+        CHECK(s.frames == 150, "all 150 frames play through one decoder");
+        CHECK(!s.backwards, "time never goes backwards at the join");
+        CHECK(s.first == 0 && s.last > 4900000000LL, "0 s to 5 s, as recorded");
+    }
+
+    std::printf("Resumed: a muxer whose input clock restarts at 0 runs on from 3 s\n");
+    {
+        // The OBS encoder after a restart: its packets count from zero again,
+        // like the first part's did. resume_from_s puts them after the 3 s the
+        // event already holds, so a decoder playing across the join sees one
+        // timeline.
+        Part a, b;
+        CHECK(encode_part(0, 90, false, a) && encode_part(0, 60, false, b, 3.0),
+              "both parts written, each from its own frame 0");
+        CHECK(b.first_seg_start_s > 2.99 && b.first_seg_start_s < 3.01,
+              "the resumed part's segment says 3 s");
+        CHECK(a.init == b.init, "and its init segment is the same bytes as the first part's");
         const Seen s = play(a, b);
         std::printf("  played %d frames, pts %.3f..%.3f s\n", s.frames, s.first / 1e9, s.last / 1e9);
         CHECK(s.frames == 150, "all 150 frames play through one decoder");
