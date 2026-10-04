@@ -230,6 +230,9 @@ void start_web_ui() {
         route_file(*server, "/decoder/",           "web/decoder/index.html");
         route_file(*server, "/decoder/app.js",     "web/decoder/app.js");
         route_file(*server, "/decoder/common.js",  "web/shared/common.js");
+        // The Pi player's tested media-time arithmetic, held identical to it by
+        // tests/test_media_time.js.
+        route_file(*server, "/decoder/media.js",   "web/shared/media.js");
         route_file(*server, "/decoder/style.css",  "web/shared/style.css");
         route_file(*server, "/decoder/saw-logo.svg", "web/shared/saw-logo.svg");
         register_decoder_api(*server);

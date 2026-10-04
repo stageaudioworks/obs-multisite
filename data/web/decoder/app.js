@@ -9,6 +9,11 @@
  * Nothing here says "segment", "buffer" or "live edge". Times are clock times
  * and durations are minutes, because the person holding the tablet is watching
  * a service, not a pipeline.
+ *
+ * The status document speaks MEDIA time — milliseconds into the programme,
+ * from 0 — for every position. started_ms is the one time of day, and it is
+ * only ever added to a media time to show a clock (CONTEXT.md, "Time"). The
+ * timeline's arithmetic is media.js's, which is tested.
  */
 
 'use strict';
@@ -35,6 +40,13 @@ let eventsSignature = '';
 function hhmmss(ms) {
   if (!ms) return '--:--:--';
   return new Date(ms).toLocaleTimeString('en-GB', { hour12: false });
+}
+
+// How a media time reads here: how far in, for a recording; the time of day it
+// went out — the event's start plus that — while following a live event.
+function clockAt(s, ms) {
+  if (s.plays_as_recording || !(s.started_ms > 0)) return elapsed(ms);
+  return hhmmss(s.started_ms + ms);
 }
 
 function shortDateTime(ms) {
@@ -135,7 +147,7 @@ function drawStatus() {
 
   const shown = s.seek_target_ms || s.playhead_ms;
   const clock = $('#clock');
-  clock.textContent = hhmmss(shown);
+  clock.textContent = clockAt(s, shown);
   clock.className = 'clock' + (s.seek_target_ms ? ' provisional' : '');
 
   // Stopped first: a stopped source downloads nothing, so every line below it
@@ -146,8 +158,8 @@ function drawStatus() {
     : s.loading
     ? 'Loading…'
     : s.ended
-      ? 'A finished recording, ' + spoken((s.total_ms || (s.end_ms - s.started_ms)) / 1000) + ' long'
-      : s.seek_target_ms ? 'Going to ' + hhmmss(s.seek_target_ms)
+      ? 'A finished recording, ' + spoken((s.total_ms || s.end_ms) / 1000) + ' long'
+      : s.seek_target_ms ? 'Going to ' + clockAt(s, s.seek_target_ms)
       : s.buffering ? 'Waiting for the picture'
       : s.paused ? 'Held — ' + spoken(s.behind_live_s) + ' behind the main site'
       : spoken(s.behind_live_s) + ' behind the main site';
@@ -187,14 +199,13 @@ function drawTransport(s) {
   $$('.jog button').forEach((b) => { b.disabled = !s.configured; });
 }
 
-// The bar spans what storage still holds. For a finished recording that is the
-// whole event and it must not move; while live the right-hand edge is the live
-// edge and necessarily grows.
+// The bar spans what storage still holds, in media time. For a finished
+// recording that is the whole event and it must not move; while live the
+// right-hand edge is the live edge and necessarily grows.
 function drawTimeline(s) {
-  const from = s.earliest_ms || s.started_ms;
-  const to = s.ended ? (s.end_ms || s.live_ms) : s.live_ms;
+  const range = timelineRange(s);
   const el = $('#timeline');
-  if (!from || !to || to <= from) {
+  if (!range) {
     el.dataset.from = ''; el.dataset.to = '';
     $('#tl-stored').style.cssText = '';
     $('#tl-downloaded').innerHTML = '';
@@ -204,10 +215,10 @@ function drawTimeline(s) {
     $('#tl-right').textContent = '';
     return;
   }
+  const from = range.from, to = range.to;
   el.dataset.from = String(from);
   el.dataset.to = String(to);
-  const span = to - from;
-  const pct = (ms) => Math.max(0, Math.min(100, ((ms - from) / span) * 100));
+  const pct = (ms) => pctOf(ms, from, to);
 
   $('#tl-stored').style.left = '0';
   $('#tl-stored').style.right = '0';
@@ -219,44 +230,29 @@ function drawTimeline(s) {
     return `<i style="left:${a}%;width:${Math.max(0.4, b - a)}%"></i>`;
   }).join('');
 
-  // A cue's position comes from its media anchor — where in the programme it
-  // sits — placed on this timeline against the event start. Its own at_ms
-  // needed a wall->media mapping that drifted 1.11%, about forty seconds by the
-  // end of an hour. cueAt() falls back for cues older than the field.
+  // A cue's position is its media anchor — where in the programme it sits.
+  // Its own at_ms needed a wall->media mapping that drifted 1.11%, about forty
+  // seconds by the end of an hour; markerMediaMs() falls back to it only for
+  // cues older than the field.
   $('#tl-markers').innerHTML = (s.markers || [])
-    .map((m) => ({ at: cueAt(m, s), label: m.label }))
+    .map((m) => ({ at: markerMediaMs(m, s.started_ms), label: m.label }))
     .filter((m) => m.at !== null && m.at >= from && m.at <= to)
     .map((m) => `<i style="left:${pct(m.at)}%" title="${escapeHtml(m.label)}"></i>`)
     .join('');
 
   $('#tl-head').style.left = pct(s.seek_target_ms || s.playhead_ms) + '%';
-  $('#tl-left').textContent = hhmmss(from);
-  $('#tl-right').textContent = s.ended ? hhmmss(to) : hhmmss(to) + ' (now)';
-}
-
-// Where a cue sits on this page's timeline, in the same units the timeline uses.
-//
-// at_media_ms is the cue's own anchor: milliseconds into the programme, exact
-// and needing no conversion. Placing it here is event start plus that. A cue
-// written before the field falls back to its recorded time of day, which is all
-// there is for it.
-function cueAt(m, s) {
-  if (m.at_media_ms >= 0 && s.started_ms) return s.started_ms + m.at_media_ms;
-  return m.at_ms || null;
+  $('#tl-left').textContent = clockAt(s, from);
+  $('#tl-right').textContent = clockAt(s, to) + (s.plays_as_recording ? '' : ' (now)');
 }
 
 function drawCues(s) {
   const box = $('#cues');
   const markers = s.markers || [];
   if (!markers.length) { box.innerHTML = ''; return; }
-  const vod = !!s.plays_as_recording;
   box.innerHTML = markers.map((m) => {
-    const at = cueAt(m, s);
-    const passed = at && s.playhead_ms && at <= s.playhead_ms;
-    // Elapsed into the programme for a recording; time of day while live.
-    const when = (m.at_media_ms >= 0 && vod)
-      ? elapsed(m.at_media_ms)
-      : (at ? hhmmss(at) : '');
+    const at = markerMediaMs(m, s.started_ms);
+    const passed = at !== null && at <= s.playhead_ms;
+    const when = at === null ? '' : clockAt(s, at);
     return `<button class="${passed ? 'passed' : ''}" data-marker="${escapeHtml(m.id)}">
               ${escapeHtml(m.label)} <span class="muted">${when}</span>
             </button>`;
@@ -346,19 +342,21 @@ $('#lock').onclick = async () => {
 // cursor first, so a click is never a guess — the same behaviour the campus
 // player's own page has.
 const timeline = $('#timeline');
-timeline.addEventListener('click', (e) => {
-  const from = Number(timeline.dataset.from), to = Number(timeline.dataset.to);
-  if (!from || !to) return;
+// A media time, as the seek route takes. The range is empty-string when there
+// is none; a `from` of 0 is the start of the programme, not a missing value.
+function timelineAt(e) {
+  if (!timeline.dataset.to) return null;
   const r = timeline.getBoundingClientRect();
-  const at = from + ((e.clientX - r.left) / r.width) * (to - from);
-  control('/api/decoder/seek?ms=' + Math.round(at));
+  return seekTargetMs((e.clientX - r.left) / r.width,
+                      Number(timeline.dataset.from), Number(timeline.dataset.to));
+}
+timeline.addEventListener('click', (e) => {
+  const at = timelineAt(e);
+  if (at !== null) control('/api/decoder/seek?ms=' + at);
 });
 timeline.addEventListener('pointermove', (e) => {
-  const from = Number(timeline.dataset.from), to = Number(timeline.dataset.to);
-  if (!from || !to) { $('#tl-hover').textContent = ''; return; }
-  const r = timeline.getBoundingClientRect();
-  const at = from + ((e.clientX - r.left) / r.width) * (to - from);
-  $('#tl-hover').textContent = hhmmss(at);
+  const at = timelineAt(e);
+  $('#tl-hover').textContent = at === null || !status ? '' : clockAt(status, at);
 });
 timeline.addEventListener('pointerleave', () => { $('#tl-hover').textContent = ''; });
 

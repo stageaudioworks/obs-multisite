@@ -87,5 +87,25 @@ console.log('== placing things on the bar ==');
   eq(t.pctOf(0, 0, 0), 0, 'a zero span does not divide by zero');
 }
 
+console.log('== the OBS plugin\'s campus page runs this same arithmetic ==');
+{
+  // data/web/decoder/ drew its timeline in times of day after the API had moved
+  // to media time: its range started at the event's start (an epoch) and ended
+  // at the live edge (a media time), so it was always empty. It now loads its
+  // own copy of media.js — the plugin's data directory cannot reach src/ — and
+  // the copy is held to this file byte for byte, so what is tested above is
+  // what that page runs.
+  const fs = require('fs');
+  const path = require('path');
+  const read = (p) => {
+    try { return fs.readFileSync(path.join(__dirname, '..', p), 'utf8'); }
+    catch (e) { return null; }
+  };
+  const obs = read('data/web/shared/media.js');
+  check(obs !== null, 'data/web/shared/media.js exists');
+  check(obs === read('src/appliance/web/media.js'),
+        'data/web/shared/media.js is identical to src/appliance/web/media.js');
+}
+
 console.log(fail ? 'FAILED' : 'all passed');
 process.exit(fail ? 1 : 0);

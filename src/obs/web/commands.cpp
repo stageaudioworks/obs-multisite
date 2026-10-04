@@ -385,6 +385,10 @@ std::string decoder_status_json() {
     j["at_end"]     = s.at_end;
     j["was_live"]   = s.was_live;
     j["interrupted"] = s.interrupted;
+    // The session's answer to "recording or live", which decides whether a
+    // position reads as elapsed or as a time of day. The page read it and the
+    // document never carried it, so every recording read as live.
+    j["plays_as_recording"] = s.plays_as_recording;
 
     j["playhead_ms"]    = s.playhead_ms;
     j["live_ms"]        = s.live_ms;
