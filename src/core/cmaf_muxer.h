@@ -44,7 +44,8 @@ struct CmafPacket {
 };
 
 // Fires when a media fragment is complete: (seq-relative index, bytes,
-// duration_s, first_pts_s).
+// duration_s, first_pts_s). duration_s runs to the next fragment's first
+// picture, or for the last, to the end of its last frame.
 using CmafSegmentCallback =
     std::function<void(uint64_t, std::vector<uint8_t>, double, double)>;
 
@@ -73,7 +74,9 @@ public:
 
     void on_segment(CmafSegmentCallback cb);
     void push(const CmafPacket& pkt);   // feed encoded packets in DTS order
-    void flush();                        // emit the final partial fragment
+    // Emit the final partial fragment, unless it is under half a second and
+    // not the only one: then it is dropped (cmaf_muxer.cpp, finish()).
+    void flush();
 
     bool ok() const;
     const std::string& error() const;

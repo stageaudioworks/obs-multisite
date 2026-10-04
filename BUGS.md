@@ -261,6 +261,13 @@ each, so the history is findable without being 1,100 lines in the way.
   (it now ends the broadcast and says why). FIXED; the trap is that a
   self-stopped output's stop callback is never called. Plugin builds; not yet
   verified in OBS with HEVC.
+- **A stop just after a cut published one keyframe claiming 6 s** (2026-10-04,
+  relay plus made a gap of it). A segment's duration was its last frame's start
+  less its first's: 0 for one frame, which `dur <= 0 → target` made 6 s — the
+  zero trap again — and one frame short on every other segment (5.967 s). It now
+  runs to the next keyframe, or for the last to its last frame's end, and a last
+  segment under 0.5 s is dropped (`cmaf_muxer.cpp`, `test_cmaf_durations`).
+  FIXED. New events record 6.000 s, not 5.967.
 
 ---
 

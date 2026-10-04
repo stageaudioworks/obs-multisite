@@ -68,7 +68,8 @@ struct CmafMuxer::Impl {
     uint64_t seg_index = 0;
     bool     seg_open = false;
     double   seg_start_pts_s = 0.0;
-    double   last_video_pts_s = 0.0;
+    double   seg_end_video_pts_s = 0.0; // the latest video frame's end, this segment
+    bool     seg_has_video = false;
     int      video_track = -1;
     bool     keep_input_timestamps = false;
     // resume_from_s (see the header): first packet's time becomes rebase_to_ns.
@@ -156,12 +157,18 @@ struct CmafMuxer::Impl {
         return true;
     }
 
-    void flush_fragment() {
+    // A segment's duration is where it ends less where it starts. Cut at a
+    // keyframe, it ends where that keyframe begins; the last of the event ends
+    // when its last frame does. It was the last frame's START less the first's,
+    // one frame short on every segment (5.967 s for 6 s at 30 fps), and 0 for a
+    // segment of one frame, which a fallback then made the full target: a run
+    // stopped 33 ms after a cut published one frame claiming 6 s (2026-10-04).
+    void flush_fragment(double end_pts_s) {
         if (!seg_open) return;
         // av_write_frame(fmt, NULL) flushes the current fragment (moof+mdat).
         av_write_frame(fmt, nullptr);
-        double dur = std::max(0.0, last_video_pts_s - seg_start_pts_s);
-        if (dur <= 0) dur = target_s;
+        // No video (an audio-only muxer): no frame to measure, the target.
+        double dur = seg_has_video ? std::max(0.0, end_pts_s - seg_start_pts_s) : target_s;
         // styp first, then the moof+mdat FFmpeg produced.
         std::vector<uint8_t> seg;
         seg.reserve(buf.size() + 32);
@@ -200,11 +207,13 @@ struct CmafMuxer::Impl {
         if (is_video && in.keyframe && seg_open &&
             keyframe_starts_segment(pts_s - seg_start_pts_s, target_s,
                                     video_frame_s())) {
-            flush_fragment();
+            flush_fragment(pts_s);
         }
         if (!seg_open) {
             seg_open = true;
             seg_start_pts_s = pts_s;
+            seg_has_video = false;
+            seg_end_video_pts_s = pts_s;
         }
 
         AVStream* st = fmt->streams[stream_index[in.track]];
@@ -223,11 +232,31 @@ struct CmafMuxer::Impl {
         av_packet_free(&pkt);
         if (r < 0) { fail("write_frame"); return; }
 
-        if (is_video) last_video_pts_s = pts_s;
+        if (is_video) {
+            // The latest end, not the last packet's: with B-frames packets
+            // arrive in decode order, and the last is not the latest picture.
+            const double frame_s = in.duration_ns > 0 ? (double)in.duration_ns / 1e9
+                                                      : video_frame_s();
+            seg_end_video_pts_s = seg_has_video
+                ? std::max(seg_end_video_pts_s, pts_s + frame_s) : pts_s + frame_s;
+            seg_has_video = true;
+        }
     }
 
+    // A last segment shorter than this is dropped, not published: it is what
+    // a stop just after a cut leaves (one keyframe, no audio yet), nothing a
+    // viewer misses, and a transcoder may not make a fragment of it. Not when
+    // it would be the event's only segment.
+    static constexpr double kMinFinalSegmentS = 0.5;
+
     void finish() {
-        flush_fragment();
+        if (seg_open && seg_has_video && seg_index > 0 &&
+            seg_end_video_pts_s - seg_start_pts_s < kMinFinalSegmentS) {
+            av_write_frame(fmt, nullptr);   // flush movenc's fragment, then discard it
+            buf.clear();
+            seg_open = false;
+        }
+        flush_fragment(seg_end_video_pts_s);
         if (header_written && fmt) av_write_trailer(fmt); // ignore trailer bytes
     }
 

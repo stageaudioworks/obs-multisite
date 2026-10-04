@@ -686,6 +686,10 @@ if(FFMPEG_FOUND)
     target_link_libraries(test_cmaf_join PRIVATE multisite_cmaf)
     add_test(NAME cmaf_join COMMAND test_cmaf_join)
 
+    add_executable(test_cmaf_durations tests/test_cmaf_durations.cpp)
+    target_link_libraries(test_cmaf_durations PRIVATE multisite_cmaf)
+    add_test(NAME cmaf_durations COMMAND test_cmaf_durations)
+
     add_executable(test_cmaf_tracks tests/test_cmaf_tracks.cpp)
     target_link_libraries(test_cmaf_tracks PRIVATE multisite_cmaf)
     add_test(NAME cmaf_tracks COMMAND test_cmaf_tracks)
