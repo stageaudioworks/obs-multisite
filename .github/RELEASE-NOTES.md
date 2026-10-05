@@ -31,6 +31,30 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.31-alpha
+
+**The campus page in OBS works again.** The plugin's phone page for a campus
+read every position as a time of day when the plugin had long since sent media
+time, the time into the programme. Its clock showed the wrong time (03:34
+during a 10:19 service), its timeline was always empty, and tapping it did
+nothing. It now shows the time of day while a service is live and the time
+into it for a recording, the timeline and its cue marks draw, and tapping goes
+where you tapped (#38).
+
+**The end of an event is as long as it says.** When a broadcast stopped just
+after a new segment began, that last segment could be a single frame, no
+sound, yet claim to last the full six seconds; the relay could not encode it
+and left a gap. A tail that short is now dropped, unless it is the event's
+only segment. Every segment also records its true length, so a six-second
+segment says 6.000 s rather than one frame short. Where things play in the
+recording does not change. A test fails on the old behaviour.
+
+**Smaller things.** Starting a new event over an interrupted one no longer
+says the old one's backlog is abandoned: it carries on uploading, as it has
+since v0.1.30-alpha, and the log now says so.
+
+**Captions are still not in this release**, for the same reasons as before.
+
 ## What's new in v0.1.30-alpha
 
 This release is about one promise: **what the main site records reaches
