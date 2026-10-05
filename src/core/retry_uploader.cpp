@@ -56,6 +56,10 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
         if (r.success && m_cfg.verify_first_n > 0 &&
             (int)m_stats.confirmed.load() < m_cfg.verify_first_n) {
             // Trust nothing: confirm the bytes are actually in the store.
+            // Diagnostic only. A failure here must never trigger a re-upload:
+            // test-after-success-then-resend is the claimed element of Resi's
+            // upload patents. Integrity is the signed payload hash, checked by
+            // the store inside the request. See docs/adr/0003.
             int64_t stored = m_transport.object_size(seg.key);
             if (stored >= 0 && stored != (int64_t)seg.data.size()) {
                 m_stats.verify_failures++;
