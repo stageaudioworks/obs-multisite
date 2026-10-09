@@ -148,6 +148,7 @@ jobs:
           # modules on is no way out either — it needs obs-browser, a submodule
           # this tarball does not carry. Generate the (empty) list before the
           # return. A no-op on releases without the block, 32.2.2 among them.
+          # Reported upstream as obsproject/obs-studio#14013; drop this once fixed.
           $mods = Join-Path $obs "plugins/CMakeLists.txt"
           $text = Get-Content $mods -Raw
           $patched = $text -replace '(OBS_FEATURES_DISABLED "Core Modules"\)\r?\n)(\s*return\(\))', "`$1  set_obs_core_modules()`n`$2"
