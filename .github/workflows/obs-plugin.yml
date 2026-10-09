@@ -34,11 +34,11 @@ env:
   # Match the OBS version you actually run. The obs-deps version is read from
   # this release's own buildspec.json, so FFmpeg/curl DLL versions line up with
   # what your OBS ships — otherwise the plugin fails to load with error 126.
-  OBS_TAG: "32.2.2"
+  OBS_TAG: "33.0.0-rc1"
   # Used only if the pinned obs-deps version cannot be read from the OBS source
   # tree. OBS 32 keeps it in CMakePresets.json; older releases used
   # buildspec.json. Keep this matched to OBS_TAG.
-  OBS_DEPS_FALLBACK: "2026-07-15"
+  OBS_DEPS_FALLBACK: "2026-08-26"
 
 jobs:
   # Fast guard on our OBS API usage, against distro libobs headers.
