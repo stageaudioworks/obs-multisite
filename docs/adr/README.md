@@ -38,3 +38,13 @@ Keep them short. The reasoning belongs here; the specification belongs in
 An ADR is never edited to change its decision — it is superseded. Mark the old
 one `Superseded by ADR-NNNN` and leave the reasoning intact, because why a thing
 was once right is usually the most useful part.
+
+## Records
+
+| ADR | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-one-cloud-identity-per-role.md) | One cloud identity per role | Accepted (2026-09-22) |
+| [0002](0002-a-relay-refuses-write-credentials.md) | A relay refuses write credentials | Accepted |
+| [0003](0003-design-around-competitor-patents.md) | Design around competitors' patent claims | Accepted, pending a freedom-to-operate opinion from patent counsel (2026-10-05) |
+
+A change touching any of the seven areas in ADR-0003 cites it in its commit.

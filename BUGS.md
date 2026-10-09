@@ -11,18 +11,18 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-09-25.
+Last updated: 2026-10-09.
 
 ---
 
 ## Open
 
-> **Next up (2026-09-22):** **Phase 12** — the Multisite Cloud module, spec'd in
-> `docs/scope/phase12-capability-map.md` and
-> `docs/scope/spec-cloud-identity.md`, gated on the map's approval and on the
-> decoder-pairing question. Entry **2**'s stall is parked as ticket
-> [#10](https://github.com/stageaudioworks/obs-multisite/issues/10); pick it up
-> there, not here.
+> **Next up (2026-10-09):** Phase 12 is largely built (plugin, relay and Pi
+> pair; see `docs/scope/phase12-capability-map.md`). What is left is in tickets:
+> the heartbeat's host re-home ([#11](https://github.com/stageaudioworks/obs-multisite/issues/11)),
+> the Pi paired path proven on hardware ([#12](https://github.com/stageaudioworks/obs-multisite/issues/12)),
+> the docks' single Cloud concern ([#13](https://github.com/stageaudioworks/obs-multisite/issues/13)),
+> and the spool lock ([#36](https://github.com/stageaudioworks/obs-multisite/issues/36)).
 
 ### 0. Pi player: playback can stall indefinitely while downloads keep succeeding
 
@@ -92,94 +92,10 @@ number would be a nicety, not a gate.
 
 ---
 
-### 2. Hold/resume: the stall after a resume — FIXED and VERIFIED
-
-**Status: fixed in `2653b22`, pinned by `test_feed_wait`, verified on a real
-~10 s hold on 2026-09-23** — no far-future stamp, no pts jump, no stall after
-the resume, and `frames_out` advancing straight through. Delete this entry once
-it ships in a release. Tracked as [#10](https://github.com/stageaudioworks/obs-multisite/issues/10).
-The resume fix before it (position loss constant at ~33 ms) was verified on a
-real hold on 2026-09-21 and still stands.
-
-**Symptom.** Seconds after a clean resume, delivery stops handing anything to
-OBS for ~6 s, every audio frame is dropped at the cap, and `frames_out` freezes.
-
-**Root cause (measured 2026-09-23).** A hold dropped a whole segment. The feed
-loop takes a fragment with `next_segment()` — which advances the session's head
-as it hands it over — then parks at the feed-lead gate until playout catches
-up. `paused` sat in that gate's jump test beside the discontinuity and the
-decoder teardown, so a hold landing while the loop was parked (most of the
-time) was treated as a jump and the fragment in hand was thrown away. The head
-was already past it, so it was lost for good. The reading that proved it:
-
-```
-FAR-FUTURE stamp — audio track 0 … pts 18.008s, previous on this stream 11.992s (jump +6016 ms),
-                   anchor 7.704s …, 3479 ms after resume, 31305 ms after decoder start
-```
-
-Audio went from the end of segment [6,12) straight to the start of [18,24): one
-segment plus one AAC frame. No decoder restart (it had started 31 s earlier), so
-the push_fragment wedge watchdog — the leading suspect — was ruled out, and so
-was the anchor. Those frames were stamped ~6.3 s ahead; the deliver loop, which
-releases the earliest timestamp, waited for the first of them.
-
-**Fix.** `feed_wait_step()` (`src/core/feed_wait.h`): a hold KEEPS the fragment
-in hand and waits; only a real jump drops it. `test_feed_wait` fails three ways
-against the old rule.
-
-**Don't:** re-derive the anchor, re-argue the queue bound, or read "deliver loop
-waited N ms … +395 ms from now" as the distance at the start of the wait. That
-line was printed *after* the wait returned, when the frame is always ~400 ms
-away by construction — and reading it the other way is what produced both
-"the thread stops running" and its withdrawal. It now prints both ends.
-
-**Still open, separately:** the feed-lead gate measures `pushed_media_ns`
-against wall time since the decoder started, so a hold inflates it and the loop
-over-feeds for a while after every resume. Not a stall — push_fragment bounds
-it — but it is the same wall-clock thinking the rest of the project removed.
-The Pi's feed loop does not drop on a hold; it pushes the fragment in hand
-immediately instead, which its own comment says not to do while held.
-
-**Files:** `src/obs/multisite_source.cpp` (`feed_loop`), `src/core/feed_wait.h`,
-`tests/test_feed_wait.cpp`.
-
-**Archive:** `docs/bugs/02-hold-resume-skips.md` — the 2026-09-23 section is
-the one to read.
-
-### 3. Packed audio from OBS: channel 4 is the LFE, and comes out low-passed
-
-**Status: open, not started.** Measured 2026-09-25, not yet heard in a room.
-
-**Symptom (expected, from the measurement).** In packed multi-channel mode
-(§4.3.1) the fourth channel — "Click" in the default `channel_labels` — reaches
-a satellite as low frequencies only. A click becomes a thud or nothing; a voice
-there, a mumble.
-
-**Root cause.** The OBS encoder sends eight channels as 7.1, because that is
-OBS's speaker setting and the AAC encoder takes OBS's layout. In 7.1 the fourth
-channel is the LFE, and AAC codes an LFE element as the lowest bands only.
-`tests/test_cmaf_tracks.cpp` shows it: a 3150 Hz tone on channel 4 of a 7.1
-track does not come back. The 2026-09-07 check proved channel *order*, which is
-intact; it did not play full-range sound on channel 4.
-
-**Next step.** Encode the packed track as octagonal (eight full-range channels,
-no LFE; FFmpeg writes a PCE for it) whatever OBS's speaker layout, as the
-MultisiteOS encoder does (multisite-outpost, `audio_feed.cpp`). The satellite
-already ignores positions. Check the OBS satellite still presents eight
-channels to OBS's 7.1 mixer from an octagonal stream.
-
-**The trap.** Do not move "Click" to another channel as the fix: every channel
-of a packed track must be full range, and the next user's click is on 4.
-
-**Files:** `src/obs/multisite_output.cpp` (the packed path),
-`tests/test_cmaf_tracks.cpp`.
-
----
-
 ## Recently landed (context, not action items)
 
 Resolved and released, or closed and waiting to be released. Full detail for
-every item in this list is in `docs/bugs/2b-7-resolved.md` (the bugs that were
+every item landed up to 2026-09-21 is in `docs/bugs/2b-7-resolved.md` (the bugs that were
 fixed) and `docs/bugs/landed-record.md` (the released-work prose). One line
 each, so the history is findable without being 1,100 lines in the way.
 
@@ -247,10 +163,13 @@ each, so the history is findable without being 1,100 lines in the way.
 
   The OBS decoder fixes were verified live on 2026-09-23; the End Broadcast
   line, the Pi changes and captions were not.
+- **#2 — a hold dropped the fragment in hand** (2026-09-23, v0.1.24-alpha).
+  `feed_wait_step()` keeps it; `test_feed_wait`; verified on a real ~10 s hold.
+  Archive: `docs/bugs/02-hold-resume-skips.md` (2026-09-23 section).
 - **29.97 fps segments ran to ~12 s instead of 6** (2026-10-02). OBS truncates
   the keyframe interval to whole frames, so the 6 s keyframe falls 27 ms short
   of the target and was skipped. A keyframe within a frame of the target now
-  cuts (`segment_cut.h`, `test_segment_cut`). FIXED.
+  cuts (`segment_cut.h`, `test_segment_cut`). FIXED, released in v0.1.29-alpha.
 - **A delayed-config encoder stopped the output, left the event live, and End
   crashed OBS** (2026-10-02 and -03, VideoToolbox HEVC, three audio tracks).
   Three faults in a row: the hold limit counted audio packets, so 900 went in
@@ -260,14 +179,14 @@ each, so the history is findable without being 1,100 lines in the way.
   `std::terminate` (destroy now stops first); the dock showed live throughout
   (it now ends the broadcast and says why). FIXED; the trap is that a
   self-stopped output's stop callback is never called. Plugin builds; not yet
-  verified in OBS with HEVC.
+  verified in OBS with HEVC. Released in v0.1.29-alpha.
 - **A stop just after a cut published one keyframe claiming 6 s** (2026-10-04,
   relay plus made a gap of it). A segment's duration was its last frame's start
   less its first's: 0 for one frame, which `dur <= 0 → target` made 6 s — the
   zero trap again — and one frame short on every other segment (5.967 s). It now
   runs to the next keyframe, or for the last to its last frame's end, and a last
   segment under 0.5 s is dropped (`cmaf_muxer.cpp`, `test_cmaf_durations`).
-  FIXED. New events record 6.000 s, not 5.967.
+  FIXED, released in v0.1.31-alpha. New events record 6.000 s, not 5.967.
 
 ---
 

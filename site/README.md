@@ -2,8 +2,8 @@
 
 <https://stageaudioworks.github.io/obs-multisite/>
 
-Two hand-written pages — an overview and an install guide — plus one
-stylesheet. No framework, no CDN, no Node toolchain. `build.py` copies them
+Three hand-written pages — `index.html`, `install.html` and `docs.html` — plus
+one stylesheet. No framework, no CDN, no Node toolchain. `build.py` copies them
 into `_site/`, substituting a handful of placeholders, and
 [`.github/workflows/site.yml`](../.github/workflows/site.yml) publishes that to
 GitHub Pages.
@@ -41,9 +41,11 @@ A placeholder with no value fails the build rather than shipping `{{TAG}}` to a
 reader. A platform missing from a release degrades to the releases page rather
 than to a link that 404s.
 
-The workflow runs on a push that touches `site/` or `CMakeLists.txt`, and on
-any release being published or edited — so cutting a release is all it takes to
-refresh the version and the download buttons.
+The workflow runs on a push that touches `site/**`, `CMakeLists.txt` or
+`site.yml`, when the "obs plugin build" workflow completes on main, and on
+manual dispatch — so cutting a release refreshes the version and the download
+buttons once its build finishes. (The `release` trigger is deliberately unused;
+the workflow comment says why.)
 
 ## Editing it
 

@@ -158,8 +158,13 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
   re-packaging.
 - **Muxing uses FFmpeg's fMP4 muxer** for correctness; the decode path uses
   FFmpeg as well.
-- **Duration: 6 s default (configurable 2–15 s).** The keyframe interval strictly
-  equals the segment duration. Longer segments mean fewer requests, better
+- **Duration: 6 s default (configurable 2–15 s).** The keyframe interval is the
+  segment duration, but OBS truncates it to whole frames (29.97 fps: 179 frames,
+  5.973 s), so a keyframe within one frame of the target starts a new segment
+  (`src/core/segment_cut.h`, `test_segment_cut`). A segment's recorded duration
+  runs to the next segment's first frame, so it is the true length; a last
+  segment under 0.5 s is dropped unless it is the event's only one
+  (`cmaf_muxer.cpp`, `test_cmaf_durations`). Longer segments mean fewer requests, better
   compression, and fewer opportunities to drop a request — all reliability wins.
 - **Video codec roadmap:** **H.264** first (universal decode), then **HEVC** for
   bandwidth, then **AV1**. Codec identity lives in `event.json`/`manifest.json`,
@@ -1098,9 +1103,11 @@ and the tablet that set it is long since charged and put away.
 
 ---
 
-## 8.5 Storage credentials: direct or brokered (planned)
+## 8.5 Storage credentials: direct or brokered
 
-**Status: not built** — designed here; Phase 12 in §10 delivers it.
+**Status: built** in the OBS plugin (both roles), the Pi player and the relay
+(read-only); the Pi's paired path is not yet proven on hardware. See
+`docs/scope/phase12-capability-map.md`, ADR-0001 and ADR-0002.
 
 **Brokered** credentials are added beside the typed keys, never instead of
 them: the plugin holds a device identity and a service URL and fetches
@@ -1112,7 +1119,7 @@ page from any device, never a password typed into OBS or a key pasted from an
 email. It is **inert until asked** — nothing contacts anything but the configured
 bucket until an operator presses Connect — and the **broker URL is a field, not
 a constant**: it may ship with a default and must be editable. It lands in the
-greyed-out **"Multisite Cloud"** entry already sitting in §8.6's dropdown; the
+**"Multisite Cloud"** entry, the first and selectable one in §8.6's dropdown; the
 sequence, constraints and unsettled questions are archived in
 `docs/scope/project-scope-phases.md`.
 
@@ -1189,7 +1196,7 @@ dependency where none was truly needed. Phase 11's update-check manifest
 option as a second producer of the same `S3Config` — "two providers, one
 `S3Config`." This dropdown is the literal UI expression of that sentence,
 generalized to N providers instead of two: *Multisite Cloud* becomes one
-more entry, greyed out until built, and when selected shows §8.5's
+more entry, and when selected shows §8.5's
 device-code pairing flow (a *"Connect to a storage service"* button, a
 status line, a Disconnect button) instead of key/secret fields. No new
 settings surface is built for it later — it slots into the one that
@@ -1367,12 +1374,12 @@ is the better answer for a given church, section 12 says so plainly.
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
 | Redundant storage: two independent S3 targets | built — both receive everything, reads fall back per request and switch ends when the one being read stops advancing, and completeness is checkable on demand; seamless live cutover is deliberately NOT claimed (§10 Phase 9) |
-| Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile on its single screen (§10 Phase 10) |
+| Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile per screen, and several screens from one box (§10 Phase 10; two-screen path unproven) |
 | Fullscreen output assignment driven by the decoder plugin | built — each tile is a source with its own **Send to screen**, opening one of OBS's own fullscreen projectors; SDI is whatever OBS's DeckLink or AJA output already does, and several outputs from one appliance box is out of scope (§10 Phase 10) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
 | Knowing a newer build exists, and applying it without a manual reinstall | notification built — the plugin and the player each ask once per run and say so; whether an update applies itself is still undecided (§10 Phase 11) |
-| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
+| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | built in the plugin, relay and Pi; Pi unproven on hardware (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
 | Monitoring heartbeat to a collector (off by default; OBS + Pi, manual or paired) | built — each role's filtered status plus the appliance host block, every 30 s active / 5 min idle, fire-and-forget; device-code pairing preferred, typed URL/id/token as fallback |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
@@ -1436,8 +1443,7 @@ the distance between a project a technician can deploy and one an ordinary churc
 can: knowing a new build exists and installing it without a manual reinstall,
 connecting a bucket without minting a token by hand, and choosing a provider from
 a list. Phase 13 was deliberately the smaller half of what 12 needs and is done
-first; "Multisite Cloud" already sits in its dropdown, greyed out, waiting for
-12. Phase 14 answers a different question — cost and reliability for a campus on
+first; "Multisite Cloud" is the first, enabled entry in its dropdown. Phase 14 answers a different question — cost and reliability for a campus on
 the main site's own network — and depends on none of the others. None of the four
 depends on 9 or 10.
 
@@ -1465,15 +1471,19 @@ depends on 9 or 10.
 - **Phase 10 — Tile layout and assigned outputs. Status: built.** A layout
   (`1x1`, `2x1`, `2x2`) declared in `event.json`; each region becomes its own
   pre-cropped source, assignable through OBS's own fullscreen projector to a
-  screen, a DeckLink or a video wall. Assigning tiles to several outputs from one
-  box needs hardware beyond the Pi and is out of scope.
-- **Phase 11 — Keeping installations current. Status: not built.** Tell the
+  screen, a DeckLink or a video wall. One Pi can drive several screens, each showing its own tile
+  (`outputs: [{connector, tile}]`, #29; built, two-screen path not yet proven on
+  the board). Hardware beyond a single Pi's connectors is out of scope.
+- **Phase 11 — Keeping installations current. Status: partly built** (the
+  notification is; applying an update is undecided). Tell the
   operator a newer build exists (one HTTPS request, stated in the dock), and
   decide how an update is applied; OBS offers no update entry point. The
   packaging prerequisite — the recommended Windows layout — is done.
-- **Phase 12 — Storage credentials and pairing. Status: not built.** A
+- **Phase 12 — Storage credentials and pairing. Status: largely built.** A
   device-code pairing flow against a credential broker, beside the typed keys and
-  never instead of them. Designed in §8.5; depends on nothing else here.
+  never instead of them (§8.5; ADR-0001). Built: the collector client,
+  `CloudIdentity`, the cloud-storage transport, the heartbeat and cue
+  credentials, in the plugin, the Pi player and the relay. Left: #11, #12, #13.
 - **Phase 13 — Storage provider selection. Status: built.** A provider dropdown
   (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom) that shows only the
   fields each needs and derives the rest, read by all five settings surfaces; a
@@ -1482,7 +1492,7 @@ depends on 9 or 10.
   site's network or an existing VPN downloads directly from the encoder,
   LAN-preferred with per-request cloud fallback; cloud upload stays on by default
   but can be switched off entirely. Still not built: anything beyond manual
-  host:port discovery (no mDNS — §8.7) and the §8.5 device-code pairing flow.
+  host:port discovery (no mDNS — §8.7).
 - **Phase 15 — Lossless high-quality mode. Status: not built.** Opt-in FLAC in
   place of AAC on every track plus ~10 Mbps HEVC, per event not per track, for
   archival rather than broadcast; researched (2026-09-14). No web ingest takes

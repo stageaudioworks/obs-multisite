@@ -153,7 +153,7 @@ that away.
 Output → Recording, enable the audio tracks you intend to send; in Advanced
 Audio Properties (right-click the mixer), assign each source to its tracks — for
 example your mix on track 1, mics on their own tracks, a click on another. Name
-them under **Settings… → Track labels** so satellites see "Click" rather than
+them under **Settings… → Names for each audio feed** so satellites see "Click" rather than
 "Track 3".
 Every enabled track travels in the same segment, locked to the picture.
 
@@ -329,7 +329,7 @@ Both halves of the plugin can report their state to a monitoring collector —
 a small status document every 30 seconds while the role is active, every 5
 minutes while idle. It is **off by default**: switched off, nothing leaves the
 machine — no sockets, no bytes. Switch it on per role, in each dock's Storage
-settings under **Monitoring heartbeat**.
+settings, in the **Cloud** group (**Send a status heartbeat to Cloud**).
 
 **What it sends** is the same status the dock already shows — link health,
 how far behind live the campus is, queue and buffer figures, the software

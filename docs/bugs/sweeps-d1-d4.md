@@ -1,6 +1,6 @@
 # Duplicated derivations sweep (2026-09-18) — full record
 
-Archive of the D1–D4 sweep. D1 and D4 are **DONE**; D2 and D3 remain open and
+Archive of the D1–D4 sweep. D1–D4 are all **DONE** (D2 and D3 on 2026-09-21; this snapshot predates that). They were
 are carried as short entries in `BUGS.md`.
 
 > As it stood on 2026-09-21, verbatim.
