@@ -115,8 +115,8 @@ curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multi
 2. **Main site.** Open the **Multisite Encoder** dock, enter the bucket details,
    pick a feed name, press **Go live**.
 3. **Each campus.** Open the **Multisite Decoder** dock, enter the same bucket,
-   add a **Multisite Source (Decoder)** for the same feed name, then **Load
-   event** and **Play**.
+   add a **Multisite Source (Decoder)** for the same feed name, then **Follow
+   live** and **Play**.
 4. **Lock the event** so nothing gets clicked by accident mid-service.
 
 About twenty minutes, bucket included. The full walkthrough is
@@ -359,7 +359,10 @@ cmake/          the driver scripts the muxer round-trip tests run through.
 test-data/      fixtures, and a note on how the CMAF ones are produced.
 scripts/player/ the install scripts and systemd units for the appliance,
                 including AES67 audio onto the network.
-scripts/        optional Lua control script, superseded by the encoder dock.
+scripts/        optional Lua control script, superseded by the encoder dock;
+                setup-mac-build.sh; probe_credentials.cpp.
+docs/           operator, developer and satellite guides, ADRs, bug archive.
+site/           the hand-written project web pages.
 ```
 
 **`src/core/` must stay free of OBS and Qt.** It is the shared engine behind
@@ -427,7 +430,8 @@ gap, not the story behind it — that is in
 history of each is in <a href="docs/scope/readme-current-state.md">the archive</a>.</summary>
 
 - **Phase 6 — Satellite appliance.** ✅ ARM64/Raspberry Pi HDMI tier, proven on
-  a Pi 5 (not yet through an event). Pi 4 hardware-decoder selection remains.
+  a Pi 5 (not yet through an event). Pi 4 hardware-decoder selection remains; Rockchip (MPP)
+  hardware decode is in the core and the player.
   AES67 installed, eight channels on a bench Pi.
 - **Phase 7 — Extensions.** Relay built, pushed to YouTube; SRT in and out. Left:
   re-encoding, signing in to YouTube instead of pasting a key, and starting
@@ -438,11 +442,13 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   (buttons with feedback, and it drives an appliance directly too). Driven
   against real OBS and a real campus player; no full event yet.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
-  throughout, or holding manifests only until a failover. **Not built.**
+  throughout, or holding manifests only until a failover. ✅ Built: **Settings…
+  → Second bucket**; both buckets receive everything and reads fall back per
+  request. Live cutover is not claimed.
 - **Phase 10 — Tile layout.** ✅ A 2×1/2×2 feed arrives as discrete, cropped
   sources; each region has its own **Send to screen** (OBS's own projector), and
-  the campus player can show one region full-screen. Assigning tiles to several
-  outputs needs hardware beyond the Pi — out of scope.
+  the campus player can show one region full-screen, or several screens from one
+  box (built; the two-screen path is not yet proven on the board).
 - **Phase 11 — Keeping installations current.** Plugin tells an operator a newer
   build exists (built); applying it is not, and is not one job — Windows cannot
   overwrite a loaded DLL and needs elevation, macOS quarantines an unsigned
@@ -453,11 +459,12 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   them. Removes the three steps that decide whether a church can deploy unaided:
   create a cloud account, scope a token, write a lifecycle rule. Designed in
   [PROJECT-SCOPE §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
-  **Not built** — the biggest user-facing lever left.
+  ✅ Device-code pairing is built in the plugin, the Pi player and the relay;
+  the Pi's real-hardware run and the docks' single "Cloud" concern are still
+  open.
 - **Phase 13 — Storage provider selection.** ✅ One dropdown (R2, AWS, B2,
   Wasabi, Custom) showing only the fields each needs; reaches both docks, the
-  appliance and the relay. "Multisite Cloud" already sits in it greyed out,
-  waiting for Phase 12.
+  appliance and the relay. "Multisite Cloud" is its first, enabled entry.
 - **Phase 14 — LAN / direct delivery.** ✅ A satellite on the same network or VPN
   downloads straight from the encoder, falling back to cloud per request; cloud
   can be turned off entirely. Proven over loopback sockets across all three

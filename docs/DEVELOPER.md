@@ -167,10 +167,8 @@ broken build cannot become something somebody deploys:
 docker build -f relay/Dockerfile -t multisite-relay .
 ```
 
-CI builds and tests the core on Linux x86, **Linux ARM64**, Windows and macOS,
-and produces the installable Windows and macOS plugins. The ARM64 job exists
-because the planned appliance runs there, so a regression is caught in CI
-rather than on hardware. The macOS job asserts what makes a bundle loadable on
+CI builds and tests the core on Linux x86, Windows and macOS,
+and produces the installable Windows and macOS plugins. The macOS job asserts what makes a bundle loadable on
 a machine other than the one that built it: package type `BNDL`, arm64, the
 module entry points exported, exactly one rpath, no OpenSSL, and no absolute
 path outside `/System` and `/usr/lib`.

@@ -70,7 +70,7 @@ backlog when it returns. Nothing is lost and nothing is skipped.
 tracks, a click for the band — enable the tracks in OBS's own
 Settings → Output → Recording, assign
 sources to tracks in Advanced Audio Properties, then name them under
-**Settings… → Track labels** so the campus sees "Click" and not "Track 3".
+**Settings… → Names for each audio feed** so the campus sees "Click" and not "Track 3".
 
 ## 4. Each campus
 

@@ -60,10 +60,12 @@ crop and transform are built into OBS.
 > **Partly built.** A tile layout declared at the main site (`1x1`, `2x1`,
 > `2x2`) now exposes each region as its own source, already cropped, so a 2×1 or
 > 2×2 feed can be routed to its own output instead of being cut up with filters.
-> The headless campus player does the single-screen half of it: a **Composited
-> feed** setting picks which region a box shows, in reading order, with the whole
-> picture as the default. Assigning tiles to *several* outputs from one box needs
-> hardware beyond the Pi appliance, which is outside this project's scope — see
+> The headless campus player picks a region with the **Composited feed**
+> setting (reading order, whole picture by default), and can also drive several
+> screens from one download, each showing its own tile (`outputs:
+> [{connector, tile}]`; the two-screen path is built but not yet proven on the
+> board). Hardware beyond a single Pi's connectors is outside this project's
+> scope — see
 > ["Appliance hardware beyond the Pi"](../PROJECT-SCOPE.md#10-delivery-phases).
 > The filters below are how to do it in OBS.
 
@@ -307,7 +309,9 @@ It builds from source, so give it a few minutes and let it finish.
 ### Controlling it from the player's own page
 
 The installer sets up one stream as part of the install — eight channels, L24, at
-the multicast address named in `/etc/daemon.conf` — so a box that has just been
+a multicast group of its own, `239.1.x.y`, derived from the NIC's MAC
+(`scripts/player/aes67-address.sh`; an address set in the player's settings
+wins, and the shared 239.1.0.1 is used only when there is no MAC) — so a box that has just been
 set up is already sending, without anybody opening an interface. The player then
 keeps that stream in shape and gives it a switch, which leaves the daemon's own
 WebUI for the rest of the daemon's settings rather than for the everyday one.

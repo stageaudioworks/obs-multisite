@@ -22,7 +22,7 @@ optional for anything touching playout, seeking, timing or storage.
 
 **`BUGS.md` before timing code, and its archive when the short entry points
 there.** Seeking has been broken five times in one afternoon, the hold/resume
-path three times, and the same zero-sentinel trap six times. The entry names the
+path three times, and the same zero-sentinel trap seven times. The entry names the
 thing you are about to try; `docs/bugs/` shows why the last four attempts at it
 were reverted.
 
@@ -43,6 +43,9 @@ were reverted.
   push, every time.
 - **Tests are the deliverable, not the evidence.** A fix lands with a test
   verified to fail against the old behaviour. See standards §5.
+- **Patents.** ADR-0003 names seven areas built around competitors' patent claims
+  (`docs/adr/0003-design-around-competitor-patents.md`). A change touching one
+  cites it in its commit.
 - **Measure before claiming.** "Faster" is a claim about a number; report the
   number. Where a fix is defensive rather than diagnosed, say so.
 - Build and test instructions are in `docs/DEVELOPER.md`. macOS plugin builds
