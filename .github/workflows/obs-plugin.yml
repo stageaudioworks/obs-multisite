@@ -264,11 +264,14 @@ jobs:
           # obs-frontend-api targets are BUILT, not the whole OBS app.
           # GITHUB_ENV only affects LATER steps, so track the decision locally
           # within this step and publish it once at the end.
+          # OBS 33 renamed ENABLE_PLUGINS to ENABLE_CORE_MODULES and ignores the old
+          # name, so it tried to build obs-browser, a submodule the source
+          # tarball does not carry. Both are passed so either release configures.
           $haveQt = ($env:HAVE_QT -eq "1")
           $uiFlag = if ($haveQt) { "-DENABLE_UI=ON" } else { "-DENABLE_UI=OFF" }
           cmake -S $env:OBS_SRC -B obs-build @genArgs `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
-            -DENABLE_PLUGINS=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
+            -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
             -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
             -DCMAKE_BUILD_TYPE=Release
@@ -279,7 +282,7 @@ jobs:
               $haveQt = $false
               cmake -S $env:OBS_SRC -B obs-build @genArgs `
                 -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
-                -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
+                -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
                 -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
                 -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
                 -DCMAKE_BUILD_TYPE=Release
