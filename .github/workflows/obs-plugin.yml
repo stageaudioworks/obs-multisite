@@ -142,6 +142,20 @@ jobs:
           $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
           Write-Host "obs source dir: $obs"
 
+          # OBS 33.0.0-rc1 cannot configure libobs with ENABLE_CORE_MODULES=OFF:
+          # that path returns before set_obs_core_modules(), which generates
+          # obs-core-modules.c, a source libobs always compiles. Leaving core
+          # modules on is no way out either — it needs obs-browser, a submodule
+          # this tarball does not carry. Generate the (empty) list before the
+          # return. A no-op on releases without the block, 32.2.2 among them.
+          $mods = Join-Path $obs "plugins/CMakeLists.txt"
+          $text = Get-Content $mods -Raw
+          $patched = $text -replace '(OBS_FEATURES_DISABLED "Core Modules"\)\r?\n)(\s*return\(\))', "`$1  set_obs_core_modules()`n`$2"
+          if ($patched -ne $text) {
+            Set-Content $mods $patched -NoNewline
+            Write-Host "patched plugins/CMakeLists.txt to generate an empty core-module list"
+          }
+
           # Where OBS keeps its dependency pins has moved: OBS 32 uses the
           # "dependencies" configure preset in CMakePresets.json, releases up
           # to 31 used a buildspec.json. Read the new location first, then the
