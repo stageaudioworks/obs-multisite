@@ -154,6 +154,24 @@
       Expect it to <strong>double storage and origin writes</strong>, and give
       the second bucket its own retention rule.</p>
 
+      <h3>Multisite Cloud: pairing instead of typing keys</h3>
+      <p>For a site with a Multisite Cloud account &mdash; Stage Audio Works'
+      hosted storage service, which is not part of this repository &mdash; pick
+      <strong>Multisite Cloud</strong> as the storage provider and pair the
+      machine from the dock's <strong>Cloud</strong> section with a short code,
+      the way a television signs in. It then records to, or plays from, the
+      account's bucket with no endpoint or keys typed; credentials are
+      short-lived and refreshed before they expire. The Pi player's page has the
+      same section, and so does the relay. Typed keys work exactly as before, and
+      a machine that has them is never moved onto paired storage behind your
+      back. A machine that is both encoder and decoder pairs once per role.</p>
+      <p style="color:var(--text-3)">Playing from a paired bucket is verified on
+      a Mac, with an encoder and a decoder; on a Pi it is <strong>not yet
+      proven</strong>. A health <strong>heartbeat</strong> to a monitoring
+      collector is optional and off by default; it sends the status the dock
+      already shows &mdash; no pictures, no sound, no credentials, no IP
+      addresses.</p>
+
       <h3>Deleting by hand, without waiting for the rule</h3>
       <p>The encoder's <strong>Manage storage…</strong> button lists the
       room's events and lets you delete one &mdash; or everything older than a
@@ -444,6 +462,9 @@
       <h2>Display, idle screen and hold</h2>
       <p><code>idle_mode</code> says what the box shows when there's nothing
       to play: the box's own details, black, or a holding slide.</p>
+      <p>A feed laid out as two pictures side by side can go out with the left
+      half on one screen and the right half on the other, from one download and
+      one decode.</p>
       <div class="callout">
         <p><strong>Hold beats the idle screen.</strong> Pressing
         <strong>Hold picture</strong> is an operator asking for the frame in
