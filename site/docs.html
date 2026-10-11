@@ -130,6 +130,30 @@
       Garage, Backblaze B2 or Wasabi</strong>: the equivalent lifecycle
       configuration, an Expiration rule per prefix.</p>
 
+      <h3>Testing before you rely on it</h3>
+      <p>In <strong>Settings → Storage</strong>, <strong>Test connection</strong>
+      checks the bucket exactly as typed, before you press Apply &mdash; at the
+      main site it writes a tiny file and removes it again, which is what
+      proves the key can really send an event. <strong>Test upload
+      speed</strong> sends a measured burst so you know what the venue's uplink
+      has spare before a service rather than during one.</p>
+
+      <h3>A second bucket</h3>
+      <p>One bucket is one place for an event to go missing &mdash; a provider
+      outage, a locked account. Under <strong>Settings → Storage → Second
+      bucket</strong>, <strong>Also write every event to a second
+      bucket</strong> adds an independent copy: two uploads from the same
+      queue, each with its own confirmed position, so a stall at one can't hold
+      the other up or leave it a step behind. The encoder dock says whether the
+      copy is keeping up and, when it isn't, why.</p>
+      <p>At a campus, <strong>Also read from a second bucket when the first
+      cannot be reached</strong> makes it read LAN first, then the primary,
+      then the second &mdash; staying on the primary until it genuinely can't
+      serve an object, because the second provider's egress is a cost. The
+      failover ends when the copy being read stops advancing, not on a timer.
+      Expect it to <strong>double storage and origin writes</strong>, and give
+      the second bucket its own retention rule.</p>
+
       <h3>Deleting by hand, without waiting for the rule</h3>
       <p>The encoder's <strong>Manage storage…</strong> button lists the
       room's events and lets you delete one &mdash; or everything older than a
@@ -197,7 +221,24 @@
         </li>
       </ol>
 
-      <h3 style="margin-top:8px">Production audio</h3>
+      <h3 style="margin-top:8px">Ending the broadcast</h3>
+      <p>End waits only a few seconds for the upload queue, so the event
+      finishes on air promptly. Whatever is still waiting uploads in the
+      background afterwards &mdash; the recording simply gets longer. The dock
+      shows <strong>Last event still uploading</strong> while it runs; it is
+      safe to quit OBS, since it carries on next time, and your next broadcast
+      always goes first. Nothing is deleted unless you press <strong>Stop
+      uploading it</strong>. If the connection is down when you press End,
+      campuses are told the event is over as soon as it returns, rather than
+      calling it <em>interrupted</em> after ten minutes.</p>
+      <p>The queue is flushed to disk as it is written, so a power cut costs
+      nothing, and a segment damaged on disk is skipped and logged rather than
+      sent to every campus broken. After a crash, a resume carries on as one
+      recording with one timeline &mdash; unless the encoder's settings changed
+      in between (resolution, codec, audio tracks), in which case a new event
+      starts and the log says why.</p>
+
+      <h3>Production audio</h3>
       <p>Set up in OBS itself, not in the dock. In <strong>Settings → Output →
       Recording</strong>, enable the audio tracks you intend to send. In
       <strong>Advanced Audio Properties</strong> (right-click the mixer),
@@ -264,6 +305,17 @@
       <strong>Could broadcast for</strong> figure is how long the picture will
       keep going from what's already downloaded &mdash; enough notice to act,
       rather than a surprise when the picture freezes.</p>
+
+      <h3>Cues</h3>
+      <p>A cue &mdash; &ldquo;Sermon start&rdquo;, &ldquo;Go to local&rdquo;
+      &mdash; belongs to the event, not to the main site. The <strong>Multisite
+      Cues</strong> dock is on every machine whatever its role, shows one
+      merged list, and lets any site add to it with any name; each cue carries
+      the name of the site that set it, so one dropped at another campus is
+      never mistaken for the main site's. A satellite can drop a cue with a key
+      scoped to its own file, and nothing else. Cues are ordered by where they
+      fall in the event, not by anybody's clock &mdash; and a machine whose
+      clock is plainly wrong is told so.</p>
 
       <h3>Recordings and timeslipping</h3>
       <p>To play something other than the live event, use the

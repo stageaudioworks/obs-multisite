@@ -205,8 +205,24 @@
         <p>Durable store-and-forward upload. Nothing is lost through a dropped
         link, a crash, or a mid-service restart &mdash; the encoder keeps
         recording to disk and sends the backlog when the connection returns.
-        A capped local queue and a plain healthy/low/almost-full readout mean
-        a filling disk is noticed before it costs a segment.</p>
+        The queue is flushed to disk as it is written, so a power cut costs
+        nothing, and pressing End never throws away what is still waiting
+        &mdash; the rest uploads in the background and the recording simply
+        gets longer. A resume after a crash carries on as one recording, and a
+        campus skips a segment that will never arrive instead of freezing on
+        it. A plain healthy/low/almost-full readout means a filling disk is
+        noticed before it costs a segment.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/><path d="M5 13v5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-5"/></svg></div>
+        <h3>A second bucket</h3>
+        <p>Write every event to a second storage provider as well. The two are
+        uploaded <em>independently</em> from the same queue, so a stall or
+        outage at one can't hold the other up. A campus reads LAN first, then
+        the primary, then the second &mdash; and keeps playing through the
+        loss of either bucket. The encoder dock says whether the copy is
+        keeping up and, if not, why.</p>
       </div>
 
       <div class="card">
@@ -224,8 +240,20 @@
         <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
         <h3>Every campus on its own clock</h3>
         <p>Hold the picture for a local welcome, resume, then catch up to live
-        &mdash; or sit a set number of minutes behind all service. Scrub back,
-        jump to a marker. What one campus does has no effect on any other.</p>
+        &mdash; or sit a set number of minutes behind all service. Scrub the
+        timeline and it lands where you clicked, measured to within about
+        60&nbsp;ms. What one campus does has no effect on any other.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3v18"/><path d="M6 4h11l-2.5 4 2.5 4H6"/></svg></div>
+        <h3>Cues from any campus</h3>
+        <p>A cue &mdash; &ldquo;Sermon start&rdquo;, &ldquo;Go to local&rdquo;
+        &mdash; no longer belongs to the main site alone. A Cues dock on every
+        machine shows one merged list, any site can add to it with any name,
+        and each cue carries the name of the site that set it. A campus can
+        drop one without being able to write your bucket, and the Pi player
+        can too, from its own page.</p>
       </div>
 
       <div class="card">
@@ -537,8 +565,6 @@
       delay is tens of seconds, by design &mdash; that is the trade that buys
       the reliability. It cannot carry a live conversation between campuses or a
       two-way interview; for that, use SRT or WebRTC, both already in OBS.</li>
-      <li><strong>Seeking is accurate to about a second</strong>, not to a
-      frame.</li>
       <li><strong>The relay does not re-encode.</strong> An HEVC feed reaches
       YouTube unchanged, as Enhanced RTMP — but a destination that has never
       implemented the extension drops it, and an SRT destination carries HEVC
@@ -550,8 +576,8 @@
     </ul>
     <p style="margin-top:22px">
       The full picture &mdash; everything not yet proven, and the roadmap
-      through storage redundancy, keeping installations current and paired
-      storage credentials &mdash; is kept in the repository under
+      through keeping installations current, paired storage credentials and a
+      lossless high-quality mode &mdash; is kept in the repository under
       <a href="https://github.com/stageaudioworks/obs-multisite#known-gaps">Known gaps</a>
       and <a href="https://github.com/stageaudioworks/obs-multisite#roadmap">Roadmap</a>.
     </p>
