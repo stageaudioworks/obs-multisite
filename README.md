@@ -85,8 +85,8 @@ far more than one that is two seconds behind and stutters.
 - **Audio — up to all 6 OBS tracks**: the programme mix, mics on their own
   tracks, a click for the band. They travel in the same fragment as the picture,
   so they cannot drift from it or from each other.
-- **Video — whatever OBS already encodes**, H.264 or HEVC, through x264, NVENC,
-  QuickSync or AMF.
+- **Video — whatever OBS already encodes**, H.264 or HEVC (AV1 is carried but
+  labelled experimental), through x264, NVENC, QuickSync or AMF.
 - **Network — outbound HTTPS only.** No inbound ports, no port forwarding, no
   static IP, no VPN, and no firewall rules to negotiate with a building's IT.
 - **Retention — yours to set**, in your provider's own console, and it doubles as
@@ -259,14 +259,31 @@ numbers.
 **What works**
 
 - Durable store-and-forward upload: nothing is lost through an outage, a crash,
-  or a mid-event restart. Six-hour soak: 3,661 segments, >15 GB, zero retries,
-  zero failures, 10 lagged frames of 658,837.
+  a power cut or a mid-event restart. The queue is flushed to disk as it is
+  written; **End** never discards an unsent backlog (it finishes uploading in the
+  background and the recording simply gets longer); a resume after a crash
+  continues the same event, one record and one timeline; and a campus skips a
+  segment that will never arrive instead of freezing on it. Six-hour soak: 3,661
+  segments, >15 GB, zero retries, zero failures, 10 lagged frames of 658,837.
+- **A second bucket, written independently.** A second S3 target is uploaded from
+  the same queue with its own confirmed position, so a stall at one cannot hold
+  the other up. A campus reads LAN, then the primary, then the second, and keeps
+  playing through the loss of either. It doubles storage and origin writes.
+- **LAN / direct delivery.** A satellite on the main site's network or an
+  existing VPN downloads straight from the encoder, falling back to cloud per
+  request; cloud upload can be switched off entirely. The decoder, the appliance
+  and the relay all do it. See [PROJECT-SCOPE §8.7](PROJECT-SCOPE.md#87-lan--direct-delivery).
 - CMAF segments from any OBS encoder — H.264 or HEVC via x264, NVENC, QuickSync
   or AMF.
 - Satellite receive with a deep local buffer, checksum verification, and
-  timeslipping — hold, resume, catch up, scrub, jump to a marker. Playback
-  waits until a minute is buffered before starting, so the picture never chases
-  the live edge.
+  timeslipping — hold, resume, catch up, scrub, jump to a cue. Hold behaves like
+  a recorder (the read head freezes, the write head runs on) and a scrub lands
+  where you clicked, measured at 21–58 ms. Playback waits until a minute is
+  buffered before starting, so the picture never chases the live edge.
+- **Cues from any site.** A **Cues dock** on every machine shows one merged list;
+  any site, including a campus and the Pi player, can add a cue with any name,
+  and each carries the name of the site that set it. A campus needs write access
+  only to its own cue file, not to the bucket.
 - **Multi-track audio, up to 6 tracks**, in the same fragment as the picture,
   exposed at the satellite as separate sources.
 - **AES67 audio on the appliance** — sound onto the network instead of HDMI,
@@ -274,7 +291,8 @@ numbers.
   into a receiving console over a 24-hour run. See
   [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
 - **One feed, several pictures** — a 2×1 or 2×2 composite arrives as discrete,
-  already-cropped sources, downloaded once and decoded once. See
+  already-cropped sources, downloaded once and decoded once; one Pi can drive two
+  screens from a 2×1 feed. See
   [Choosing a satellite](docs/SATELLITE.md#what-running-the-decoder-in-obs-makes-possible).
 - **Event browsing** — the decoder lists a room's events, marks which is on
   air, which finished and which was cut short, and plays any of them.
@@ -402,7 +420,6 @@ gap, not the story behind it — that is in
 - **HEVC's last mile is unrehearsed.** Its remux is verified at the byte level
   and now reaches anywhere speaking Enhanced RTMP, but only H.264 and AV1 have
   carried real encoder output to a real destination.
-- **Seeking is accurate to about a second**, not to a frame.
 - **Separate audio tracks are unverified against each other.** Audio stays locked
   to the picture; that a click on one track lands at the same instant as another
   has not been measured. Test: identical audio on two tracks, both into one mix,
@@ -437,12 +454,15 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   [Companion module](https://github.com/stageaudioworks/companion-module-obs-multisite)
   (buttons with feedback, and it drives an appliance directly too). Driven
   against real OBS and a real campus player; no full event yet.
-- **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
-  throughout, or holding manifests only until a failover. **Not built.**
+- **Phase 9 — Redundant storage.** ✅ A second S3 target, written independently
+  from the same queue rather than mirrored from the first, so one provider
+  failing cannot hold the other up. Campuses fail over LAN, then primary, then
+  second, ending when the copy being read stops advancing. The encoder dock says
+  whether the copy is keeping up.
 - **Phase 10 — Tile layout.** ✅ A 2×1/2×2 feed arrives as discrete, cropped
   sources; each region has its own **Send to screen** (OBS's own projector), and
-  the campus player can show one region full-screen. Assigning tiles to several
-  outputs needs hardware beyond the Pi — out of scope.
+  the campus player can show one region full-screen, or drive two screens from a
+  2×1 feed. More outputs than a Pi has need hardware beyond it — out of scope.
 - **Phase 11 — Keeping installations current.** Plugin tells an operator a newer
   build exists (built); applying it is not, and is not one job — Windows cannot
   overwrite a loaded DLL and needs elevation, macOS quarantines an unsigned
@@ -453,7 +473,12 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   them. Removes the three steps that decide whether a church can deploy unaided:
   create a cloud account, scope a token, write a lifecycle rule. Designed in
   [PROJECT-SCOPE §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
-  **Not built** — the biggest user-facing lever left.
+  **Client built.** The OBS docks pair from their **Cloud** section and record to
+  or play from the account's bucket with nothing typed in (verified on a Mac, both
+  halves); the Pi page and the relay have the same, and the Pi's playback path is
+  **not yet proven on a Pi**. The service it pairs with is Stage Audio Works'
+  hosted Multisite Cloud, outside this repository. A monitoring heartbeat is
+  optional and off by default.
 - **Phase 13 — Storage provider selection.** ✅ One dropdown (R2, AWS, B2,
   Wasabi, Custom) showing only the fields each needs; reaches both docks, the
   appliance and the relay. "Multisite Cloud" already sits in it greyed out,
@@ -470,7 +495,8 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   [PROJECT-SCOPE §10](PROJECT-SCOPE.md#10-delivery-phases).
 
 Phases 11, 12 and 13 are most of the distance between something a technician can
-deploy and something an ordinary church can. Phase 14 answers a different
+deploy and something an ordinary church can; 12 and 13 are now built on the
+client side. Phase 14 answers a different
 question — cost and reliability for a campus already on the same network.
 
 **Three things that left this list, with why.** The **ABR transcoder** moved to a
