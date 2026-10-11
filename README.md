@@ -472,7 +472,7 @@ history of each is in <a href="docs/scope/readme-current-state.md">the archive</
   credential service with a short code, beside typed keys and never instead of
   them. Removes the three steps that decide whether a church can deploy unaided:
   create a cloud account, scope a token, write a lifecycle rule. Designed in
-  [PROJECT-SCOPE §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
+  [PROJECT-SCOPE §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered).
   **Client built.** The OBS docks pair from their **Cloud** section and record to
   or play from the account's bucket with nothing typed in (verified on a Mac, both
   halves); the Pi page and the relay have the same, and the Pi's playback path is

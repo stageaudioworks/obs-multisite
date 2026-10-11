@@ -1098,9 +1098,10 @@ and the tablet that set it is long since charged and put away.
 
 ---
 
-## 8.5 Storage credentials: direct or brokered (planned)
+## 8.5 Storage credentials: direct or brokered
 
-**Status: not built** — designed here; Phase 12 in §10 delivers it.
+**Status: built on the client side** — Phase 12 in §10 says what is built and
+what is not proven. What follows is the design, kept in its before-the-fact form.
 
 **Brokered** credentials are added beside the typed keys, never instead of
 them: the plugin holds a device identity and a service URL and fetches
@@ -1372,7 +1373,7 @@ is the better answer for a given church, section 12 says so plainly.
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
 | Knowing a newer build exists, and applying it without a manual reinstall | notification built — the plugin and the player each ask once per run and say so; whether an update applies itself is still undecided (§10 Phase 11) |
-| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
+| Connecting a bucket by pairing rather than by pasting keys | built on the client — OBS plugin, Pi page and relay; Pi playback from a paired bucket not yet proven; the broker is outside this repository (§8.5, §10 Phase 12) |
 | Choosing a storage provider from a list instead of typing raw endpoint fields | built (§8.6, §10 Phase 13) |
 | Monitoring heartbeat to a collector (off by default; OBS + Pi, manual or paired) | built — each role's filtered status plus the appliance host block, every 30 s active / 5 min idle, fire-and-forget; device-code pairing preferred, typed URL/id/token as fallback |
 | Satellite receiving directly from the encoder over a LAN or existing VPN, cloud as automatic fallback | built, both sides (§8.7, §10 Phase 14) |
@@ -1467,13 +1468,27 @@ depends on 9 or 10.
   pre-cropped source, assignable through OBS's own fullscreen projector to a
   screen, a DeckLink or a video wall. Assigning tiles to several outputs from one
   box needs hardware beyond the Pi and is out of scope.
-- **Phase 11 — Keeping installations current. Status: not built.** Tell the
-  operator a newer build exists (one HTTPS request, stated in the dock), and
-  decide how an update is applied; OBS offers no update entry point. The
-  packaging prerequisite — the recommended Windows layout — is done.
-- **Phase 12 — Storage credentials and pairing. Status: not built.** A
-  device-code pairing flow against a credential broker, beside the typed keys and
-  never instead of them. Designed in §8.5; depends on nothing else here.
+- **Phase 11 — Keeping installations current. Status: partly built.** Telling
+  the operator a newer build exists is **built**: the plugin and the player each
+  make one HTTPS request to GitHub's releases list per run and say so in the
+  dock or page. Applying an update is **not built** and not decided; OBS offers
+  no update entry point, and the platforms differ (Windows cannot overwrite a
+  loaded DLL, macOS quarantines an unsigned download, Flatpak installs through
+  Flatpak). The packaging prerequisite — the recommended Windows layout — is
+  done.
+- **Phase 12 — Storage credentials and pairing. Status: built on the client
+  side; the broker is not in this repository.** A device-code pairing flow
+  against a credential broker, beside the typed keys and never instead of them.
+  The OBS plugin pairs from the dock's **Cloud** section and records to or plays
+  from the paired bucket with no endpoint or keys typed, fetching short-lived
+  credentials and refreshing them before they expire (verified on a Mac, both
+  halves). The Pi player has the same section, and the relay is the third host;
+  each role is its own identity (ADR-0001), and a relay refuses credentials that
+  can write (ADR-0002). Choosing **Multisite Cloud** as the storage provider is
+  what moves storage onto the pairing, and typed keys are never moved behind an
+  operator's back. **Not proven:** the Pi's playback from a paired bucket — the
+  unit it was tested on reads a bucket with typed keys and is paired for
+  monitoring only. Designed in §8.5.
 - **Phase 13 — Storage provider selection. Status: built.** A provider dropdown
   (Cloudflare R2, AWS S3, Backblaze B2, Wasabi, Custom) that shows only the
   fields each needs and derives the rest, read by all five settings surfaces; a
