@@ -38,7 +38,7 @@ jobs:
         os: [ ubuntu-latest, windows-latest, macos-14 ]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Optional deps enable the CMAF muxer + S3 transport targets. If they are
       # missing the CMake build skips those targets and the reliability/session
