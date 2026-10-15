@@ -45,7 +45,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libobs, FFmpeg and libcurl
         run: |
@@ -111,7 +111,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Detect Visual Studio generator
         shell: pwsh
@@ -485,7 +485,7 @@ jobs:
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Read the obs-deps version OBS pins for this release
         run: |
@@ -704,7 +704,7 @@ jobs:
     permissions:
       contents: write        # required to create the release
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Collect the built plugins
         uses: actions/download-artifact@v5
