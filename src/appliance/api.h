@@ -18,7 +18,7 @@
 //     stop the player by being leant on.
 //
 #include "player.h"
-#include "core/http_server.h"
+#include "../core/http_server.h"
 
 #include <string>
 

@@ -7,6 +7,9 @@ include(CMakeFindDependencyMacro)
 set(MULTISITE_CORE_HAS_S3 @MULTISITE_CORE_HAS_S3@)
 set(MULTISITE_CORE_HAS_CMAF @MULTISITE_CORE_HAS_CMAF@)
 set(MULTISITE_CORE_HAS_MPP @MULTISITE_CORE_HAS_MPP@)
+set(MULTISITE_CORE_HAS_PLAYER_ENGINE @MULTISITE_CORE_HAS_PLAYER_ENGINE@)
+set(MULTISITE_CORE_HAS_QRCODE @MULTISITE_CORE_HAS_QRCODE@)
+set(MULTISITE_CORE_HAS_FREETYPE @MULTISITE_CORE_HAS_FREETYPE@)
 
 find_dependency(Threads)
 if(NOT WIN32 AND NOT APPLE)
@@ -19,6 +22,17 @@ if(MULTISITE_CORE_HAS_CMAF AND NOT TARGET PkgConfig::FFMPEG)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavformat libavcodec libavutil libswresample libswscale)
+endif()
+# The engine links these only when it was built with them (splash QR code and
+# smooth text), the same way FFmpeg is handled above.
+if(MULTISITE_CORE_HAS_PLAYER_ENGINE AND (MULTISITE_CORE_HAS_QRCODE OR MULTISITE_CORE_HAS_FREETYPE))
+    find_package(PkgConfig REQUIRED)
+    if(MULTISITE_CORE_HAS_QRCODE AND NOT TARGET PkgConfig::QRENCODE)
+        pkg_check_modules(QRENCODE REQUIRED IMPORTED_TARGET libqrencode)
+    endif()
+    if(MULTISITE_CORE_HAS_FREETYPE AND NOT TARGET PkgConfig::FREETYPE)
+        pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
+    endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/multisite_coreTargets.cmake")

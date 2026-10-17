@@ -12,4 +12,5 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(multisite_core REQUIRED)
 add_executable(consumer main.cpp)
-target_link_libraries(consumer PRIVATE multisite::core multisite::s3 multisite::cmaf)
+target_link_libraries(consumer PRIVATE multisite::core multisite::s3 multisite::cmaf
+                      multisite::player_engine)
