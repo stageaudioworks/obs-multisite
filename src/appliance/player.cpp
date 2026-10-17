@@ -2079,6 +2079,7 @@ void Player::feed_loop() {
 #else
                 dec->set_preferred_video_decoders({ "h264_v4l2m2m" });
 #endif
+            dec->set_native_frames(m_native_video.load());
             dec->on_video([this](const DecodedVideoFrame& f) { on_video(f); });
             dec->on_audio([this](const DecodedAudioFrame& f) { on_audio(f); });
             if (!dec->start(seg->init)) {
@@ -2360,8 +2361,40 @@ void Player::event_listing(EventListing& out) const {
 // whole frame that arrived, so the browser can be shown either. The layout and
 // the selection are read here, under the same lock as the frame, so the two are
 // always the same instant rather than a frame and a tile from different ones.
+void Player::set_native_reader(NativeReader to_i420) {
+    std::lock_guard<std::mutex> lk(m_frame_mtx);
+    m_native_reader = std::move(to_i420);
+}
+
 bool Player::latest_frame(DecodedVideoFrame& out, uint64_t& version,
                           bool show_tile) const {
+    DecodedVideoFrame native;
+    NativeReader reader;
+    {
+        std::lock_guard<std::mutex> lk(m_frame_mtx);
+        if (m_last_frame.native) {
+            native = m_last_frame;          // refcount bump only
+            reader = m_native_reader;
+            version = m_frame_version.load();
+        }
+    }
+    if (native.native) {
+        // Read back lazily, only because a preview was asked for, and outside
+        // the lock so a slow read never stalls the output.
+        DecodedVideoFrame i420;
+        if (!reader || !reader(native, i420) || i420.data.empty()) return false;
+        fix_planes(i420);
+        const int sel = m_tile_sel.load();
+        TileLayout lay;
+        lay.cols = m_tile_cols.load();
+        lay.rows = m_tile_rows.load();
+        if (show_tile && sel >= 0 && lay.is_split() && sel < lay.count())
+            out = tile_copy(i420, lay, sel);
+        else
+            out = std::move(i420);
+        fix_planes(out);
+        return true;
+    }
     std::lock_guard<std::mutex> lk(m_frame_mtx);
     if (m_last_frame.data.empty()) return false;
     const int sel = m_tile_sel.load();

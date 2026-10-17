@@ -41,6 +41,7 @@ struct OutputMode {
 // leaves them pointing at the original. Anything that has copied a frame must
 // put them back before handing it to an output.
 inline void fix_planes(multisite::DecodedVideoFrame& f) {
+    if (f.data.empty()) return;   // a native frame has no planes
     uint8_t* base = f.data.data();
     size_t off = 0;
     for (int i = 0; i < 3; ++i) {

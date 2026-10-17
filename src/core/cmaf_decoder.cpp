@@ -143,6 +143,7 @@ struct CmafDecoder::Impl {
     uint64_t cur_seq = 0;
     int decode_threads = 0;
     std::vector<std::string> prefer_video_decoders;
+    bool native_frames = false;
 
     VideoFrameCallback on_video;
     AudioFrameCallback on_audio;
@@ -190,6 +191,27 @@ struct CmafDecoder::Impl {
 
     void emit_video(AVFrame* f, AVRational tb) {
         if (!on_video) return;
+
+        // A host that can draw a hardware frame takes it as it is: a clone
+        // holds the CVPixelBuffer, which outlives this decoder.
+        if (native_frames && f->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+            AVFrame* keep = av_frame_clone(f);
+            if (!keep) return;
+            DecodedVideoFrame out;
+            out.width = f->width; out.height = f->height;
+            out.seq = cur_seq;
+            out.full_range = (f->color_range == AVCOL_RANGE_JPEG);
+            out.native = std::shared_ptr<void>(keep, [](void* p) {
+                AVFrame* a = static_cast<AVFrame*>(p);
+                av_frame_free(&a);
+            });
+            int64_t pts = (f->pts == AV_NOPTS_VALUE) ? 0 : f->pts;
+            out.pts_ns = (int64_t)(pts * av_q2d(tb) * 1e9);
+            width = f->width; height = f->height;
+            on_video(out);
+            last_progress_ms = mono_ms();
+            return;
+        }
 
         // A hardware decoder (the Pi 4's h264_v4l2m2m) may hand back a frame
         // still living in the decoder's own memory. Bring it into system
@@ -684,6 +706,10 @@ void CmafDecoder::on_audio(AudioFrameCallback cb) { d->on_audio = std::move(cb);
 
 void CmafDecoder::set_preferred_video_decoders(std::vector<std::string> names) {
     if (d) d->prefer_video_decoders = std::move(names);
+}
+
+void CmafDecoder::set_native_frames(bool on) {
+    if (d) d->native_frames = on;
 }
 
 bool CmafDecoder::start(const std::vector<uint8_t>& init_segment) {

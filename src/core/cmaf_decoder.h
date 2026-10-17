@@ -31,6 +31,14 @@ struct DecodedVideoFrame {
     int      stride[3] = { 0, 0, 0 };
     int64_t  pts_ns = 0;          // presentation time within the stream
     bool     full_range = false;
+    // Set only when the host asked for native frames (set_native_frames) and a
+    // hardware decoder produced one: an AVFrame* (AV_PIX_FMT_VIDEOTOOLBOX,
+    // data[3] = CVPixelBufferRef), freed with av_frame_free. `data` and `plane`
+    // are then empty. Copying the frame only bumps the shared refcount.
+    std::shared_ptr<void> native;
+    // The tile of a native frame to show; 0 = the whole frame. Planar frames
+    // use plane offsets instead (tile_view).
+    int crop_x = 0, crop_y = 0, crop_w = 0, crop_h = 0;
 };
 
 struct DecodedAudioFrame {
@@ -68,6 +76,13 @@ public:
     // own decoder (H.264 or HEVC) with a VideoToolbox device attached, and the
     // reported codec becomes "<codec> (videotoolbox)".
     void set_preferred_video_decoders(std::vector<std::string> names);
+
+    // Off by default. When on, a frame that a hardware decoder (VideoToolbox)
+    // leaves on the GPU is passed on as DecodedVideoFrame::native, with no
+    // copy back to system memory and no scaling. Frames from any other decoder
+    // are I420 as ever. Only a host that can draw such a frame may turn it on.
+    // Call before start().
+    void set_native_frames(bool on);
 
     // Push the init segment. Must be called before any fragment. Starts the
     // decode thread, which opens the stream and runs until stop().

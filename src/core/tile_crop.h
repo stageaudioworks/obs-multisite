@@ -29,6 +29,13 @@ namespace multisite {
 inline DecodedVideoFrame tile_view(const DecodedVideoFrame& frame,
                                    const TileLayout& layout, int index) {
     const TileLayout::Rect r = layout.tile_rect(index, frame.width, frame.height);
+    if (frame.native) {
+        // A GPU frame has no planes to offset: same buffer, with the tile as
+        // the crop. width/height stay the buffer's own size.
+        DecodedVideoFrame v = frame;
+        v.crop_x = r.x; v.crop_y = r.y; v.crop_w = r.w; v.crop_h = r.h;
+        return v;
+    }
     DecodedVideoFrame v;
     v.width      = r.w;
     v.height     = r.h;

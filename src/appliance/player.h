@@ -45,6 +45,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -374,6 +375,18 @@ public:
                       bool show_tile = false) const;
     uint64_t frame_version() const { return m_frame_version.load(); }
 
+    // Hardware frames reach the output untouched (a ref-counted GPU buffer in
+    // DecodedVideoFrame::native) instead of being copied to I420. Only a host
+    // whose VideoOutput can draw them turns this on; off (the default, and
+    // always on the Pi) frames are I420 exactly as before. Applies to decoders
+    // built after the call.
+    void set_native_video(bool on) { m_native_video.store(on); }
+    // Turns a native frame into I420 for the preview; the host supplies it.
+    // Without one the preview is empty while native video is on.
+    using NativeReader = std::function<bool(const multisite::DecodedVideoFrame&,
+                                            multisite::DecodedVideoFrame&)>;
+    void set_native_reader(NativeReader to_i420);
+
 private:
     void poll_loop();
     void feed_loop();
@@ -657,6 +670,8 @@ private:
     mutable std::mutex m_frame_mtx;
     multisite::DecodedVideoFrame m_last_frame;
     std::atomic<uint64_t> m_frame_version{0};
+    std::atomic<bool> m_native_video{false};
+    NativeReader m_native_reader;   // guarded by m_frame_mtx
 
     mutable std::mutex m_events_mtx;
     EventListing       m_events;

@@ -15,6 +15,7 @@
 // and one that took the chroma at luma resolution is still a picture, in the
 // wrong colours.
 #include "../src/core/tile_crop.h"
+#include "../src/appliance/video_output.h"
 
 #include <cstdio>
 
@@ -167,6 +168,27 @@ int main() {
               "at the same size, packed tight");
         CHECK(w.plane[0] != f.plane[0],
               "but still its own buffer, not the frame it came from");
+    }
+
+    std::printf("== a native (GPU) frame carries a crop, not plane math ==\n");
+    {
+        DecodedVideoFrame f;
+        f.width = 3840; f.height = 1080;
+        f.native = std::make_shared<int>(7);
+        const DecodedVideoFrame t1 = tile_view(f, TileLayout::parse("2x1"), 1);
+        CHECK(t1.native == f.native, "the view shares the same native buffer");
+        CHECK(t1.crop_x == 1920 && t1.crop_y == 0 && t1.crop_w == 1920 && t1.crop_h == 1080,
+              "tile 1 is the right half, as a crop");
+        CHECK(t1.data.empty() && !t1.plane[0], "no planes were derived");
+        CHECK(t1.width == 3840 && t1.height == 1080, "the frame keeps the buffer's size");
+    }
+    std::printf("== fix_planes on an empty frame does nothing ==\n");
+    {
+        DecodedVideoFrame f;
+        f.width = 64; f.height = 64;
+        f.native = std::make_shared<int>(1);
+        multisite_player::fix_planes(f);
+        CHECK(!f.plane[0] && !f.plane[1] && !f.plane[2], "no plane pointers invented");
     }
 
     if (g_fail) { std::printf("\n%d check(s) FAILED\n", g_fail); return 1; }

@@ -7,6 +7,10 @@
 // bytes the encoder produced are decoded back into frames.
 #include "../src/core/cmaf_decoder.h"
 
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+}
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -206,6 +210,57 @@ int main(int argc, char** argv) {
         }
 #else
         CHECK(vt.codec == sw.codec, "without VideoToolbox the preference falls through to software");
+#endif
+    }
+
+    // ── Native frames: hardware frames stay on the GPU ──────────────────────
+    {
+        std::mutex m;
+        int frames = 0; bool all_native = true, sized = true;
+        std::vector<DecodedVideoFrame> kept;
+        std::vector<long long> pts;
+        {
+            CmafDecoder d;
+            d.set_preferred_video_decoders({ "videotoolbox" });
+            d.set_native_frames(true);
+            d.on_video([&](const DecodedVideoFrame& f) {
+                std::lock_guard<std::mutex> lk(m);
+                ++frames; pts.push_back(f.pts_ns);
+                if (!f.native || !f.data.empty()) all_native = false;
+                if (f.width <= 0 || f.height <= 0) sized = false;
+                if (kept.size() < 2) kept.push_back(f);   // copies outlive the decoder
+            });
+            d.start(init);
+            d.push_fragment(seg);
+            int stable = 0, last = -1;
+            for (int i = 0; i < 400 && stable < 8; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                std::lock_guard<std::mutex> lk(m);
+                if (frames == last) ++stable; else { stable = 0; last = frames; }
+            }
+            d.stop();
+        }   // decoder destroyed here
+        const Picture sw = grab("");
+        CHECK(frames > 0, "native mode still decodes");
+#ifdef __APPLE__
+        if (sw.codec == "h264" || sw.codec == "hevc") {
+            CHECK(all_native && sized, "native frames: data empty, native set");
+            CHECK(frames == sw.frames, "native frames: same count as the I420 decode");
+            CHECK(!kept.empty() && kept[0].width == sw.w && kept[0].height == sw.h,
+                  "native frames: same size as the I420 decode");
+            CHECK(pts == sw.pts, "native frames keep their timestamps");
+            // The copy kept after the decoder is gone must still hold a live
+            // AVFrame whose CVPixelBuffer is readable.
+            bool alive = !kept.empty();
+            for (auto& k : kept) {
+                auto* av = static_cast<AVFrame*>(k.native.get());
+                if (!av || av->format != AV_PIX_FMT_VIDEOTOOLBOX || !av->data[3] ||
+                    av->width != sw.w) alive = false;
+            }
+            CHECK(alive, "native frame lifetime: a copy outlives the decoder");
+        }
+#else
+        CHECK(all_native == false, "without VideoToolbox the flag is ignored (frames are I420)");
 #endif
     }
 
