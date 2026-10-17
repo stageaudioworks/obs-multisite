@@ -896,8 +896,14 @@ restoring gives up after 60 s (undoing its own pin) if the event never loads.
 It also stands down if the operator picks something else meanwhile, or if the
 room, unpinned, has moved on to a different event. A file older than 30
 minutes, or unreadable, is ignored and the box follows live as configured.
-Nothing is saved until the restore has finished. Position is the decode
-playhead, which can lead the screen by a fraction of a second.
+Nothing is saved until the restore has finished. Position is the media time
+of the frame last delivered to the screen (`Status::playhead_ms`), not the
+download head, which runs whole segments ahead. A box held at the very start
+is restored without a seek (a seek to 0 is the failure value, BUGS #4). The
+hold is re-applied only once the seek has landed. Freshness is judged only
+after the system clock is synchronised, waiting up to 30 s; if it is not, the
+file is treated as stale, because a box with no RTC boots with the clock of
+its last shutdown.
 
 ## 8.2 Public simulcast relay
 
