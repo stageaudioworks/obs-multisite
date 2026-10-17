@@ -636,7 +636,9 @@ bool HttpServer::handle_request(long long handle, const HttpRequest& req) {
     }
     if (!handler) handler = prefix_handler;
 
-    if (handler) {
+    if (handler && m_guard && !m_guard(req, res)) {
+        // Refused: the guard's response goes out, the handler never runs.
+    } else if (handler) {
         try {
             (*handler)(req, res);
         } catch (const std::exception& e) {

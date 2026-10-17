@@ -415,6 +415,53 @@ int main() {
         CHECK(status_of(after) == 200, "and the server carries on serving");
     }
 
+    std::printf("A guard in front of the handlers\n");
+    {
+        // The Mac engine gates its setup routes behind a PIN; a route() call
+        // can replace a handler but not wrap one, so the server offers a guard.
+        bool put_ran = false;
+        auto make = [&](int p, bool guarded) {
+            auto s = std::make_unique<HttpServer>("127.0.0.1", p);
+            s->route("PUT", "/api/config", [&put_ran](const HttpRequest&, HttpResponse& res) {
+                put_ran = true;
+                res.json("{\"ok\":true}");
+            });
+            s->route("GET", "/api/status", [](const HttpRequest&, HttpResponse& res) {
+                res.json("{\"up\":true}");
+            });
+            if (guarded)
+                s->set_guard([](const HttpRequest& req, HttpResponse& res) {
+                    if (req.method != "PUT" || req.path != "/api/config") return true;
+                    res.status = 403;
+                    res.json("{\"error\":\"locked\"}");
+                    return false;
+                });
+            std::string err;
+            return s->start(err) ? std::move(s) : nullptr;
+        };
+        const std::string put =
+            "PUT /api/config HTTP/1.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        const std::string get =
+            "GET /api/status HTTP/1.1\r\nConnection: close\r\n\r\n";
+
+        auto guarded = make(18770, true);
+        CHECK(guarded != nullptr, "a guarded server starts");
+        if (guarded) {
+            const std::string r = round_trip(18770, put);
+            CHECK(status_of(r) == 403 && body_of(r) == "{\"error\":\"locked\"}",
+                  "a refused request goes out as the guard filled it");
+            CHECK(!put_ran, "and its handler never runs");
+            CHECK(status_of(round_trip(18770, get)) == 200,
+                  "a request the guard lets through is answered");
+        }
+        auto open = make(18771, false);
+        CHECK(open != nullptr, "an unguarded server starts");
+        if (open) {
+            CHECK(status_of(round_trip(18771, put)) == 200 && put_ran,
+                  "without a guard the same request reaches its handler");
+        }
+    }
+
     std::printf("A port that is already taken\n");
     {
         HttpServer other("127.0.0.1", port);

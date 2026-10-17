@@ -93,6 +93,11 @@ struct HttpResponse {
 
 using HttpHandler = std::function<void(const HttpRequest&, HttpResponse&)>;
 
+// Runs before every route and prefix route (never before static files).
+// false refuses the request: `res` goes out as the guard filled it and the
+// handler does not run.
+using HttpGuard = std::function<bool(const HttpRequest&, HttpResponse&)>;
+
 // The core has no logging facility of its own — an appliance logs to the
 // journal, the relay to `docker logs`, the plugin to OBS's log — so each
 // consumer installs its own sink once at startup. With none installed, the
@@ -118,6 +123,12 @@ public:
     // one without the general one shadowing it. Registered before start().
     void route_prefix(const std::string& method, const std::string& prefix,
                       HttpHandler handler);
+
+    // A check run on every request that matched a route or prefix route, after
+    // the handler is found and before it runs. For a consumer that must gate
+    // some routes (a PIN on setup) when route() can replace a handler but not
+    // wrap one. Unset, nothing changes. Set before start().
+    void set_guard(HttpGuard guard) { m_guard = std::move(guard); }
 
     // Files served for any GET that matches no route. "/" serves index.html.
     // Served from disk rather than compiled in, so the interface can be edited
@@ -149,6 +160,7 @@ private:
     // the race without touching the wake mechanism.
     std::atomic<long long> m_listen_fd{-1};
     std::string m_static_root;
+    HttpGuard   m_guard;
 
     std::map<std::string, HttpHandler> m_routes;   // "GET /api/status"
     // method -> (prefix, handler), checked longest-prefix-first.
