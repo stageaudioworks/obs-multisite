@@ -176,7 +176,7 @@ of a packed track must be full range, and the next user's click is on 4.
 
 ---
 
-### 4. Player::seek_to_media(0) is impossible — 0 is also its failure value
+### 9. Player::seek_to_media(0) is impossible — 0 is also its failure value
 
 **Status: open, not started.** Found in the 2026-10-17 review of the Mac-player
 resume work.

@@ -170,8 +170,11 @@ int main() {
     }
     {
         // The thread, for real: an unconfigured Player, a fresh file, stop at
-        // once. Covers stop-without-start, stop mid-restore (which must not
-        // fall into save_loop and overwrite the file), and the join.
+        // once. Covers stop-without-start, a stop while the restore is waiting,
+        // and the join. It does NOT prove a stop mid-restore skips save_loop:
+        // an unconfigured Player has no event, so save_loop would write
+        // nothing either way. That guard is the `if (stopping()) return;`
+        // before save_loop() in resume_driver.cpp, and is untested.
         const char* t = std::getenv("TMPDIR");
         std::string path = std::string(t && *t ? t : "/tmp") + "/test_resume_keeper.json";
         ResumeState r;
@@ -197,7 +200,7 @@ int main() {
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
             keeper.stop();
         }
-        CHECK(slurp() == before, "keeper stopped mid-restore leaves resume.json unchanged");
+        CHECK(slurp() == before, "keeper stopped while restoring leaves resume.json unchanged");
         std::remove(path.c_str());
     }
     std::printf(g_fail ? "FAILED\n" : "all ok\n");

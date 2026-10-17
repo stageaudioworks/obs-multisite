@@ -899,7 +899,7 @@ minutes, or unreadable, is ignored and the box follows live as configured.
 Nothing is saved until the restore has finished. Position is the media time
 of the frame last delivered to the screen (`Status::playhead_ms`), not the
 download head, which runs whole segments ahead. A box held at the very start
-is restored without a seek (a seek to 0 is the failure value, BUGS #4). The
+is restored without a seek (a seek to 0 is the failure value, BUGS #9). The
 hold is re-applied only once the seek has landed. Freshness is judged only
 after the system clock is synchronised, waiting up to 30 s; if it is not, the
 file is treated as stale, because a box with no RTC boots with the clock of

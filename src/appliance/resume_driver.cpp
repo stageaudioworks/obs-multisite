@@ -50,7 +50,7 @@ ResumeStep next_resume_step(const ResumeState& saved, const Status& now,
     if (!p.seek_sent) {
         p.seek_sent = true;
         // Held at the very start: a just-pinned event already begins there, and
-        // Player::seek_to_media(0) reads as its own failure (BUGS #4).
+        // Player::seek_to_media(0) reads as its own failure (BUGS #9).
         if (saved.media_ms > 0) return ResumeStep::Seek;
     }
     // Landing is the first delivered frame at the target; a hold before that
