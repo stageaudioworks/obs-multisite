@@ -63,6 +63,10 @@ public:
     // that belongs to a different codec, or that refuses to open is skipped,
     // and the software decoder is used instead. It can therefore only change
     // which decoder runs, never whether playback works. Call before start().
+    //
+    // "videotoolbox" (macOS) names no decoder of its own: it means the codec's
+    // own decoder (H.264 or HEVC) with a VideoToolbox device attached, and the
+    // reported codec becomes "<codec> (videotoolbox)".
     void set_preferred_video_decoders(std::vector<std::string> names);
 
     // Push the init segment. Must be called before any fragment. Starts the

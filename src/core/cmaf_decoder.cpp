@@ -343,13 +343,31 @@ struct CmafDecoder::Impl {
         // extradata; MPP's parser wants start codes. The filter also re-inserts
         // the SPS/PPS, so MPP sees a complete stream. AV1 is OBU already.
         AVBSFContext* mpp_bsf = nullptr;
+        bool vt_in_use = false;
 
-        auto open_codec = [](AVCodecParameters* par,
-                             const AVCodec* codec) -> AVCodecContext* {
+        auto open_codec = [](AVCodecParameters* par, const AVCodec* codec,
+                             bool videotoolbox = false) -> AVCodecContext* {
             if (!codec) return nullptr;
             AVCodecContext* c = avcodec_alloc_context3(codec);
             if (!c) return nullptr;
             avcodec_parameters_to_context(c, par);
+            if (videotoolbox) {
+                // A failure here falls through like a missing decoder name.
+                AVBufferRef* dev = nullptr;
+                if (av_hwdevice_ctx_create(&dev, AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                           nullptr, nullptr, 0) < 0) {
+                    avcodec_free_context(&c);
+                    return nullptr;
+                }
+                c->hw_device_ctx = dev;  // owned by c from here
+                // Take the VideoToolbox format when offered; otherwise the
+                // first (software) one, so the stream still decodes.
+                c->get_format = [](AVCodecContext*, const AVPixelFormat* fmts) {
+                    for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p)
+                        if (*p == AV_PIX_FMT_VIDEOTOOLBOX) return *p;
+                    return fmts[0];
+                };
+            }
             // FFmpeg defaults AVCodecContext to a single thread. On a campus
             // player that is three of the Pi's four cores left idle while
             // video decode sets the pace for the whole playout clock: the
@@ -426,6 +444,19 @@ struct CmafDecoder::Impl {
             }
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && !mpp) {
                 for (const std::string& name : prefer_video_decoders) {
+                    if (name == "videotoolbox") {
+                        // The codec's own decoder with a VideoToolbox device
+                        // attached (H.264 and HEVC only).
+                        if (par->codec_id != AV_CODEC_ID_H264 &&
+                            par->codec_id != AV_CODEC_ID_HEVC) continue;
+                        const AVCodec* sw = avcodec_find_decoder(par->codec_id);
+                        AVCodecContext* c = open_codec(par, sw, true);
+                        if (!c) continue;
+                        ctxs[i] = c;
+                        dec = sw;
+                        vt_in_use = true;
+                        break;
+                    }
                     const AVCodec* cand = avcodec_find_decoder_by_name(name.c_str());
                     if (!cand || cand->id != par->codec_id) continue;
                     AVCodecContext* c = open_codec(par, cand);
@@ -462,6 +493,7 @@ struct CmafDecoder::Impl {
                 // Core has no logger of its own — it is shared with the OBS
                 // plugin. Record it and let the caller report it.
                 video_codec = dec->name ? dec->name : "?";
+                if (vt_in_use) video_codec += " (videotoolbox)";
                 decode_threads = ctxs[i]->thread_count;
             }
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_stream < 0) video_stream = (int)i;

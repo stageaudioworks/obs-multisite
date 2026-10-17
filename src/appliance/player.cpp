@@ -2039,7 +2039,11 @@ void Player::feed_loop() {
             // difference between a picture that keeps up and three cores
             // spent keeping up. See CmafDecoder::set_preferred_video_decoders.
             if (config().hardware_decode)
+#ifdef __APPLE__
+                dec->set_preferred_video_decoders({ "videotoolbox" });
+#else
                 dec->set_preferred_video_decoders({ "h264_v4l2m2m" });
+#endif
             dec->on_video([this](const DecodedVideoFrame& f) { on_video(f); });
             dec->on_audio([this](const DecodedAudioFrame& f) { on_audio(f); });
             if (!dec->start(seg->init)) {

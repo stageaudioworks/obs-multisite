@@ -9,6 +9,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <condition_variable>
 #include <cstdio>
 #include <filesystem>
@@ -136,6 +138,68 @@ int main(int argc, char** argv) {
     CHECK(named.codec == plain.codec,
           "a known preference selects the named decoder");
     std::printf("     (default decoder: %s)\n", plain.codec.c_str());
+
+    // ── VideoToolbox (macOS hardware decode) ────────────────────────────────
+    //
+    // "videotoolbox" is the codec's software decoder with a VideoToolbox device
+    // attached. On macOS it must actually be used and give the same picture;
+    // elsewhere the name falls through to software like any missing decoder.
+    struct Picture { int frames = 0; bool all_i420 = true; int w = 0, h = 0;
+                     std::vector<std::vector<uint8_t>> y; std::string codec; };
+    auto grab = [&](const std::string& pref) {
+        Picture p;
+        std::mutex m;
+        CmafDecoder d;
+        if (!pref.empty()) d.set_preferred_video_decoders({ pref });
+        d.on_video([&](const DecodedVideoFrame& f) {
+            std::lock_guard<std::mutex> lk(m);
+            ++p.frames; p.w = f.width; p.h = f.height;
+            if (!f.plane[0] || !f.plane[1] || !f.plane[2] ||
+                f.stride[1] < f.width / 2) p.all_i420 = false;
+            if (f.plane[0]) {
+                std::vector<uint8_t> y((size_t)f.width * f.height);
+                for (int r = 0; r < f.height; ++r)
+                    std::memcpy(&y[(size_t)r * f.width], f.plane[0] + (size_t)r * f.stride[0], f.width);
+                p.y.push_back(std::move(y));
+            }
+        });
+        d.start(init);
+        d.push_fragment(seg);
+        int stable = 0, last = -1;
+        for (int i = 0; i < 400 && stable < 8; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            std::lock_guard<std::mutex> lk(m);
+            if (p.frames == last) ++stable; else { stable = 0; last = p.frames; }
+        }
+        d.stop();
+        p.codec = d.video_codec();
+        return p;
+    };
+    {
+        const Picture sw = grab(""), vt = grab("videotoolbox");
+        CHECK(vt.frames > 0, "the videotoolbox preference still decodes");
+#ifdef __APPLE__
+        // VideoToolbox only takes H.264 and HEVC; the AV1 fixture falls through.
+        if (sw.codec != "h264" && sw.codec != "hevc")
+            CHECK(vt.codec == sw.codec, "a non-H.264/HEVC stream falls through to software");
+        else {
+        CHECK(vt.codec.find("videotoolbox") != std::string::npos, "videotoolbox used");
+        CHECK(vt.frames == sw.frames, "same picture: same frame count");
+        CHECK(vt.all_i420 && vt.w == sw.w && vt.h == sw.h,
+              "same picture: I420 at the same size");
+        bool close = vt.y.size() == sw.y.size() && !vt.y.empty();
+        for (size_t i = 0; close && i < vt.y.size(); ++i) {
+            double sum = 0;
+            for (size_t k = 0; k < vt.y[i].size(); ++k)
+                sum += std::abs((int)vt.y[i][k] - (int)sw.y[i][k]);
+            if (sum / vt.y[i].size() >= 2.0) close = false;
+        }
+        CHECK(close, "same picture: mean Y difference under 2.0 per pixel");
+        }
+#else
+        CHECK(vt.codec == sw.codec, "without VideoToolbox the preference falls through to software");
+#endif
+    }
 
     // ── A wedged decode thread must not freeze stop() (BUGS.md entry 0) ──────
     //
