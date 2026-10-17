@@ -247,6 +247,10 @@ function drawStatus() {
     rtEl.className = bad ? 'bad' : '';
   }
 
+  // A cue from ProPresenter that failed is the last thing the operator needs to
+  // miss: it names the marker, and stays up while it is the last result.
+  const cueNote = rossTalkFailure(rt);
+
   // An internet outage takes priority over the raw error text while it lasts:
   // "no internet, but you have N minutes of buffer" is the sentence an operator
   // can act on, and "HTTP 0" is not.
@@ -254,9 +258,28 @@ function drawStatus() {
     const left = s.buffered_ahead_s > 1
       ? ' The picture keeps playing for about ' + spoken(s.buffered_ahead_s) + ' more.'
       : '';
-    notify('No internet — the player cannot reach the broadcast storage.' + left, true);
+    notify(['No internet — the player cannot reach the broadcast storage.' + left, cueNote]
+      .filter(Boolean).join(' '), true);
   } else {
-    notify(s.last_error || '', true);
+    notify([s.last_error, cueNote].filter(Boolean).join(' '), true);
+  }
+}
+
+// "ProPresenter: no marker called X in this event", or '' when the last RossTalk
+// result was not a failed cue. X is the CUE argument, read back out of the line.
+function rossTalkFailure(rt) {
+  if (!rt || !rt.enabled || !rt.last) return '';
+  const m = /^\s*(?:cc\s+)?cue\s+(.+?)\s*$/i.exec(rt.last.text || '');
+  const name = m ? m[1] : '';
+  const failed = ['no such marker', 'cannot reach the marker', 'timed out'];
+  // A stray line after the cue changes last.text but not the cue's result.
+  if (!m) return failed.includes(rt.last.result)
+    ? 'ProPresenter: the last cue failed (' + rt.last.result + ').' : '';
+  switch (rt.last.result) {
+    case 'no such marker': return 'ProPresenter: no marker called ' + name + ' in this event.';
+    case 'cannot reach the marker': return 'ProPresenter: could not reach ' + name + '.';
+    case 'timed out': return 'ProPresenter: ' + name + ' timed out.';
+    default: return '';
   }
 }
 
