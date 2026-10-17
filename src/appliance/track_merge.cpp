@@ -23,7 +23,6 @@ void TrackMerger::reset(std::vector<int> channels_per_track, int sample_rate) {
     m_q.assign(m_channels.size(), {});
     m_width = 0;
     for (int c : m_channels) m_width += c;
-    m_rate = sample_rate;
     m_newest = 0;
     m_mismatches = 0;
 }

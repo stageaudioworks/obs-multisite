@@ -378,11 +378,11 @@ private:
     void poll_loop();
     void feed_loop();
     void deliver_loop();
+    void queue_audio(const multisite::DecodedAudioFrame& f);
     // Makes sure the sound card is open, is open on the device the settings now
     // name, and is open at the rate the feed actually runs at. Called both when
     // a frame arrives and when the box is idle — see the note at its
     // definition for why the idle case is not an optimisation.
-    void queue_audio(const multisite::DecodedAudioFrame& f);
     void ensure_audio_open(const Config& cfg, int feed_channels, int feed_rate);
 
     // Asks the delivery thread to let the current card go and open the one the

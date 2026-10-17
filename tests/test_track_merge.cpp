@@ -101,6 +101,17 @@ int main() {
         out = m.push(frame(1, 1, 0));
         CHECK(out.size() == 1 && out[0].pts_ns == 0, "and merging resumes at the new position");
     }
+    {
+        // Teardown resets with an empty layout: a pending half-group from the old
+        // event must not come out on the next event's frames.
+        TrackMerger m; m.reset({1, 1}, 48000);
+        m.push(frame(0, 1, 900));                 // old event, track 1 never arrived
+        m.reset({}, 0);
+        m.reset({1, 1}, 48000);
+        m.push(frame(0, 1, 0));
+        auto out = m.push(frame(1, 1, 0));
+        CHECK(out.size() == 1 && out[0].pts_ns == 0, "after a reset nothing stale is flushed");
+    }
     std::printf(g_fail ? "FAILED\n" : "OK\n");
     return g_fail ? 1 : 0;
 }

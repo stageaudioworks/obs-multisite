@@ -38,7 +38,6 @@ private:
     std::vector<int> m_channels;
     std::vector<std::deque<multisite::DecodedAudioFrame>> m_q;
     int      m_width = 0;
-    int      m_rate  = 48000;
     int64_t  m_newest = 0;
     uint64_t m_mismatches = 0;
 };

@@ -779,6 +779,12 @@ void Player::teardown_decoder() {
     }
     // stop() joins the decode thread and can block; never under the lock.
     if (old) old->stop();
+    // The decode thread is joined, so nothing is in on_audio: drop any half-merged
+    // group, which carries the old event's pts, and forget the decoder (a new one
+    // may be allocated at the old one's address).
+    m_merger.reset({}, 0);
+    m_merger_layout.clear();
+    m_merger_decoder = nullptr;
     m_decoder_started = false;
     m_first_pts_ns = -1;
     m_logged_av_offset = false;
