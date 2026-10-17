@@ -381,6 +381,14 @@ public:
     // always on the Pi) frames are I420 exactly as before. Applies to decoders
     // built after the call.
     void set_native_video(bool on) { m_native_video.store(on); }
+
+    // Called first thing on each worker thread (poll, feed, deliver, aes67)
+    // and handed to every decoder, with the role as a short string, so a host
+    // can name the thread and set its priority. Not synchronised: set it
+    // before start(), which is what makes it take effect; later changes reach
+    // only decoders built afterwards.
+    using ThreadHook = multisite::ThreadHook;
+    void set_thread_hook(ThreadHook hook) { m_thread_hook = std::move(hook); }
     // Turns a native frame into I420 for the preview; the host supplies it.
     // Without one the preview is empty while native video is on.
     using NativeReader = std::function<bool(const multisite::DecodedVideoFrame&,
@@ -507,6 +515,7 @@ private:
 
     std::thread m_poll_thread, m_feed_thread, m_deliver_thread;
     std::thread m_aes67_thread;
+    ThreadHook  m_thread_hook;   // set before start(); see set_thread_hook
     std::atomic<bool> m_running{false};
 
     // One reconcile pass at a time. The loop takes this, and so does the route

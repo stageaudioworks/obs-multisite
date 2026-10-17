@@ -144,6 +144,7 @@ struct CmafDecoder::Impl {
     int decode_threads = 0;
     std::vector<std::string> prefer_video_decoders;
     bool native_frames = false;
+    ThreadHook thread_hook;   // set before start(); read by the decode thread
 
     VideoFrameCallback on_video;
     AudioFrameCallback on_audio;
@@ -660,6 +661,7 @@ struct CmafDecoder::Impl {
     }
 
     void run() {
+        if (thread_hook) thread_hook("decode");
         // Marks the thread as returned however it leaves — including by an
         // exception out of FFmpeg — so stop()'s bounded wait is never fooled
         // into thinking a finished thread is wedged.
@@ -710,6 +712,10 @@ void CmafDecoder::set_preferred_video_decoders(std::vector<std::string> names) {
 
 void CmafDecoder::set_native_frames(bool on) {
     if (d) d->native_frames = on;
+}
+
+void CmafDecoder::set_thread_hook(ThreadHook hook) {
+    if (d) d->thread_hook = std::move(hook);
 }
 
 bool CmafDecoder::start(const std::vector<uint8_t>& init_segment) {

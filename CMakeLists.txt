@@ -874,6 +874,12 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_include_directories(test_resume_state PRIVATE src/appliance)
     add_test(NAME resume_state COMMAND test_resume_state)
 
+    # A host (the Mac player's QoS and thread names) can see every worker
+    # thread start.
+    add_executable(test_thread_hook tests/test_thread_hook.cpp)
+    target_link_libraries(test_thread_hook PRIVATE multisite_player_engine)
+    add_test(NAME thread_hook COMMAND test_thread_hook)
+
     # A host (the Mac player's os_log) can receive every log line.
     add_executable(test_log_hook tests/test_log_hook.cpp)
     target_link_libraries(test_log_hook PRIVATE multisite_player_engine)

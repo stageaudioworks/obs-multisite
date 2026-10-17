@@ -54,6 +54,10 @@ struct DecodedAudioFrame {
 using VideoFrameCallback = std::function<void(const DecodedVideoFrame&)>;
 using AudioFrameCallback = std::function<void(const DecodedAudioFrame&)>;
 
+// A host's chance to name and prioritise a worker thread; `role` is a short
+// fixed string ("poll", "feed", "deliver", "aes67", "decode").
+using ThreadHook = std::function<void(const char* role)>;
+
 class CmafDecoder {
 public:
     CmafDecoder();
@@ -83,6 +87,11 @@ public:
     // are I420 as ever. Only a host that can draw such a frame may turn it on.
     // Call before start().
     void set_native_frames(bool on);
+
+    // Called first thing on the decode thread with the role "decode", so a host
+    // can name it and set its priority (the Mac player sets a QoS class).
+    // Runs on that thread only; call before start().
+    void set_thread_hook(ThreadHook hook);
 
     // Push the init segment. Must be called before any fragment. Starts the
     // decode thread, which opens the stream and runs until stop().

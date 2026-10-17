@@ -685,10 +685,11 @@ void Player::start() {
     m_boot_splash_until_ns = now_ns() + kBootSplashNs;
     m_boot_splash_drawn = false;
 
-    m_poll_thread    = std::thread([this] { poll_loop(); });
-    m_feed_thread    = std::thread([this] { feed_loop(); });
-    m_deliver_thread = std::thread([this] { deliver_loop(); });
-    m_aes67_thread   = std::thread([this] { aes67_loop(); });
+    auto role = [this](const char* r) { if (m_thread_hook) m_thread_hook(r); };
+    m_poll_thread    = std::thread([this, role] { role("poll");    poll_loop(); });
+    m_feed_thread    = std::thread([this, role] { role("feed");    feed_loop(); });
+    m_deliver_thread = std::thread([this, role] { role("deliver"); deliver_loop(); });
+    m_aes67_thread   = std::thread([this, role] { role("aes67");   aes67_loop(); });
 
     // The monitoring heartbeat. Its own thread, started whether or not
     // anything is playing — an idle box still reports every five minutes —
@@ -2080,6 +2081,7 @@ void Player::feed_loop() {
                 dec->set_preferred_video_decoders({ "h264_v4l2m2m" });
 #endif
             dec->set_native_frames(m_native_video.load());
+            dec->set_thread_hook(m_thread_hook);
             dec->on_video([this](const DecodedVideoFrame& f) { on_video(f); });
             dec->on_audio([this](const DecodedAudioFrame& f) { on_audio(f); });
             if (!dec->start(seg->init)) {
