@@ -199,7 +199,10 @@ struct CmafDecoder::Impl {
             av_pix_fmt_desc_get((AVPixelFormat)f->format);
         if (pd && (pd->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
             AVFrame* tmp = av_frame_alloc();
-            if (tmp && av_hwframe_transfer_data(tmp, f, 0) >= 0) { sw = tmp; f = tmp; }
+            // The transfer copies pixels only; pts and colour range stay on
+            // the hardware frame, and a frame without them plays at time 0.
+            if (tmp && av_hwframe_transfer_data(tmp, f, 0) >= 0 &&
+                av_frame_copy_props(tmp, f) >= 0) { sw = tmp; f = tmp; }
             else av_frame_free(&tmp);
         }
 

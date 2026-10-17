@@ -145,7 +145,8 @@ int main(int argc, char** argv) {
     // attached. On macOS it must actually be used and give the same picture;
     // elsewhere the name falls through to software like any missing decoder.
     struct Picture { int frames = 0; bool all_i420 = true; int w = 0, h = 0;
-                     std::vector<std::vector<uint8_t>> y; std::string codec; };
+                     std::vector<std::vector<uint8_t>> y; std::string codec;
+                     std::vector<long long> pts; };
     auto grab = [&](const std::string& pref) {
         Picture p;
         std::mutex m;
@@ -154,6 +155,7 @@ int main(int argc, char** argv) {
         d.on_video([&](const DecodedVideoFrame& f) {
             std::lock_guard<std::mutex> lk(m);
             ++p.frames; p.w = f.width; p.h = f.height;
+            p.pts.push_back(f.pts_ns);
             if (!f.plane[0] || !f.plane[1] || !f.plane[2] ||
                 f.stride[1] < f.width / 2) p.all_i420 = false;
             if (f.plane[0]) {
@@ -195,6 +197,12 @@ int main(int argc, char** argv) {
             if (sum / vt.y[i].size() >= 2.0) close = false;
         }
         CHECK(close, "same picture: mean Y difference under 2.0 per pixel");
+        // The hardware frame is copied to system memory before scaling, and
+        // that copy once dropped the timestamp: every picture came out at
+        // pts 0, so playout saw each as seconds overdue and re-anchored
+        // continually (2.5 fps instead of 30).
+        CHECK(vt.pts == sw.pts && vt.pts.size() > 1 && vt.pts.front() != vt.pts.back(),
+              "same picture: videotoolbox frames keep their timestamps");
         }
 #else
         CHECK(vt.codec == sw.codec, "without VideoToolbox the preference falls through to software");
