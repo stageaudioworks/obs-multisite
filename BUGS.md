@@ -198,8 +198,40 @@ a recording.
 do not patch it by special-casing 0 in the caller as the resume driver does;
 that hides it from every other caller. And `m_seek_target_ms` doubles as
 "a seek is pending", so a landing at 0 must not be read as "no seek".
+`seek_ms_for` in `src/appliance/rosstalk.cpp` (target 0 becomes 1) is a second
+caller-side workaround, beside the resume driver, to remove when this is fixed.
 
 **Files:** `src/appliance/player.cpp`, `src/core/decoder_session.cpp`.
+
+---
+
+### 10. Player::seek_to_media from a hold leaves the session paused, so the seek never delivers
+
+**Status: open, worked around in RossTalk, not fixed.** Found in the 2026-10-17
+review of the ProPresenter cue work.
+
+**Symptom.** Hold the picture, then seek (the seek bar, `/api/seek`): the
+player reports the new position and clears its own "paused" flag, but no frame
+ever arrives from there. Playback stays frozen until something else resumes it.
+
+**Root cause.** `Player::seek_to_media` clears `m_paused` but never calls
+`DecoderSession::resume()`. `next_segment` serves only in `PlayState::Playing`
+(`src/core/decoder_session.cpp:695`), and the session is still paused, so the
+seeked-to segment is never handed out.
+
+**Next step.** Have `seek_to_media` resume the session when it was paused (or
+make the session's seek leave the paused state), with a test that holds, seeks
+and sees `frames_out` advance. Check that the web page's own seek from a hold
+is the same bug.
+
+**The trap.** Do not fix it in the callers. The cue sequence works around it:
+its Start step is `resume()` when the Player is paused, `play()` otherwise
+(`next_cue_step`, `src/appliance/rosstalk.h`), and its test pins that order.
+Fix the cause and that step becomes redundant, not wrong; remove it only with
+the test.
+
+**Files:** `src/appliance/player.cpp`, `src/core/decoder_session.cpp`,
+`src/appliance/rosstalk.cpp`.
 
 ---
 

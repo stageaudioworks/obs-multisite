@@ -228,6 +228,29 @@ function drawStatus() {
   const repNote = $('#reporter-note');
   if (repNote) repNote.textContent = s.reporter_state ? 'Heartbeat: ' + s.reporter_state : '';
 
+  // RossTalk: what it is listening on and the last cue it heard. A port
+  // problem is red, but only when it is on — an off listener has nothing to say.
+  const rt = s.rosstalk, rtEl = $('#rosstalk-facts');
+  if (rt && rtEl) {
+    const bad = rt.enabled && !!rt.error;
+    let t;
+    if (!rt.enabled) t = 'off';
+    else if (bad) t = 'cannot listen on ' + rt.bind + ':' + rt.port + ' — ' + rt.error;
+    else {
+      t = 'on ' + rt.bind + ':' + rt.port;
+      if (rt.last && rt.last.text) {
+        const at = new Date(rt.last.at_ms).toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        t += ' \u2014 last: ' + rt.last.text + ', ' + rt.last.result + ', ' + at;
+      }
+    }
+    rtEl.textContent = t;
+    rtEl.className = bad ? 'bad' : '';
+  }
+
+  // A cue from ProPresenter that failed is the last thing the operator needs to
+  // miss: it names the marker, and stays up while it is the last result.
+  const cueNote = rossTalkFailure(rt);
+
   // An internet outage takes priority over the raw error text while it lasts:
   // "no internet, but you have N minutes of buffer" is the sentence an operator
   // can act on, and "HTTP 0" is not.
@@ -235,9 +258,28 @@ function drawStatus() {
     const left = s.buffered_ahead_s > 1
       ? ' The picture keeps playing for about ' + spoken(s.buffered_ahead_s) + ' more.'
       : '';
-    notify('No internet — the player cannot reach the broadcast storage.' + left, true);
+    notify(['No internet — the player cannot reach the broadcast storage.' + left, cueNote]
+      .filter(Boolean).join(' '), true);
   } else {
-    notify(s.last_error || '', true);
+    notify([s.last_error, cueNote].filter(Boolean).join(' '), true);
+  }
+}
+
+// "ProPresenter: no marker called X in this event", or '' when the last RossTalk
+// result was not a failed cue. X is the CUE argument, read back out of the line.
+function rossTalkFailure(rt) {
+  if (!rt || !rt.enabled || !rt.last) return '';
+  const m = /^\s*(?:cc\s+)?cue\s+(.+?)\s*$/i.exec(rt.last.text || '');
+  const name = m ? m[1] : '';
+  const failed = ['no such marker', 'cannot reach the marker', 'timed out'];
+  // A stray line after the cue changes last.text but not the cue's result.
+  if (!m) return failed.includes(rt.last.result)
+    ? 'ProPresenter: the last cue failed (' + rt.last.result + ').' : '';
+  switch (rt.last.result) {
+    case 'no such marker': return 'ProPresenter: no marker called ' + name + ' in this event.';
+    case 'cannot reach the marker': return 'ProPresenter: could not reach ' + name + '.';
+    case 'timed out': return 'ProPresenter: ' + name + ' timed out.';
+    default: return '';
   }
 }
 
@@ -662,6 +704,9 @@ async function loadSettings() {
   set('#c-autoplay', String(settings.auto_play));
   set('#c-zerotier', settings.zerotier_network_id || '');
   set('#c-cloudflared', settings.cloudflared_token || '');
+  set('#c-rosstalk-on', String(!!settings.rosstalk_enabled));
+  set('#c-rosstalk-port', settings.rosstalk_port);
+  set('#c-rosstalk-open', String(settings.rosstalk_bind === '0.0.0.0'));
   set('#c-aes67-on', String(!!settings.aes67_manage));
   set('#c-aes67-address', settings.aes67_address || '');
   set('#c-aes67-channels', settings.aes67_channels);
@@ -804,6 +849,9 @@ $('#settings-form').addEventListener('submit', async (e) => {
     audio_channels: Number($('#c-channels').value),
     audio_track: Number($('#c-audio-track').value),
     auto_play: $('#c-autoplay').value === 'true',
+    rosstalk_enabled: $('#c-rosstalk-on').value === 'true',
+    rosstalk_port: Number($('#c-rosstalk-port').value) || 7790,
+    rosstalk_bind: $('#c-rosstalk-open').value === 'true' ? '0.0.0.0' : '127.0.0.1',
     reporter_enabled: $('#c-reporter-on').value === 'true',
     reporter_url: $('#c-reporter-url').value.trim(),
     reporter_appliance_id: $('#c-reporter-id').value.trim(),

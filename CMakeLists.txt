@@ -826,6 +826,8 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/track_merge.cpp
         src/appliance/resume_state.cpp
         src/appliance/resume_driver.cpp
+        src/appliance/rosstalk.cpp
+        src/appliance/rosstalk_listener.cpp
         src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
@@ -894,6 +896,22 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     add_executable(test_resume_driver tests/test_resume_driver.cpp)
     target_link_libraries(test_resume_driver PRIVATE multisite_player_engine)
     add_test(NAME resume_driver COMMAND test_resume_driver)
+
+    # RossTalk cue parsing and the cue sequence (rosstalk.h), pure.
+    add_executable(test_rosstalk tests/test_rosstalk.cpp)
+    target_link_libraries(test_rosstalk PRIVATE multisite_player_engine)
+    add_test(NAME rosstalk COMMAND test_rosstalk)
+
+    # The RossTalk TCP listener over real sockets (rosstalk_listener.h).
+    add_executable(test_rosstalk_listener tests/test_rosstalk_listener.cpp)
+    target_link_libraries(test_rosstalk_listener PRIVATE multisite_player_engine)
+    add_test(NAME rosstalk_listener COMMAND test_rosstalk_listener)
+
+    # RossTalk's part of the JSON API: the status "rosstalk" object and the
+    # bind/port rules PUT /api/config applies.
+    add_executable(test_rosstalk_api tests/test_rosstalk_api.cpp)
+    target_link_libraries(test_rosstalk_api PRIVATE multisite_player_engine)
+    add_test(NAME rosstalk_api COMMAND test_rosstalk_api)
 
     # The preview re-encodes the same decoded frame to JPEG on every request,
     # so the encoder must be reusable across calls — otherwise the first frame

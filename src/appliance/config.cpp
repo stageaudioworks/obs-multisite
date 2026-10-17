@@ -212,6 +212,12 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "aes67_channels",       aes67_channels);
     take(j, "aes67_previous_device", aes67_previous_device);
 
+    take(j, "rosstalk_enabled",     rosstalk_enabled);
+    take(j, "rosstalk_bind",        rosstalk_bind);
+    take(j, "rosstalk_port",        rosstalk_port);
+    // Where a hand-edited file meets the socket: only two binds are offered.
+    if (rosstalk_bind != "127.0.0.1" && rosstalk_bind != "0.0.0.0") rosstalk_bind = "127.0.0.1";
+    if (rosstalk_port < 1 || rosstalk_port > 65535) rosstalk_port = 7790;
     read_store();
     return true;
 }
@@ -307,6 +313,9 @@ bool Config::save(const std::string& path, std::string& error) const {
             j[key] = "";
         }
     }
+    j["rosstalk_enabled"]     = rosstalk_enabled;
+    j["rosstalk_bind"]        = rosstalk_bind;
+    j["rosstalk_port"]        = rosstalk_port;
 
     const std::string tmp = path + ".tmp";
     {

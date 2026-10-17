@@ -196,7 +196,11 @@ int main(int argc, char** argv) {
 
     HttpServer server(cfg.web_bind, cfg.web_port);
     server.set_static_root(web_root);
-    register_api(server, player, config_path);
+    // Built before register_api so the status lambda captures a listener that
+    // outlives the server (declared after player, destroyed before it).
+    RossTalkListener rosstalk(player);
+    register_api(server, player, config_path, {}, [&rosstalk] { return rosstalk.state(); });
+    rosstalk.start();
     {
         std::string err;
         if (!server.start(err)) {
@@ -204,6 +208,7 @@ int main(int argc, char** argv) {
             // With no control surface this box cannot be operated at all, so
             // this one IS fatal — systemd will restart it, which is the right
             // response to a port that was briefly still held by a dying copy.
+            rosstalk.stop();
             resume.stop();
             player.stop();
             return 1;
@@ -220,6 +225,7 @@ int main(int argc, char** argv) {
 
     plog_info("shutting down");
     server.stop();
+    rosstalk.stop();
     resume.stop();
     player.stop();
     video->close();
