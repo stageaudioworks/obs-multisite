@@ -244,6 +244,14 @@ TimeInfo time_info() {
     return t;
 }
 
+bool system_clock_synchronized() {
+#ifdef __linux__
+    return time_info().ntp_synchronised;
+#else
+    return true;
+#endif
+}
+
 std::vector<std::string> available_timezones() {
     std::vector<std::string> out;
     if (have_command("timedatectl")) {

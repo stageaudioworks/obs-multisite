@@ -810,11 +810,17 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     set(MULTISITE_PLAYER_WEB_ROOT "${CMAKE_INSTALL_PREFIX}/share/multisite-player/web"
         CACHE STRING "Installed location of the operator interface")
 
-    add_executable(multisite-player
-        src/appliance/main.cpp
+    # The engine — everything the player is except its entry point and the
+    # Linux DRM/ALSA outputs — is a library, so a second program (the Mac
+    # player app, in its own repository) drives the same Player through the
+    # installed package as multisite::player_engine rather than copying it.
+    # multisite-player below is this library plus main.cpp and the outputs.
+    add_library(multisite_player_engine STATIC
         src/appliance/config.cpp
         src/appliance/log.cpp
         src/appliance/player.cpp
+        src/appliance/resume_state.cpp
+        src/appliance/resume_driver.cpp
         src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
@@ -834,12 +840,34 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/output_heads.cpp)
     # The HTTP server arrives through multisite_core: it is shared with the
     # relay and the OBS plugin's remote-control pages, so there is one copy.
-
-    target_link_libraries(multisite-player PRIVATE
+    # PUBLIC, because player.h and api.h expose core and cmaf types.
+    target_link_libraries(multisite_player_engine PUBLIC
         multisite_core multisite_s3 multisite_cmaf)
+    target_include_directories(multisite_player_engine PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/appliance>")
+    target_compile_definitions(multisite_player_engine PRIVATE
+        MULTISITE_PLAYER_VERSION="${MULTISITE_PLAYER_VERSION}")
+
+    # output_factory.cpp is here, not in the engine: the DRM/ALSA defines it
+    # switches on are this executable's, and the engine must stay free of them.
+    add_executable(multisite-player src/appliance/main.cpp
+                                    src/appliance/output_factory.cpp)
+    target_link_libraries(multisite-player PRIVATE multisite_player_engine)
     target_compile_definitions(multisite-player PRIVATE
-        MULTISITE_PLAYER_VERSION="${MULTISITE_PLAYER_VERSION}"
         MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
+
+    # What a player restores after a restart, and when that is too old. Here,
+    # not with the header-only appliance tests above: resume_state.cpp writes
+    # with POSIX rename-over semantics, and the player is never built on
+    # Windows, so neither is its test.
+    add_executable(test_resume_state tests/test_resume_state.cpp src/appliance/resume_state.cpp)
+    target_include_directories(test_resume_state PRIVATE src/appliance)
+    add_test(NAME resume_state COMMAND test_resume_state)
+
+    # The restore-after-restart order (resume_driver.h), pure.
+    add_executable(test_resume_driver tests/test_resume_driver.cpp)
+    target_link_libraries(test_resume_driver PRIVATE multisite_player_engine)
+    add_test(NAME resume_driver COMMAND test_resume_driver)
 
     # The preview re-encodes the same decoded frame to JPEG on every request,
     # so the encoder must be reusable across calls — otherwise the first frame
@@ -896,9 +924,10 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         pkg_check_modules(QRENCODE IMPORTED_TARGET libqrencode)
     endif()
     if(TARGET PkgConfig::QRENCODE)
-        target_link_libraries(multisite-player PRIVATE PkgConfig::QRENCODE)
-        target_compile_definitions(multisite-player PRIVATE
+        target_link_libraries(multisite_player_engine PRIVATE PkgConfig::QRENCODE)
+        target_compile_definitions(multisite_player_engine PRIVATE
             MULTISITE_HAVE_QRCODE=1)
+        set(MULTISITE_CORE_HAS_QRCODE TRUE)
         message(STATUS "player: QR code on the identity screen (libqrencode)")
     else()
         message(STATUS "player: no libqrencode — identity screen without a QR code")
@@ -912,9 +941,10 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         pkg_check_modules(FREETYPE IMPORTED_TARGET freetype2)
     endif()
     if(TARGET PkgConfig::FREETYPE)
-        target_link_libraries(multisite-player PRIVATE PkgConfig::FREETYPE)
-        target_compile_definitions(multisite-player PRIVATE
+        target_link_libraries(multisite_player_engine PRIVATE PkgConfig::FREETYPE)
+        target_compile_definitions(multisite_player_engine PRIVATE
             MULTISITE_HAVE_FREETYPE=1)
+        set(MULTISITE_CORE_HAS_FREETYPE TRUE)
         message(STATUS "player: anti-aliased splash text (freetype)")
     else()
         message(STATUS "player: no freetype — splash uses the built-in bitmap font")
@@ -1248,7 +1278,13 @@ option(MULTISITE_INSTALL_CORE "Install the core as a CMake package (for the head
 if(MULTISITE_INSTALL_CORE)
     include(GNUInstallDirs)
     include(CMakePackageConfigHelpers)
-    set(_core_incdir "${CMAKE_INSTALL_INCLUDEDIR}/multisite")
+    # Core headers and appliance headers live in sibling directories because
+    # appliance/log.h and core/log.h share a name, and the appliance headers
+    # reach the core as "../core/x.h". Bare-name includes of core headers
+    # (outpost) keep working: the core targets put include/multisite/core on
+    # the path.
+    set(_core_incdir "${CMAKE_INSTALL_INCLUDEDIR}/multisite/core")
+    set(_appliance_incdir "${CMAKE_INSTALL_INCLUDEDIR}/multisite/appliance")
     set(_core_cmakedir "${CMAKE_INSTALL_LIBDIR}/cmake/multisite_core")
 
     set(_core_targets multisite_core)
@@ -1265,10 +1301,20 @@ if(MULTISITE_INSTALL_CORE)
         set(MULTISITE_CORE_HAS_CMAF TRUE)
     endif()
     set(MULTISITE_CORE_HAS_MPP ${MULTISITE_MPP_FOUND})
+    set(MULTISITE_CORE_HAS_PLAYER_ENGINE FALSE)
+    if(TARGET multisite_player_engine)
+        set(MULTISITE_CORE_HAS_PLAYER_ENGINE TRUE)
+    endif()
+    if(NOT MULTISITE_CORE_HAS_QRCODE)
+        set(MULTISITE_CORE_HAS_QRCODE FALSE)
+    endif()
+    if(NOT MULTISITE_CORE_HAS_FREETYPE)
+        set(MULTISITE_CORE_HAS_FREETYPE FALSE)
+    endif()
 
-    # In the build tree the headers are found where they are; installed, they
-    # are all in one directory and included by bare name, exactly as the code
-    # in this repository already includes them.
+    # In the build tree the headers are found where they are; installed, the
+    # core's are in include/multisite/core and included by bare name, exactly
+    # as the code in this repository already includes them.
     foreach(_t IN LISTS _core_targets)
         get_target_property(_type ${_t} TYPE)
         if(NOT _type STREQUAL "INTERFACE_LIBRARY")
@@ -1286,6 +1332,21 @@ if(MULTISITE_INSTALL_CORE)
     if(TARGET multisite_cmaf)
         set_target_properties(multisite_cmaf PROPERTIES EXPORT_NAME cmaf)
         set_target_properties(ffmpeg_iface PROPERTIES EXPORT_NAME ffmpeg)
+    endif()
+
+    # The player engine: its own include directory (the build one was set in
+    # the appliance block; the loop above must not clear it), its headers, the
+    # JSON header they include as "../vendor/nlohmann/json.hpp", and the
+    # operator page the engine serves.
+    if(MULTISITE_CORE_HAS_PLAYER_ENGINE)
+        list(APPEND _core_targets multisite_player_engine)
+        set_target_properties(multisite_player_engine PROPERTIES EXPORT_NAME player_engine)
+        target_include_directories(multisite_player_engine PUBLIC
+            "$<INSTALL_INTERFACE:${_appliance_incdir}>")
+        file(GLOB _appliance_headers "${CMAKE_CURRENT_SOURCE_DIR}/src/appliance/*.h")
+        install(FILES ${_appliance_headers} DESTINATION ${_appliance_incdir})
+        install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src/vendor/nlohmann"
+                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/multisite/vendor")
     endif()
 
     install(TARGETS ${_core_targets} EXPORT multisite_coreTargets

@@ -43,6 +43,12 @@ struct TimeInfo {
 };
 TimeInfo time_info();
 
+// Whether the wall clock can be believed. A box with no RTC boots with
+// timesyncd's last saved time (about when it was shut down) until NTP lands;
+// anything that compares a stored wall time with "now" must wait for this.
+// Always true off Linux: the Mac has its own clock source.
+bool system_clock_synchronized();
+
 // Time zones the box knows about, for the picker. Read from the system's own
 // zone database rather than a list baked in here, which would go stale.
 std::vector<std::string> available_timezones();

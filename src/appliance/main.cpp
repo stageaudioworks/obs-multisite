@@ -13,6 +13,7 @@
 #include "log.h"
 #include "../core/log.h"
 #include "player.h"
+#include "resume_driver.h"
 #include "sysinfo.h"
 
 #include <atomic>
@@ -189,6 +190,9 @@ int main(int argc, char** argv) {
 
     Player player(cfg, *video, *audio, config_path);
     player.start();
+    // After start(), so the Player's controls exist; stopped before it.
+    ResumeKeeper resume(player, resume_state_path(config_path));
+    resume.start();
 
     HttpServer server(cfg.web_bind, cfg.web_port);
     server.set_static_root(web_root);
@@ -200,6 +204,7 @@ int main(int argc, char** argv) {
             // With no control surface this box cannot be operated at all, so
             // this one IS fatal — systemd will restart it, which is the right
             // response to a port that was briefly still held by a dying copy.
+            resume.stop();
             player.stop();
             return 1;
         }
@@ -215,6 +220,7 @@ int main(int argc, char** argv) {
 
     plog_info("shutting down");
     server.stop();
+    resume.stop();
     player.stop();
     video->close();
     audio->close();

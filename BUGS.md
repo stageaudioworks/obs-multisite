@@ -176,6 +176,33 @@ of a packed track must be full range, and the next user's click is on 4.
 
 ---
 
+### 9. Player::seek_to_media(0) is impossible — 0 is also its failure value
+
+**Status: open, not started.** Found in the 2026-10-17 review of the Mac-player
+resume work.
+
+**Symptom.** Asking the player to seek to media time 0 (the start of an event)
+logs "that moment cannot be played" and sets an error, though the start is
+valid. The resume restore avoids it by never seeking when the saved position is
+0; the operator's own seek bar cannot hit exactly 0 either.
+
+**Root cause.** `Player::seek_to_media` (`src/appliance/player.cpp`) treats
+`got == 0` from `DecoderSession::seek_to_media_ms` as "failed", but 0 is also
+the honest answer for the first moment of an event.
+
+**Next step.** Have the session report failure out of band (an optional or a
+bool plus the landed time), keep 0 as a valid landing, and test a seek to 0 on
+a recording.
+
+**The trap.** The zero-sentinel again (see the other entries that name it):
+do not patch it by special-casing 0 in the caller as the resume driver does;
+that hides it from every other caller. And `m_seek_target_ms` doubles as
+"a seek is pending", so a landing at 0 must not be read as "no seek".
+
+**Files:** `src/appliance/player.cpp`, `src/core/decoder_session.cpp`.
+
+---
+
 ## Recently landed (context, not action items)
 
 Resolved and released, or closed and waiting to be released. Full detail for
