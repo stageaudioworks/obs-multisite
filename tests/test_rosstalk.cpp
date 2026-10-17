@@ -43,22 +43,23 @@ int main() {
         auto c = parse_rosstalk_line("  CC   cue   sermon  ");
         CHECK(c.kind == RossCmd::Cue && c.arg == "sermon", "loose spacing and case");
         std::vector<Status::MarkerEntry> v = {mk(" Sermon", "a", 0, 600000)};
-        CHECK(find_cue_marker_ms(v, "sermon", 0) == 600000, "label trimmed, case-insensitive");
+        CHECK(find_cue_marker_ms(v, "sermon") == 600000, "label trimmed, case-insensitive");
     }
     {
         std::vector<Status::MarkerEntry> v = {mk("Sermon", "a", 0, 300000),
                                               mk("Sermon", "b", 0, 900000)};
-        CHECK(find_cue_marker_ms(v, "Sermon", 0) == 900000, "latest wins");
+        CHECK(find_cue_marker_ms(v, "Sermon") == 900000, "latest wins");
     }
     {
+        // at_media_ms -1 is "no programme position": no marker, whatever at_ms says.
         std::vector<Status::MarkerEntry> v = {mk("Sermon", "a", 5000000 + 120000, -1)};
-        CHECK(find_cue_marker_ms(v, "Sermon", 5000000) == 120000, "legacy at_ms minus started");
-        std::vector<Status::MarkerEntry> z = {mk("Sermon", "a", 0, -1)};
-        CHECK(find_cue_marker_ms(z, "Sermon", 5000000) == -1, "no position is skipped");
+        CHECK(find_cue_marker_ms(v, "Sermon") == -1, "-1 is no marker, not a wall-clock guess");
+        std::vector<Status::MarkerEntry> z = {mk("Sermon", "a", 0, -1), mk("Sermon", "b", 0, 5)};
+        CHECK(find_cue_marker_ms(z, "Sermon") == 5, "an unplaced one is skipped, a placed one found");
     }
     {
         std::vector<Status::MarkerEntry> v = {mk("Intro", "a", 0, 1000)};
-        CHECK(find_cue_marker_ms(v, "Sermon", 0) == -1, "missing");
+        CHECK(find_cue_marker_ms(v, "Sermon") == -1, "missing");
     }
     {
         CueProgress p; p.started_wall_ms = T0;
@@ -138,6 +139,33 @@ int main() {
         auto r = next_cue_step(TARGET, cs(true, false, false, 0, 110, TARGET - 30000), p,
                                T0 + 10001);
         CHECK(r == CueStep::Hold && p.outcome == "timed out", "wrong place: times out");
+    }
+    {
+        // The seek failed: seek_target_ms stays 0, the playhead where it was.
+        CueProgress p; p.started_wall_ms = T0;
+        auto r = cue_after_seek(TARGET, cs(true, false, false, 0, 100, 5000), p);
+        CHECK(r == CueStep::Hold && p.outcome == "cannot reach the marker" && p.pause_on_hold,
+              "failed seek: Hold at once, cannot reach the marker");
+        CueProgress q;
+        CHECK(cue_after_seek(TARGET, cs(true, false, false, TARGET, 100, 5000), q) == CueStep::Wait,
+              "seek pending: carry on");
+        CHECK(cue_after_seek(TARGET, cs(true, false, false, 0, 100, TARGET), q) == CueStep::Wait,
+              "seek already landed on the marker: carry on");
+        CueProgress z;
+        CHECK(cue_after_seek(0, cs(true, false, false, 0, 100, 1), z) == CueStep::Wait,
+              "marker at 0 landed at 1: carry on");
+    }
+    {
+        // Only a playing Player is paused by a Hold.
+        CueProgress p; p.started_wall_ms = T0;
+        next_cue_step(-1, cs(false, false, false, 0, 0), p, T0);
+        CHECK(p.outcome == "no such marker" && !p.pause_on_hold, "no marker from stopped: no pause");
+        CueProgress q; q.started_wall_ms = T0;
+        next_cue_step(TARGET, cs(false, false, false, 0, 0), q, T0 + 10001);
+        CHECK(q.outcome == "timed out" && !q.pause_on_hold, "timeout after a Stop: no pause");
+        CueProgress r; r.started_wall_ms = T0;
+        next_cue_step(-1, cs(true, false, false, 0, 1), r, T0);
+        CHECK(r.pause_on_hold, "no marker while playing: pause");
     }
     CHECK(seek_ms_for(0) == 1 && seek_ms_for(600000) == 600000, "seek_ms_for avoids 0");
     std::printf(g_fail ? "FAILED\n" : "all passed\n");

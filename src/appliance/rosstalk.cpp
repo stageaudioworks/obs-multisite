@@ -42,16 +42,13 @@ RossCommand parse_rosstalk_line(const std::string& line) {
 }
 
 long long find_cue_marker_ms(const std::vector<Status::MarkerEntry>& markers,
-                             const std::string& name, long long started_ms) {
+                             const std::string& name) {
     const std::string want = lower(trim(name));
     long long best = -1;
     for (const auto& m : markers) {
         if (lower(trim(m.label)) != want) continue;
-        long long pos;
-        if (m.at_media_ms >= 0) pos = m.at_media_ms;
-        else if (m.at_ms > 0) pos = m.at_ms - started_ms;
-        else continue;
-        best = std::max(best, pos);
+        if (m.at_media_ms < 0) continue;
+        best = std::max(best, m.at_media_ms);
     }
     return best;
 }
@@ -61,9 +58,12 @@ long long seek_ms_for(long long target_ms) { return target_ms == 0 ? 1 : target_
 CueStep next_cue_step(long long target_ms, const Status& now, CueProgress& p,
                       long long now_wall_ms) {
     if (p.hold_sent) return CueStep::Done;
-    if (target_ms < 0) { p.outcome = "no such marker"; return CueStep::Hold; }
+    if (target_ms < 0) {
+        p.outcome = "no such marker"; p.pause_on_hold = now.playing;
+        return CueStep::Hold;
+    }
     if (now_wall_ms - p.started_wall_ms > kCueGiveUpMs) {
-        p.outcome = "timed out";
+        p.outcome = "timed out"; p.pause_on_hold = now.playing;
         return CueStep::Hold;
     }
     const bool idle = !now.playing || now.paused;
@@ -79,7 +79,15 @@ CueStep next_cue_step(long long target_ms, const Status& now, CueProgress& p,
     long long off = now.playhead_ms - seek_ms_for(target_ms);
     if (now.frames_out > p.frames_at_clear && off <= kCueLandToleranceMs
         && off >= -kCueLandToleranceMs) {
-        p.outcome = "done";
+        p.outcome = "done"; p.pause_on_hold = now.playing;
+        return CueStep::Hold;
+    }
+    return CueStep::Wait;
+}
+
+CueStep cue_after_seek(long long target_ms, const Status& after, CueProgress& p) {
+    if (after.seek_target_ms == 0 && after.playhead_ms != seek_ms_for(target_ms)) {
+        p.outcome = "cannot reach the marker"; p.pause_on_hold = after.playing;
         return CueStep::Hold;
     }
     return CueStep::Wait;
