@@ -2425,7 +2425,6 @@ void Player::status(Status& out) const {
     const long long playing_at = m_playing_at_ms.load();
     out.playhead_ms = playing_at > 0 ? playing_at
                                      : (long long)sess->playhead_media_ms();
-    out.playhead_media_ms = (long long)sess->playhead_media_ms();
     // Never report past the end of a recording: once playback runs past the
     // last segment the playhead points at a position that does not exist.
     if (out.ended && out.end_ms > 0 && out.playhead_ms > out.end_ms)

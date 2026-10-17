@@ -8,13 +8,17 @@
 // The order is the point. seek_to_media() clears the hold (Player::seek_to_media
 // sets m_paused = false), so the Pause comes AFTER the Seek, never before. And a
 // Seek is sent once: it is not retried because the playhead looks far from the
-// target — a decoder still starting reads far from anything.
+// target — a decoder still starting reads far from anything. The Pause waits
+// for the Seek to land (Status::seek_target_ms clears on the first frame
+// delivered there): while held nothing is delivered, so a hold sent early
+// leaves the screen on a pre-seek frame while the page says "held at 10:00".
 #pragma once
 
 #include "player.h"
 #include "resume_state.h"
 
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -25,6 +29,9 @@ enum class ResumeStep { Pin, Seek, Pause, Wait, Done };
 
 struct ResumeProgress {            // owned by the caller, starts zeroed
     bool pinned_sent = false, seek_sent = false, pause_sent = false;
+    // The pin was observed on the saved event. Pinning from the saved config
+    // means pinned_sent never goes true, but the operator must still win.
+    bool pin_seen = false;
     long long started_wall_ms = 0; // 0: stamped on the first call
 };
 
@@ -55,9 +62,20 @@ constexpr long long kResumeHeartbeatMs = 10 * 1000;
 bool resume_should_write(long long now_wall_ms, long long last_write_wall_ms,
                          bool changed);
 
+// Waits for the wall clock to be trusted, so a saved timestamp is not judged
+// against a clock still at its last-shutdown value. Polls `synced`, sleeping
+// `step_ms` with `wait` (which returns false when asked to stop). True when
+// synchronised; false on timeout or stop. Pure, so the bound is testable.
+constexpr long long kResumeClockWaitMs = 30 * 1000;
+bool resume_wait_for_clock(const std::function<bool()>& synced,
+                           const std::function<bool(long long)>& wait,
+                           long long limit_ms = kResumeClockWaitMs,
+                           long long step_ms = 500);
+
 class ResumeKeeper {
 public:
-    ResumeKeeper(Player& player, std::string path);
+    ResumeKeeper(Player& player, std::string path,
+                 std::function<bool()> clock_synced = {});
     ~ResumeKeeper();
     // start() once, stop() any time (also without start()).
     void start();
@@ -66,6 +84,7 @@ public:
 private:
     void run();
     bool wait_ms(long long ms); // false when asked to stop
+    bool stopping();
     void restore(const ResumeState& saved);
     void save_loop();
 
@@ -75,6 +94,7 @@ private:
     std::mutex  m_mtx;
     std::condition_variable m_cv;
     bool        m_stop = false;
+    std::function<bool()> m_clock_synced;
 };
 
 } // namespace multisite_player

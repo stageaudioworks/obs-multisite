@@ -2,6 +2,7 @@
 #include "resume_driver.h"
 
 #include "log.h"
+#include "sysinfo.h"
 
 #include <chrono>
 
@@ -22,17 +23,22 @@ ResumeStep next_resume_step(const ResumeState& saved, const Status& now,
 
     if (resume_gave_up(p, now_wall_ms)) return ResumeStep::Done;
 
+    if (saved.pinned && now.pinned_event_id == saved.event_id) p.pin_seen = true;
+
+    // The operator chose something else after the pin took (ours or the
+    // config's): theirs wins, and we neither re-pin nor seek.
+    if ((p.pinned_sent || p.pin_seen) && now.pinned_event_id != saved.event_id)
+        return ResumeStep::Done;
+
     // The pinned event is also a saved setting, so the box is often already on
     // it; pinning again would rebuild the session for nothing.
-    if (saved.pinned && !p.pinned_sent && now.pinned_event_id != saved.event_id) {
+    if (saved.pinned && !p.pinned_sent && !p.pin_seen &&
+        now.pinned_event_id != saved.event_id) {
         p.pinned_sent = true;
         return ResumeStep::Pin;
     }
 
     if (now.loading || now.event_id != saved.event_id) {
-        // The operator chose something else while we waited: theirs wins.
-        if (p.pinned_sent && now.pinned_event_id != saved.event_id)
-            return ResumeStep::Done;
         // Unpinned, and the room is on a different event than it was: it moved
         // on, so follow it rather than drag it back.
         if (!saved.pinned && !now.loading && !now.event_id.empty() &&
@@ -41,7 +47,15 @@ ResumeStep next_resume_step(const ResumeState& saved, const Status& now,
         return ResumeStep::Wait;
     }
 
-    if (!p.seek_sent) { p.seek_sent = true; return ResumeStep::Seek; }
+    if (!p.seek_sent) {
+        p.seek_sent = true;
+        // Held at the very start: a just-pinned event already begins there, and
+        // Player::seek_to_media(0) reads as its own failure (BUGS #4).
+        if (saved.media_ms > 0) return ResumeStep::Seek;
+    }
+    // Landing is the first delivered frame at the target; a hold before that
+    // would keep the frame from ever arriving. Bounded by the give-up above.
+    if (now.seek_target_ms != 0 && !p.pause_sent) return ResumeStep::Wait;
     if (saved.paused && !p.pause_sent) { p.pause_sent = true; return ResumeStep::Pause; }
     return ResumeStep::Done;
 }
@@ -56,8 +70,21 @@ bool resume_should_write(long long now_wall_ms, long long last_write_wall_ms,
     return changed || now_wall_ms - last_write_wall_ms >= kResumeHeartbeatMs;
 }
 
-ResumeKeeper::ResumeKeeper(Player& player, std::string path)
-    : m_player(player), m_path(std::move(path)) {}
+bool resume_wait_for_clock(const std::function<bool()>& synced,
+                           const std::function<bool(long long)>& wait,
+                           long long limit_ms, long long step_ms) {
+    for (long long waited = 0;; waited += step_ms) {
+        if (synced()) return true;
+        if (waited >= limit_ms) return false;
+        if (!wait(step_ms)) return false;
+    }
+}
+
+ResumeKeeper::ResumeKeeper(Player& player, std::string path,
+                           std::function<bool()> clock_synced)
+    : m_player(player), m_path(std::move(path)),
+      m_clock_synced(clock_synced ? std::move(clock_synced)
+                                  : std::function<bool()>(system_clock_synchronized)) {}
 
 ResumeKeeper::~ResumeKeeper() { stop(); }
 
@@ -75,6 +102,11 @@ void ResumeKeeper::stop() {
     if (m_thread.joinable()) m_thread.join();
 }
 
+bool ResumeKeeper::stopping() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_stop;
+}
+
 bool ResumeKeeper::wait_ms(long long ms) {
     std::unique_lock<std::mutex> lk(m_mtx);
     m_cv.wait_for(lk, std::chrono::milliseconds(ms), [this] { return m_stop; });
@@ -86,14 +118,28 @@ bool ResumeKeeper::wait_ms(long long ms) {
 // the restore leaves the old file for the next start.
 void ResumeKeeper::run() {
     ResumeState saved;
-    if (load_resume_state(m_path, saved)) {
-        if (!resume_is_fresh(saved, wall_ms())) {
+    if (load_resume_state(m_path, saved) && resume_worth_restoring(saved)) {
+        // With no RTC the clock at boot is timesyncd's saved one, about when the
+        // box was shut down: a file from last week would read seconds old.
+        // Judge freshness only once the clock is trusted; if it never is, follow
+        // live.
+        const bool trusted = resume_wait_for_clock(
+            m_clock_synced, [this](long long ms) { return wait_ms(ms); });
+        if (!trusted) {
+            if (!stopping())
+                plog_warn("resume: ignoring %s — the clock was not synchronised "
+                          "within 30 s, so its age cannot be judged; following "
+                          "live as configured", m_path.c_str());
+        } else if (!resume_is_fresh(saved, wall_ms())) {
             plog_info("resume: ignoring %s — saved more than 30 minutes ago, "
                       "following live as configured", m_path.c_str());
-        } else if (resume_worth_restoring(saved)) {
+        } else {
             restore(saved);
         }
     }
+    // Stopped mid-restore: the first pass of save_loop writes at once, which
+    // would replace a good file with a half-restored state.
+    if (stopping()) return;
     save_loop();
 }
 
@@ -157,7 +203,7 @@ void ResumeKeeper::save_loop() {
                 s.event_id = st.event_id;
                 s.pinned = pinned;
                 s.paused = st.paused;
-                s.media_ms = st.playhead_media_ms;
+                s.media_ms = st.playhead_ms;   // the delivered frame, not the download head
                 s.saved_wall_ms = now;
                 std::string err;
                 if (!save_resume_state(m_path, s, err))
