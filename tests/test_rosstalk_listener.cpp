@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <functional>
 #include <thread>
+#include <vector>
 
 using namespace multisite_player;
 using Clock = std::chrono::steady_clock;
@@ -104,6 +105,42 @@ int main() {
         CHECK(r.listener.state().last_text == "CC HOLD" &&
               r.listener.state().last_result == "done",
               "newest wins: the cancelled cue leaves the HOLD result alone");
+    }
+    {
+        // Lock is for the web page: a cue from ProPresenter still runs.
+        Rig r;
+        r.player.set_locked(true);
+        r.send("CC CUE Sermon\n");
+        CHECK(wait_for([&] { return r.listener.state().last_result == "no such marker"; }, 1000),
+              "locked: a CUE is still taken");
+        CHECK(r.player.locked(), "locked: and the Lock is untouched");
+    }
+    {
+        // More than 8 clients: the 9th is closed at once, the first 8 are served.
+        Rig r;
+        std::vector<int> fds;
+        for (int i = 0; i < 8; ++i) fds.push_back(r.connect());
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        int ninth = r.connect();
+        char b;
+        timeval tv{2, 0}; ::setsockopt(ninth, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        CHECK(::recv(ninth, &b, 1, 0) == 0, "client cap: the ninth connection is closed at once");
+        ::send(fds[0], "CC PLAY\n", 8, 0);
+        CHECK(wait_for([&] { return r.listener.state().commands_seen == 1; }),
+              "client cap: the first eight still work");
+        for (int f : fds) ::close(f);
+        ::close(ninth);
+    }
+    {
+        // An over-long line is dropped to its newline, not parsed from the middle.
+        Rig r;
+        std::string junk(8192, 'A');
+        junk += "CC HOLD\nCC PLAY\n";
+        r.send(junk.c_str());
+        CHECK(wait_for([&] { return r.listener.state().last_text == "CC PLAY"; }),
+              "over-long line: the next line is taken");
+        CHECK(r.listener.state().commands_seen == 1,
+              "over-long line: its tail was not run as a command");
     }
     {
         int blocker = ::socket(AF_INET, SOCK_STREAM, 0);

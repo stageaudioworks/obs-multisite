@@ -9,6 +9,7 @@
 #pragma once
 
 #include "player.h"
+#include "rosstalk.h"
 
 #include <atomic>
 #include <mutex>
@@ -36,13 +37,15 @@ public:
     int bound_port() const { return m_bound_port.load(); }   // 0 = not bound
 
 private:
-    struct Client { int fd; std::string buf; };
+    static constexpr size_t kMaxClients = 8;   // a further accept is closed at once
+    struct Client { int fd; std::string buf; bool discarding; };
     void io_loop();
     void reconcile(Config cfg, std::string& bound_bind, int& bound_cfg_port, int& listen_fd,
                    std::vector<Client>& clients);
     void handle_line(const std::string& line);
     void cancel_cue();
     void run_cue(long long target_ms);
+    void finish_cue(CueProgress& p);
 
     Player& m_player;
     mutable std::mutex m_mtx;    // m_state

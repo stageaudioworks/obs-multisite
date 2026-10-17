@@ -101,7 +101,8 @@ void RossTalkListener::io_loop() {
         if (listen_fd >= 0) {
             if (fds[i++].revents & POLLIN) {
                 int c = ::accept(listen_fd, nullptr, nullptr);
-                if (c >= 0) clients.push_back({c, {}});
+                if (c >= 0 && clients.size() >= kMaxClients) ::close(c);
+                else if (c >= 0) clients.push_back({c, {}, false});
             }
         }
         // The new client (if any) is past the end of fds; it is polled next time round.
@@ -114,12 +115,17 @@ void RossTalkListener::io_loop() {
                 c.buf.append(tmp, (size_t)n);
                 size_t nl;
                 while ((nl = c.buf.find('\n')) != std::string::npos) {
-                    handle_line(c.buf.substr(0, nl));
+                    // The end of an over-long line is not a command either.
+                    if (!c.discarding) handle_line(c.buf.substr(0, nl));
+                    c.discarding = false;
                     c.buf.erase(0, nl + 1);
                 }
-                if (c.buf.size() > 4096) c.buf.clear();   // not RossTalk; do not grow without end
+                if (c.buf.size() > 4096) {                 // not RossTalk; do not grow without end
+                    c.buf.clear();
+                    c.discarding = true;                   // ...and drop the rest of this line
+                }
             } else {
-                if (!c.buf.empty()) handle_line(c.buf);    // final unterminated line
+                if (!c.buf.empty() && !c.discarding) handle_line(c.buf);   // final unterminated line
                 ::close(c.fd); c.fd = -1;
             }
         }
@@ -141,7 +147,7 @@ void RossTalkListener::handle_line(const std::string& line) {
     if (cmd.kind == RossCmd::Unknown) result = "unknown command";
     else if (cmd.kind == RossCmd::Cue) {
         Status st; m_player.status(st);
-        target = find_cue_marker_ms(st.markers, cmd.arg, st.started_ms);   // once, not per tick
+        target = find_cue_marker_ms(st.markers, cmd.arg);   // once, not per tick
         result = "cueing";
     } else if (cmd.kind == RossCmd::Play) {
         Status st; m_player.status(st);
@@ -173,20 +179,28 @@ void RossTalkListener::run_cue(long long target_ms) {
         case CueStep::Start:
             if (st.paused) m_player.resume(); else m_player.play();
             break;
-        case CueStep::Seek: m_player.seek_to_media(seek_ms_for(target_ms)); break;
+        case CueStep::Seek: {
+            m_player.seek_to_media(seek_ms_for(target_ms));
+            Status after; m_player.status(after);        // same tick: did the seek take?
+            if (cue_after_seek(target_ms, after, p) == CueStep::Hold) finish_cue(p);
+            break;
+        }
         case CueStep::Hold:
-            m_player.pause();
-            p.hold_sent = true;
-            if (!m_cue_cancel) {
-                std::lock_guard<std::mutex> lk(m_mtx);
-                m_state.last_result = p.outcome;
-                m_cue_pending = false;
-            }
+            finish_cue(p);
             break;
         case CueStep::Done: return;
         case CueStep::Wait: break;
         }
     }
+}
+
+void RossTalkListener::finish_cue(CueProgress& p) {
+    if (p.pause_on_hold) m_player.pause();
+    p.hold_sent = true;
+    if (m_cue_cancel) return;
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_state.last_result = p.outcome;
+    m_cue_pending = false;
 }
 
 } // namespace multisite_player

@@ -881,6 +881,12 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_link_libraries(test_rosstalk_listener PRIVATE multisite_player_engine)
     add_test(NAME rosstalk_listener COMMAND test_rosstalk_listener)
 
+    # RossTalk's part of the JSON API: the status "rosstalk" object and the
+    # bind/port rules PUT /api/config applies.
+    add_executable(test_rosstalk_api tests/test_rosstalk_api.cpp)
+    target_link_libraries(test_rosstalk_api PRIVATE multisite_player_engine)
+    add_test(NAME rosstalk_api COMMAND test_rosstalk_api)
+
     # The preview re-encodes the same decoded frame to JPEG on every request,
     # so the encoder must be reusable across calls — otherwise the first frame
     # is the only one that ever arrives.
