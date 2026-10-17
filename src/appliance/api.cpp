@@ -494,7 +494,8 @@ std::string player_status_json(const Player& player) {
     return status_json(player).dump();
 }
 
-void register_api(HttpServer& server, Player& player, std::string config_path) {
+void register_api(HttpServer& server, Player& player, std::string config_path,
+                  ApiCapabilities caps) {
 
     // ── Status ───────────────────────────────────────────────────────────────
     server.route("GET", "/api/status", [&player](const HttpRequest&,
@@ -628,9 +629,15 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         res.json(json{{"providers", list}}.dump());
     });
 
-    server.route("GET", "/api/config", [&player](const HttpRequest&,
-                                                 HttpResponse& res) {
-        res.json(config_json(player.config()).dump());
+    server.route("GET", "/api/config", [&player, caps](const HttpRequest&,
+                                                       HttpResponse& res) {
+        json out = config_json(player.config());
+        out["capabilities"] = {
+            {"aes67", caps.aes67}, {"remote_access", caps.remote_access},
+            {"clock", caps.clock}, {"power", caps.power},
+            {"sd_card", caps.sd_card}, {"auto_screen", caps.auto_screen},
+        };
+        res.json(out.dump());
     });
 
     server.route("PUT", "/api/config", [&player, config_path](

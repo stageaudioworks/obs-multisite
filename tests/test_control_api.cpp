@@ -12,6 +12,16 @@
 // silently orphans a client's button.
 #include "../src/core/control_api.h"
 
+#ifdef MULTISITE_WITH_PLAYER
+#  include "../src/appliance/api.h"
+#  include "../src/appliance/audio_output.h"
+#  include "../src/appliance/video_output.h"
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
+
 #include <cstdio>
 #include <iterator>
 #include <set>
@@ -47,6 +57,43 @@ bool well_formed(const std::string& s) {
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') return false;
     return true;
 }
+
+#ifdef MULTISITE_WITH_PLAYER
+// GET /api/config over loopback; returns the whole response text.
+std::string get_config(int port) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(fd, (sockaddr*)&a, sizeof(a)) != 0) { ::close(fd); return ""; }
+    const std::string req =
+        "GET /api/config HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    ::send(fd, req.data(), req.size(), 0);
+    std::string out;
+    char buf[4096];
+    for (long n; (n = ::recv(fd, buf, sizeof(buf), 0)) > 0;) out.append(buf, (size_t)n);
+    ::close(fd);
+    return out;
+}
+
+// What /api/config says about the box, for a given set of capabilities.
+std::string config_with(const multisite_player::ApiCapabilities& caps) {
+    multisite_player::NullVideoOutput video;
+    multisite_player::NullAudioOutput audio;
+    multisite_player::Player player(multisite_player::Config{}, video, audio);
+    for (int port = 38400; port < 38440; ++port) {
+        HttpServer server("127.0.0.1", port);
+        multisite_player::register_api(server, player, "", caps);
+        std::string err;
+        if (!server.start(err)) continue;
+        const std::string body = get_config(port);
+        server.stop();
+        return body;
+    }
+    return "";
+}
+#endif
 
 } // namespace
 
@@ -98,6 +145,20 @@ int main() {
           "api_path of nothing is still a path");
     CHECK(api_path("encoder/go-live") == "/api/encoder/go-live",
           "api_path leaves the name intact");
+
+#ifdef MULTISITE_WITH_PLAYER
+    // ── The settings page learns what this box has ──────────────────────────
+    const std::string all = config_with({});
+    CHECK(all.find("\"capabilities\":{\"aes67\":true,\"auto_screen\":true,"
+                   "\"clock\":true,\"power\":true,\"remote_access\":true,"
+                   "\"sd_card\":true}") != std::string::npos,
+          "default capabilities are all true (the Pi, unchanged)");
+    const std::string none = config_with({false, false, false, false, false, false});
+    CHECK(none.find("\"capabilities\":{\"aes67\":false,\"auto_screen\":false,"
+                    "\"clock\":false,\"power\":false,\"remote_access\":false,"
+                    "\"sd_card\":false}") != std::string::npos,
+          "cleared capabilities are all false");
+#endif
 
     if (g_fail) {
         std::printf("control api: %d failure(s)\n", g_fail);

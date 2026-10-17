@@ -24,10 +24,18 @@
 
 namespace multisite_player {
 
+// What this box has, so the shared settings page shows only what applies.
+// All true is the Pi, unchanged; another platform clears what it lacks.
+struct ApiCapabilities {
+    bool aes67 = true, remote_access = true, clock = true, power = true,
+         sd_card = true;
+    bool auto_screen = true;   // "" connector means "first connected screen"
+};
+
 // Registers every route on `server`. `config_path` is where edited settings
 // are written back to.
 void register_api(multisite::HttpServer& server, Player& player,
-                  std::string config_path);
+                  std::string config_path, ApiCapabilities caps = {});
 
 // The status document as text — the same object the page polls, for the
 // monitoring heartbeat to filter and send.

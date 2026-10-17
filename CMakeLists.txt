@@ -850,6 +850,11 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
 
     # output_factory.cpp is here, not in the engine: the DRM/ALSA defines it
     # switches on are this executable's, and the engine must stay free of them.
+    # test_control_api also checks /api/config's capabilities against a real
+    # Player, so where the engine exists it links it.
+    target_link_libraries(test_control_api PRIVATE multisite_player_engine)
+    target_compile_definitions(test_control_api PRIVATE MULTISITE_WITH_PLAYER)
+
     add_executable(multisite-player src/appliance/main.cpp
                                     src/appliance/output_factory.cpp)
     target_link_libraries(multisite-player PRIVATE multisite_player_engine)

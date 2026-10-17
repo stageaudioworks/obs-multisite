@@ -441,7 +441,7 @@
 
     </details>
 
-    <details class="settings-section">
+    <details class="settings-section" data-cap="remote_access">
     <summary>Remote access</summary>
     <p class="hint">
       How this box can be reached from outside the building, so a setting can
@@ -503,7 +503,7 @@
     </div>
     </details>
 
-    <details class="settings-section">
+    <details class="settings-section" data-cap="aes67">
     <summary>Network audio output</summary>
     <div class="field">
       <label for="c-aes67-on">Put the sound on the network</label>
@@ -572,6 +572,7 @@
       they cost nothing.</p>
   </div>
 
+  <div data-cap="clock">
   <h2>Clock</h2>
   <div class="row">
     <label for="s-tz">Time zone</label>
@@ -590,14 +591,18 @@
     <button id="btn-settime">Set the clock from this device</button>
     <span class="hint">Only works with network time off.</span>
   </div>
+  </div>
 
+  <div data-cap="remote_access">
   <h2>Remote access</h2>
   <dl class="facts" id="remote-facts"></dl>
   <p class="hint">
     Set these up under Settings. The address here is the one printed on the
     screen as the remote access address.
   </p>
+  </div>
 
+  <div data-cap="aes67">
   <h2>Network audio output</h2>
   <dl class="facts" id="aes67-facts"></dl>
   <p class="hint" id="aes67-hint"></p>
@@ -610,12 +615,15 @@
     </p>
     <pre class="log" id="aes67-sdp"></pre>
   </details>
+  </div>
 
+  <div data-cap="power">
   <h2>Power</h2>
   <div class="row">
     <button id="btn-restart">Restart the player</button>
     <button id="btn-reboot" class="danger">Reboot the box</button>
     <button id="btn-shutdown" class="danger">Shut down</button>
+  </div>
   </div>
 </section>
 

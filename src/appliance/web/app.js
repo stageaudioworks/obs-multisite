@@ -611,8 +611,20 @@ async function refreshCloudStorageFacts() {
   }
 }
 
+// What this box can do, from /api/config. A box that sends nothing (an older
+// engine) is treated as having everything, so the Pi page is unchanged.
+const capOn = (name) => !(settings && settings.capabilities &&
+                          settings.capabilities[name] === false);
+
+function applyCapabilities() {
+  document.querySelectorAll('[data-cap]').forEach((el) => {
+    el.hidden = !capOn(el.dataset.cap);
+  });
+}
+
 async function loadSettings() {
   settings = await api('GET', '/api/config');
+  applyCapabilities();
   const set = (sel, value) => { const el = $(sel); if (el) el.value = value; };
   set('#c-room', settings.room_id);
   set('#c-site', settings.site_name || '');
@@ -690,7 +702,8 @@ async function loadOutputChoices() {
     const outputs = await api('GET', '/api/outputs');
     audioDeviceLocked = !!outputs.audio_device_locked;
     const disp = $('#c-display');
-    disp.innerHTML = '<option value="">First connected screen</option>' +
+    disp.innerHTML = `<option value="">${
+      capOn('auto_screen') ? 'First connected screen' : 'No output screen'}</option>` +
       (outputs.displays || []).map((d) =>
         `<option value="${escapeHtml(d.connector)}"${
           d.connector === settings.connector ? ' selected' : ''}>
@@ -1206,7 +1219,7 @@ async function loadSystem() {
   // about alongside how hard the box is working, and it read as two facts.
   if (s.disk && s.disk.total_bytes)
     add('Cache disk', `${bytes(s.disk.free_bytes)} free of ${bytes(s.disk.total_bytes)}` +
-        (s.disk.is_sd_card ? ' — this is the SD card' : ''));
+        (s.disk.is_sd_card && capOn('sd_card') ? ' — this is the SD card' : ''));
   $('#facts').innerHTML = rows.join('');
   drawPerformance(s);
 
@@ -1215,7 +1228,7 @@ async function loadSystem() {
   const warnings = [];
   if (s.under_voltage) warnings.push('The power supply is not keeping up.');
   if (s.throttled) warnings.push('The box is running hot and slowing itself down.');
-  if (s.disk && s.disk.is_sd_card)
+  if (s.disk && s.disk.is_sd_card && capOn('sd_card'))
     warnings.push('The cache is on the SD card, which it will wear out. ' +
                   'Move it to a USB SSD.');
   if (s.disk && s.disk.health === 'critical')
