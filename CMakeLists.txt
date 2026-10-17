@@ -846,7 +846,10 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_compile_definitions(multisite_player_engine PRIVATE
         MULTISITE_PLAYER_VERSION="${MULTISITE_PLAYER_VERSION}")
 
-    add_executable(multisite-player src/appliance/main.cpp)
+    # output_factory.cpp is here, not in the engine: the DRM/ALSA defines it
+    # switches on are this executable's, and the engine must stay free of them.
+    add_executable(multisite-player src/appliance/main.cpp
+                                    src/appliance/output_factory.cpp)
     target_link_libraries(multisite-player PRIVATE multisite_player_engine)
     target_compile_definitions(multisite-player PRIVATE
         MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
@@ -1294,9 +1297,9 @@ if(MULTISITE_INSTALL_CORE)
         set(MULTISITE_CORE_HAS_FREETYPE FALSE)
     endif()
 
-    # In the build tree the headers are found where they are; installed, they
-    # are all in one directory and included by bare name, exactly as the code
-    # in this repository already includes them.
+    # In the build tree the headers are found where they are; installed, the
+    # core's are in include/multisite/core and included by bare name, exactly
+    # as the code in this repository already includes them.
     foreach(_t IN LISTS _core_targets)
         get_target_property(_type ${_t} TYPE)
         if(NOT _type STREQUAL "INTERFACE_LIBRARY")
