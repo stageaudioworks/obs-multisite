@@ -48,7 +48,7 @@ private:
     mutable std::mutex m_mtx;    // m_state
     RossTalkState m_state;
     std::atomic<int> m_bound_port{0};
-    std::atomic<bool> m_stop{false}, m_cue_cancel{false};
+    std::atomic<bool> m_stop{false}, m_cue_cancel{false}, m_cue_pending{false};
     std::thread m_io, m_cue;     // m_cue is touched only from the io thread and stop()
 };
 

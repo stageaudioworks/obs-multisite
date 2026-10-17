@@ -79,6 +79,16 @@ int main() {
               "unknown command is reported and nothing else happens");
     }
     {
+        // A stray line must not cancel a cue in flight, nor hide its outcome.
+        Rig r;
+        r.send("CC CUE x\nCC JUMP\n");
+        CHECK(wait_for([&] { return r.listener.state().commands_seen == 2; }),
+              "unknown during a cue: both lines counted");
+        CHECK(wait_for([&] { return r.listener.state().last_result == "no such marker"; }, 1000),
+              "unknown during a cue: the cue still finishes and its outcome stands");
+        CHECK(r.listener.state().last_text == "CC JUMP", "unknown during a cue: last_text is the stray line");
+    }
+    {
         Rig r;
         r.send("CC CUE Sermon\n");
         CHECK(wait_for([&] { return r.listener.state().last_result == "no such marker"; }, 1000),
@@ -109,10 +119,16 @@ int main() {
         ::close(blocker);
     }
     {
-        Rig r(0, false);
+        Config d;
+        CHECK(!d.rosstalk_enabled && d.rosstalk_bind == "127.0.0.1" && d.rosstalk_port == 7790,
+              "defaults: disabled, 127.0.0.1, 7790");
+        NullVideoOutput vout; NullAudioOutput aout;
+        Player player(Config(), vout, aout);   // no overrides: the real default
+        RossTalkListener l(player);
+        l.start();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        auto s = r.listener.state();
-        CHECK(r.listener.bound_port() == 0 && !s.enabled && s.error.empty(),
+        auto s = l.state();
+        CHECK(l.bound_port() == 0 && !s.enabled && s.error.empty(),
               "off by default: nothing bound");
     }
     {

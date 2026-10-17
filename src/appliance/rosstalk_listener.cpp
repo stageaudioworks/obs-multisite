@@ -134,7 +134,8 @@ void RossTalkListener::io_loop() {
 void RossTalkListener::handle_line(const std::string& line) {
     RossCommand cmd = parse_rosstalk_line(line);
     if (cmd.text.find_first_not_of(" \t") == std::string::npos) return;   // blank line
-    cancel_cue();                      // a newer command cancels a running cue first
+    // A newer CUE/PLAY/HOLD/LIVE cancels a running cue first; a stray line does not.
+    if (cmd.kind != RossCmd::Unknown) { cancel_cue(); m_cue_pending = false; }
     std::string result = "done";
     long long target = -1;
     if (cmd.kind == RossCmd::Unknown) result = "unknown command";
@@ -151,10 +152,12 @@ void RossTalkListener::handle_line(const std::string& line) {
         std::lock_guard<std::mutex> lk(m_mtx);
         ++m_state.commands_seen;
         m_state.last_text = cmd.text; m_state.last_at_ms = unix_ms();
-        m_state.last_result = result;
+        // An unknown line leaves a running cue's "cueing" (and later its outcome) alone.
+        if (cmd.kind != RossCmd::Unknown || !m_cue_pending) m_state.last_result = result;
     }
     if (cmd.kind == RossCmd::Cue) {
         m_cue_cancel = false;
+        m_cue_pending = true;
         m_cue = std::thread([this, target] { run_cue(target); });
     }
 }
@@ -163,6 +166,8 @@ void RossTalkListener::run_cue(long long target_ms) {
     CueProgress p;
     p.started_wall_ms = unix_ms();
     while (!m_cue_cancel && !m_stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (m_cue_cancel || m_stop) return;
         Status st; m_player.status(st);
         switch (next_cue_step(target_ms, st, p, unix_ms())) {
         case CueStep::Start:
@@ -175,12 +180,12 @@ void RossTalkListener::run_cue(long long target_ms) {
             if (!m_cue_cancel) {
                 std::lock_guard<std::mutex> lk(m_mtx);
                 m_state.last_result = p.outcome;
+                m_cue_pending = false;
             }
             break;
         case CueStep::Done: return;
         case CueStep::Wait: break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
