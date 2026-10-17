@@ -126,6 +126,32 @@ int main() {
         CHECK(slurp(path) == before, "file untouched, old secrets included");
     }
 
+    // No config file (or an unreadable one): the store's values still load, and a failed read still protects the store.
+    {
+        reset();
+        set_secret_store(mem_store());
+        g_mem["secret_access_key"] = "KEEP";
+        const std::string none = (dir / "missing.json").string();
+        Config c;
+        CHECK(!c.load(none, err) && c.secret_access_key == "KEEP", "no file: store values still load");
+        g_get_fails = true;
+        Config d;
+        d.load(none, err);
+        CHECK(has(err, "secret store unavailable"), "no file, failing store: says so");
+        g_get_fails = false;
+        d.bucket = "b";
+        CHECK(d.save(none, err) && g_mem["secret_access_key"] == "KEEP", "save after a failed read with no file keeps the store");
+        { std::ofstream(none) << "{not json"; }
+        reset(); set_secret_store(mem_store()); g_mem["lan_auth_token"] = "LAN";
+        Config e;
+        CHECK(!e.load(none, err) && has(err, "not valid JSON") && e.lan_auth_token == "LAN", "corrupt file: store values still load");
+        g_get_fails = true;
+        Config f; f.load(none, err);
+        g_get_fails = false;
+        f.save(none, err);
+        CHECK(g_mem["lan_auth_token"] == "LAN", "corrupt file, failed read, save: store kept");
+    }
+
     // No store: as before, secrets stay in the file.
     {
         reset();

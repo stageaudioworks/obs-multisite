@@ -80,9 +80,28 @@ void set_secret_store(SecretStore store) {
 
 bool Config::load(const std::string& path, std::string& error) {
     error.clear();
+    // Also on a missing or unreadable file: the store still has the secrets, and a failed read must
+    // mark them unread so a later save does not delete them.
+    auto read_store = [&] {
+        // Secrets the file no longer holds live in the host's store. A failed read leaves the field empty and says so.
+        bool failed = false;
+        if (const SecretStore st = secret_store(); st.get) {
+            for (auto [key, field] : { std::pair<const char*, std::string*>{"secret_access_key", &secret_access_key},
+                                       {"lan_auth_token", &lan_auth_token},
+                                       {"reporter_token", &reporter_token},
+                                       {"cloudflared_token", &cloudflared_token} }) {
+                if (!field->empty()) continue;   // older config: moves on next save
+                const bool ok = st.get(key, *field);
+                mark_unread(key, !ok);
+                if (!ok) { field->clear(); failed = true; }
+            }
+            if (failed) error += (error.empty() ? "" : "; ") + std::string("secret store unavailable");
+        }
+    };
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         // Not an error. A box with no config still boots and shows its splash.
+        read_store();
         return false;
     }
     std::stringstream ss;
@@ -93,10 +112,12 @@ bool Config::load(const std::string& path, std::string& error) {
         j = json::parse(ss.str());
     } catch (const std::exception& e) {
         error = std::string("config is not valid JSON: ") + e.what();
+        read_store();
         return false;
     }
     if (!j.is_object()) {
         error = "config is not a JSON object";
+        read_store();
         return false;
     }
 
@@ -181,22 +202,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "aes67_channels",       aes67_channels);
     take(j, "aes67_previous_device", aes67_previous_device);
 
-    // Secrets the file no longer holds live in the host's store. A failed read
-    // leaves the field empty and says so, without failing the rest.
-    if (const SecretStore st = secret_store(); st.get) {
-        for (auto [key, field] : { std::pair<const char*, std::string*>{"secret_access_key", &secret_access_key},
-                                   {"lan_auth_token", &lan_auth_token},
-                                   {"reporter_token", &reporter_token},
-                                   {"cloudflared_token", &cloudflared_token} }) {
-            if (!field->empty()) continue;   // older config: moves on next save
-            const bool ok = st.get(key, *field);
-            mark_unread(key, !ok);
-            if (!ok) {
-                field->clear();
-                error = "secret store unavailable";
-            }
-        }
-    }
+    read_store();
     return true;
 }
 
