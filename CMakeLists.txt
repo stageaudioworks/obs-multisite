@@ -754,11 +754,6 @@ add_executable(test_idle_keepalive tests/test_idle_keepalive.cpp)
 target_include_directories(test_idle_keepalive PRIVATE src/appliance)
 add_test(NAME idle_keepalive COMMAND test_idle_keepalive)
 
-# What a player restores after a restart, and when that is too old.
-add_executable(test_resume_state tests/test_resume_state.cpp src/appliance/resume_state.cpp)
-target_include_directories(test_resume_state PRIVATE src/appliance)
-add_test(NAME resume_state COMMAND test_resume_state)
-
 add_executable(test_alsa_stall tests/test_alsa_stall.cpp)
 target_include_directories(test_alsa_stall PRIVATE src/appliance)
 add_test(NAME alsa_stall COMMAND test_alsa_stall)
@@ -860,6 +855,14 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_link_libraries(multisite-player PRIVATE multisite_player_engine)
     target_compile_definitions(multisite-player PRIVATE
         MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
+
+    # What a player restores after a restart, and when that is too old. Here,
+    # not with the header-only appliance tests above: resume_state.cpp writes
+    # with POSIX rename-over semantics, and the player is never built on
+    # Windows, so neither is its test.
+    add_executable(test_resume_state tests/test_resume_state.cpp src/appliance/resume_state.cpp)
+    target_include_directories(test_resume_state PRIVATE src/appliance)
+    add_test(NAME resume_state COMMAND test_resume_state)
 
     # The restore-after-restart order (resume_driver.h), pure.
     add_executable(test_resume_driver tests/test_resume_driver.cpp)
