@@ -913,7 +913,8 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     # Several screens from one player: which controller drives which screen,
     # what each screen is called, and the outputs setting's round trip.
     add_executable(test_output_heads tests/test_output_heads.cpp
-                   src/appliance/output_heads.cpp src/appliance/config.cpp)
+                   src/appliance/output_heads.cpp src/appliance/config.cpp
+                   src/appliance/log.cpp)
     target_include_directories(test_output_heads PRIVATE src/appliance src/core)
     add_test(NAME output_heads COMMAND test_output_heads)
 

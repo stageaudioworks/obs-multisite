@@ -10,6 +10,7 @@
 // alsa_output.cpp is compiled only where ALSA exists, so a test that needed the
 // hardware would not run on the laptop where the interface was written.
 #include "audio_levels.h"
+#include "audio_output.h"
 
 #include <cmath>
 #include <cstdint>
@@ -27,7 +28,41 @@ static bool near(float a, float b, float eps = 1e-6f) {
     return std::fabs(a - b) <= eps;
 }
 
+namespace {
+// Keeps every sample it is asked to write.
+struct CapturingOutput : AudioOutput {
+    std::vector<float> written;
+    bool open(const Config&, int, int, std::string&) override { return true; }
+    void close() override {}
+    bool ok() const override { return true; }
+    std::string description() const override { return "capture"; }
+    void write(const multisite::DecodedAudioFrame& f) override {
+        written.insert(written.end(), f.interleaved.begin(), f.interleaved.end());
+    }
+    double delay_s() const override { return 0; }
+    void flush() override {}
+    std::vector<AudioDevice> devices() const override { return {}; }
+};
+} // namespace
+
 int main() {
+    {
+        // The deliver path hands the card audible(); muted, it must be all zero
+        // and the same shape, and unmuted it must be the sound itself.
+        multisite::DecodedAudioFrame loud;
+        loud.sample_rate = 48000; loud.channels = 2; loud.frames = 4;
+        loud.interleaved = {0.5f, -0.5f, 0.25f, 1.0f, -1.0f, 0.1f, 0.2f, 0.3f};
+        CapturingOutput card;
+        multisite::DecodedAudioFrame scratch;
+        card.write(audible(loud, false, scratch));
+        bool zero = card.written.size() == loud.interleaved.size();
+        for (float s : card.written) if (s != 0.0f) zero = false;
+        CHECK(zero, "muted: every sample written to the card is zero, same length");
+        card.written.clear();
+        card.write(audible(loud, true, scratch));
+        CHECK(card.written == loud.interleaved, "unmuted: the card gets the sound as it is");
+    }
+
     // ── The window ───────────────────────────────────────────────────────────
     // A meter reports what happened since somebody last looked and then starts
     // again. A running maximum would be a bar that never falls, which is a meter

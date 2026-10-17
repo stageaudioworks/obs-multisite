@@ -618,11 +618,8 @@ private:
     // Said once per run, not once per discarded frame.
     std::atomic<bool> m_logged_audio_tracks{false};
     // "All tracks" (audio_track == -1): joins the tracks' frames into one wide
-    // frame. Used only from the decode thread (on_audio).
-    TrackMerger m_merger;
-    std::vector<int> m_merger_layout;
-    const void* m_merger_decoder = nullptr;
-    bool m_logged_merge_mismatch = false;
+    // frame. Pushed from the decode thread, cleared from teardown_decoder.
+    LockedTrackMerger m_merger;
     // Monotonic time of the last frame that reached the display. What
     // separates "playing" from "nothing is arriving", which is the difference
     // between leaving the picture alone and putting the splash back up.

@@ -30,6 +30,8 @@
 #include <mutex>
 #include <vector>
 
+#include "../core/cmaf_decoder.h"
+
 namespace multisite_player {
 
 // Why the bars read what they read, in words an operator can act on.
@@ -214,5 +216,35 @@ private:
     std::vector<float> m_peak;                       // guarded by m_mtx
     std::atomic<uint64_t> m_last_obs_ns{0};
 };
+
+// Muting no longer closes the card, so something still has to be handed over
+// every frame's worth of time or the card under-runs — and a card that has
+// under-run stops producing samples, which on this box is the same thing as the
+// AES67 stream going off the network. Silence of the frame's own shape keeps
+// the output running and everything downstream in step, and because the meter is
+// tapped where this is handed over, the bars fall exactly as they should.
+inline multisite::DecodedAudioFrame silence_like(
+        const multisite::DecodedAudioFrame& f) {
+    multisite::DecodedAudioFrame s;
+    s.sample_rate = f.sample_rate;
+    s.channels    = f.channels;
+    s.frames      = f.frames;
+    s.track_index = f.track_index;
+    s.pts_ns      = f.pts_ns;
+    const int ch = f.channels > 0 ? f.channels : 1;
+    s.interleaved.assign((size_t)f.frames * (size_t)ch, 0.0f);
+    return s;
+}
+
+// What the output is handed: the frame itself, or silence of its shape while
+// muted. `scratch` holds the silence; the one place this is decided, so the
+// card and the meter cannot disagree.
+inline const multisite::DecodedAudioFrame& audible(
+        const multisite::DecodedAudioFrame& f, bool enabled,
+        multisite::DecodedAudioFrame& scratch) {
+    if (enabled) return f;
+    scratch = silence_like(f);
+    return scratch;
+}
 
 } // namespace multisite_player

@@ -432,15 +432,16 @@
     <div class="field">
       <label for="c-audio-track">Track to play</label>
       <select id="c-audio-track" name="audio_track">
-        <option value="-1">All tracks</option>
+        <option value="-1" data-cap-on="all_tracks">All tracks</option>
         <option value="0">Track 0</option><option value="1">Track 1</option>
         <option value="2">Track 2</option><option value="3">Track 3</option>
         <option value="4">Track 4</option><option value="5">Track 5</option>
       </select>
       <p class="hint">
         OBS can publish six tracks and an event carries every one it was
-        given. This picks the one that goes to air, or &ldquo;All tracks&rdquo; plays
-        every track at once, each on its own channels (track 0 first).
+        given. This picks the one that goes to air<span data-cap-on="all_tracks">, or
+        &ldquo;All tracks&rdquo; plays every track at once, each on its own
+        channels (track 0 first)</span>.
       </p>
     </div>
 

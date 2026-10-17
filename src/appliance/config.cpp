@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "config.h"
 
+#include "log.h"
+
 #include "../vendor/nlohmann/json.hpp"
 
 #include <cstdio>
@@ -46,7 +48,15 @@ template <typename T>
 void take(const json& j, const char* key, T& out) {
     auto it = j.find(key);
     if (it != j.end() && !it->is_null()) {
-        try { out = it->get<T>(); } catch (...) { /* keep the default */ }
+        try { out = it->get<T>(); } catch (...) {
+            // Keep the default, but say so once: "false" in place of false
+            // would otherwise be a setting that silently does nothing.
+            static std::mutex m;
+            static std::set<std::string> warned;
+            std::lock_guard<std::mutex> lk(m);
+            if (warned.insert(key).second)
+                plog_warn("config: \"%s\" has the wrong type; keeping the default", key);
+        }
     }
 }
 

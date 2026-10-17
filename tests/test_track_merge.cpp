@@ -2,8 +2,10 @@
 // test_track_merge.cpp — several audio tracks become one wide frame.
 #include "track_merge.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 using multisite::DecodedAudioFrame;
 using multisite_player::TrackMerger;
@@ -111,6 +113,26 @@ int main() {
         m.push(frame(0, 1, 0));
         auto out = m.push(frame(1, 1, 0));
         CHECK(out.size() == 1 && out[0].pts_ns == 0, "after a reset nothing stale is flushed");
+    }
+    {
+        // The Player pushes from the decode thread while teardown clears from
+        // another. Run under TSan this is the race; without it, it must at
+        // least never crash or emit a frame of the wrong width.
+        multisite_player::LockedTrackMerger m;
+        const std::vector<int> layout{1, 1};
+        const int id = 0;
+        std::atomic<bool> done{false};
+        std::thread pusher([&] {
+            for (int n = 0; n < 2000; ++n) {
+                m.push(layout, &id, frame(0, 1, n));
+                for (auto& o : m.push(layout, &id, frame(1, 1, n)))
+                    if (o.channels != 2) { std::printf("  [FAIL] wrong width\n"); ++g_fail; }
+            }
+            done = true;
+        });
+        while (!done) m.clear();
+        pusher.join();
+        CHECK(g_fail == 0, "concurrent push and clear is safe");
     }
     std::printf(g_fail ? "FAILED\n" : "OK\n");
     return g_fail ? 1 : 0;

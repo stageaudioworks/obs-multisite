@@ -616,7 +616,14 @@ async function refreshCloudStorageFacts() {
 const capOn = (name) => !(settings && settings.capabilities &&
                           settings.capabilities[name] === false);
 
+// Things only some boxes offer (the Mac's "All tracks"): shown only when the
+// box says so, and removed rather than hidden because Safari ignores `hidden`
+// on a <select>'s options.
 function applyCapabilities() {
+  document.querySelectorAll('[data-cap-on]').forEach((el) => {
+    if (!(settings && settings.capabilities &&
+          settings.capabilities[el.dataset.capOn] === true)) el.remove();
+  });
   document.querySelectorAll('[data-cap]').forEach((el) => {
     el.hidden = !capOn(el.dataset.cap);
   });

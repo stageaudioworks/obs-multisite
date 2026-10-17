@@ -57,25 +57,6 @@ uint64_t retry_backoff_seconds(int failures) {
 
 // The same frame, with the sound taken out of it.
 //
-// Muting no longer closes the card, so something still has to be handed over
-// every frame's worth of time or the card under-runs — and a card that has
-// under-run stops producing samples, which on this box is the same thing as the
-// AES67 stream going off the network. Silence of the frame's own shape keeps
-// the output running and everything downstream in step, and because the meter is
-// tapped where this is handed over, the bars fall exactly as they should.
-multisite::DecodedAudioFrame silence_like(
-        const multisite::DecodedAudioFrame& f) {
-    multisite::DecodedAudioFrame s;
-    s.sample_rate = f.sample_rate;
-    s.channels    = f.channels;
-    s.frames      = f.frames;
-    s.track_index = f.track_index;
-    s.pts_ns      = f.pts_ns;
-    const int ch = f.channels > 0 ? f.channels : 1;
-    s.interleaved.assign((size_t)f.frames * (size_t)ch, 0.0f);
-    return s;
-}
-
 } // namespace
 
 const char* to_string(AudioState s) {
@@ -783,9 +764,7 @@ void Player::teardown_decoder() {
     // The decode thread is joined, so nothing is in on_audio: drop any half-merged
     // group, which carries the old event's pts, and forget the decoder (a new one
     // may be allocated at the old one's address).
-    m_merger.reset({}, 0);
-    m_merger_layout.clear();
-    m_merger_decoder = nullptr;
+    m_merger.clear();
     m_decoder_started = false;
     m_first_pts_ns = -1;
     m_logged_av_offset = false;
@@ -1019,15 +998,10 @@ void Player::on_audio(const DecodedAudioFrame& f) {
         if (!dec) return;
         const auto layout = dec->audio_track_channels();
         if (layout.empty()) return;
-        if (layout != m_merger_layout || dec.get() != m_merger_decoder) {
-            m_merger.reset(layout, f.sample_rate);
-            m_merger_layout = layout;
-            m_merger_decoder = dec.get();
-            m_logged_merge_mismatch = false;
-        }
-        for (auto& merged : m_merger.push(f)) queue_audio(merged);
-        if (m_merger.size_mismatches() && !m_logged_merge_mismatch) {
-            m_logged_merge_mismatch = true;
+        bool new_mismatch = false;
+        for (auto& merged : m_merger.push(layout, dec.get(), f, &new_mismatch))
+            queue_audio(merged);
+        if (new_mismatch) {
             plog_warn("audio tracks carry different frame lengths; the longer is cut");
         }
         return;
@@ -1586,18 +1560,11 @@ void Player::deliver_loop() {
             // network, closing the card takes the stream off air and receivers
             // drop it; writing silence leaves the stream up and silent, which is
             // what a mute is supposed to sound like.
-            if (cfg.audio_enabled) {
-                m_audio.write(item.audio);
-                m_meter.observe(item.audio.interleaved.data(), item.audio.frames,
-                                item.audio.channels, m_audio_opened_channels.load(),
-                                now_ns());
-            } else {
-                const multisite::DecodedAudioFrame quiet = silence_like(item.audio);
-                m_audio.write(quiet);
-                m_meter.observe(quiet.interleaved.data(), quiet.frames,
-                                quiet.channels, m_audio_opened_channels.load(),
-                                now_ns());
-            }
+            multisite::DecodedAudioFrame scratch;
+            const auto& heard = audible(item.audio, cfg.audio_enabled, scratch);
+            m_audio.write(heard);
+            m_meter.observe(heard.interleaved.data(), heard.frames, heard.channels,
+                            m_audio_opened_channels.load(), now_ns());
         }
     }
     plog_info("delivery stopped");

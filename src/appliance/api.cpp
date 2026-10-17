@@ -629,18 +629,24 @@ void register_api(HttpServer& server, Player& player, std::string config_path,
         res.json(json{{"providers", list}}.dump());
     });
 
-    server.route("GET", "/api/config", [&player, caps](const HttpRequest&,
-                                                       HttpResponse& res) {
+    // The config plus what this box has: GET and PUT answer the same, so the
+    // page never loses the capabilities by saving.
+    auto config_with_caps = [&player, caps]() {
         json out = config_json(player.config());
         out["capabilities"] = {
             {"aes67", caps.aes67}, {"remote_access", caps.remote_access},
             {"clock", caps.clock}, {"power", caps.power},
             {"sd_card", caps.sd_card}, {"auto_screen", caps.auto_screen},
+            {"all_tracks", caps.all_tracks},
         };
-        res.json(out.dump());
+        return out.dump();
+    };
+    server.route("GET", "/api/config", [config_with_caps](const HttpRequest&,
+                                                          HttpResponse& res) {
+        res.json(config_with_caps());
     });
 
-    server.route("PUT", "/api/config", [&player, config_path](
+    server.route("PUT", "/api/config", [&player, config_path, config_with_caps](
                                            const HttpRequest& req,
                                            HttpResponse& res) {
         json body;
@@ -660,7 +666,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path,
             res.json(json{{"error", "could not save settings: " + err}}.dump());
             return;
         }
-        res.json(config_json(player.config()).dump());
+        res.json(config_with_caps());
     });
 
     // ── Monitoring heartbeat pairing (device-code flow, TELEMETRY.md §4) ──

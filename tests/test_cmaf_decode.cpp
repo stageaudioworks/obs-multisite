@@ -38,6 +38,12 @@ static std::vector<uint8_t> readfile(const std::string& p) {
 }
 
 int main(int argc, char** argv) {
+    CHECK(native_sw_format_ok(AV_PIX_FMT_NV12) && native_sw_format_ok(AV_PIX_FMT_P010),
+          "8- and 10-bit 4:2:0 hardware frames are drawn natively");
+    CHECK(!native_sw_format_ok(AV_PIX_FMT_NV16) && !native_sw_format_ok(AV_PIX_FMT_YUV444P) &&
+          !native_sw_format_ok(AV_PIX_FMT_P210) && !native_sw_format_ok(AV_PIX_FMT_NONE),
+          "other VideoToolbox formats are copied back, not drawn natively");
+
     std::string init_path = argc > 1 ? argv[1] : "test-data/real_init.mp4";
     std::string seg_path  = argc > 2 ? argv[2] : "test-data/real_seg.m4s";
 

@@ -99,4 +99,29 @@ std::vector<DecodedAudioFrame> TrackMerger::push(const DecodedAudioFrame& f) {
     return out;
 }
 
+std::vector<DecodedAudioFrame> LockedTrackMerger::push(
+    const std::vector<int>& layout, const void* decoder,
+    const DecodedAudioFrame& f, bool* new_mismatch) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (layout != m_layout || decoder != m_decoder) {
+        m_merger.reset(layout, f.sample_rate);
+        m_layout = layout;
+        m_decoder = decoder;
+        m_logged_mismatch = false;
+    }
+    auto out = m_merger.push(f);
+    if (new_mismatch) {
+        *new_mismatch = m_merger.size_mismatches() && !m_logged_mismatch;
+        if (*new_mismatch) m_logged_mismatch = true;
+    }
+    return out;
+}
+
+void LockedTrackMerger::clear() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_merger.reset({}, 0);
+    m_layout.clear();
+    m_decoder = nullptr;
+}
+
 }  // namespace multisite_player

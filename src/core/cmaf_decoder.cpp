@@ -28,6 +28,11 @@ extern "C" {
 
 namespace multisite {
 
+bool native_sw_format_ok(int sw_format) {
+    return sw_format == AV_PIX_FMT_NV12 || sw_format == AV_PIX_FMT_P010;
+}
+
+
 // Monotonic, so a clock step cannot fool the wedge watchdog below.
 static int64_t mono_ms() {
     return (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -195,7 +200,9 @@ struct CmafDecoder::Impl {
 
         // A host that can draw a hardware frame takes it as it is: a clone
         // holds the CVPixelBuffer, which outlives this decoder.
-        if (native_frames && f->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        if (native_frames && f->format == AV_PIX_FMT_VIDEOTOOLBOX && f->hw_frames_ctx &&
+            native_sw_format_ok(
+                ((AVHWFramesContext*)f->hw_frames_ctx->data)->sw_format)) {
             AVFrame* keep = av_frame_clone(f);
             if (!keep) return;
             DecodedVideoFrame out;

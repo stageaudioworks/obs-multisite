@@ -60,15 +60,16 @@ bool well_formed(const std::string& s) {
 
 #ifdef MULTISITE_WITH_PLAYER
 // GET /api/config over loopback; returns the whole response text.
-std::string get_config(int port) {
+std::string get_config(int port, const char* method = "GET") {
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons((uint16_t)port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (::connect(fd, (sockaddr*)&a, sizeof(a)) != 0) { ::close(fd); return ""; }
-    const std::string req =
-        "GET /api/config HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    const std::string body = std::string(method) == "PUT" ? "{}" : "";
+    const std::string req = std::string(method) + " /api/config HTTP/1.1\r\nHost: x\r\n"
+        "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
     ::send(fd, req.data(), req.size(), 0);
     std::string out;
     char buf[4096];
@@ -78,16 +79,17 @@ std::string get_config(int port) {
 }
 
 // What /api/config says about the box, for a given set of capabilities.
-std::string config_with(const multisite_player::ApiCapabilities& caps) {
+std::string config_with(const multisite_player::ApiCapabilities& caps,
+                        const char* method = "GET") {
     multisite_player::NullVideoOutput video;
     multisite_player::NullAudioOutput audio;
     multisite_player::Player player(multisite_player::Config{}, video, audio);
     for (int port = 38400; port < 38440; ++port) {
         HttpServer server("127.0.0.1", port);
-        multisite_player::register_api(server, player, "", caps);
+        multisite_player::register_api(server, player, "/tmp/test_control_api_config.json", caps);
         std::string err;
         if (!server.start(err)) continue;
-        const std::string body = get_config(port);
+        const std::string body = get_config(port, method);
         server.stop();
         return body;
     }
@@ -149,15 +151,26 @@ int main() {
 #ifdef MULTISITE_WITH_PLAYER
     // ── The settings page learns what this box has ──────────────────────────
     const std::string all = config_with({});
-    CHECK(all.find("\"capabilities\":{\"aes67\":true,\"auto_screen\":true,"
+    CHECK(all.find("\"capabilities\":{\"aes67\":true,\"all_tracks\":false,\"auto_screen\":true,"
                    "\"clock\":true,\"power\":true,\"remote_access\":true,"
                    "\"sd_card\":true}") != std::string::npos,
           "default capabilities are all true (the Pi, unchanged)");
     const std::string none = config_with({false, false, false, false, false, false});
-    CHECK(none.find("\"capabilities\":{\"aes67\":false,\"auto_screen\":false,"
+    CHECK(none.find("\"capabilities\":{\"aes67\":false,\"all_tracks\":false,\"auto_screen\":false,"
                     "\"clock\":false,\"power\":false,\"remote_access\":false,"
                     "\"sd_card\":false}") != std::string::npos,
           "cleared capabilities are all false");
+    CHECK(all.find("\"all_tracks\":false") != std::string::npos,
+          "all_tracks is off by default (the Pi has no wide output)");
+    multisite_player::ApiCapabilities wide;
+    wide.all_tracks = true;
+    CHECK(config_with(wide).find("\"all_tracks\":true") != std::string::npos,
+          "all_tracks can be turned on");
+    const std::string saved = config_with(wide, "PUT");
+    CHECK(saved.find("200 OK") != std::string::npos &&
+          saved.find("\"capabilities\":{") != std::string::npos &&
+          saved.find("\"all_tracks\":true") != std::string::npos,
+          "saving settings answers with the capabilities too");
 #endif
 
     if (g_fail) {

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <mutex>
 #include <vector>
 
 namespace multisite_player {
@@ -40,6 +41,28 @@ private:
     int      m_width = 0;
     int64_t  m_newest = 0;
     uint64_t m_mismatches = 0;
+};
+
+// The Player's use of a TrackMerger: pushed from the decode thread (and the
+// detached wedged-decoder thread), cleared from the API/poll threads on a
+// teardown. One mutex covers the merger and what it was last set up for.
+class LockedTrackMerger {
+public:
+    // Re-sets up if the layout or the decoder (identity only, never
+    // dereferenced) changed, then pushes. `new_mismatch` is true once per
+    // setup, the first time frame lengths disagreed.
+    std::vector<multisite::DecodedAudioFrame> push(
+        const std::vector<int>& layout, const void* decoder,
+        const multisite::DecodedAudioFrame& f, bool* new_mismatch = nullptr);
+    // Drops a half-merged group and forgets the decoder.
+    void clear();
+
+private:
+    std::mutex       m_mtx;
+    TrackMerger      m_merger;
+    std::vector<int> m_layout;
+    const void*      m_decoder = nullptr;
+    bool             m_logged_mismatch = false;
 };
 
 }  // namespace multisite_player

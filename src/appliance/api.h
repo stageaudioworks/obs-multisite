@@ -30,6 +30,9 @@ struct ApiCapabilities {
     bool aes67 = true, remote_access = true, clock = true, power = true,
          sd_card = true;
     bool auto_screen = true;   // "" connector means "first connected screen"
+    // The output can carry every audio track at once (audio_track -1). Off by
+    // default: the Pi's stereo device cannot, so its page never offers it.
+    bool all_tracks = false;
 };
 
 // Registers every route on `server`. `config_path` is where edited settings

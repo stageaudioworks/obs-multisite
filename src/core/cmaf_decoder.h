@@ -58,6 +58,12 @@ using AudioFrameCallback = std::function<void(const DecodedAudioFrame&)>;
 // fixed string ("poll", "feed", "deliver", "aes67", "decode").
 using ThreadHook = std::function<void(const char* role)>;
 
+// Whether a hardware frame whose underlying pixel format is `sw_format` (an
+// AVPixelFormat) can be passed on as DecodedVideoFrame::native. A host draws
+// 8-bit and 10-bit 4:2:0 biplanar frames (NV12, P010); anything else a
+// VideoToolbox decoder produces (4:2:2, 4:4:4) goes the copy-back way.
+bool native_sw_format_ok(int sw_format);
+
 class CmafDecoder {
 public:
     CmafDecoder();

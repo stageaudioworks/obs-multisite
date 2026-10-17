@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // test_config_secrets.cpp — a host can keep the config's secrets in its keychain.
 #include "../src/appliance/config.h"
+#include "../src/appliance/log.h"
 #include "test_tmpdir.h"
 
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace multisite_player;
 
@@ -111,6 +113,21 @@ int main() {
         e.secret_access_key.clear();
         e.save(path, err);
         CHECK(g_mem["secret_access_key"].empty(), "a clear after a good read clears");
+    }
+
+    // A key of the wrong JSON type keeps its default, and says so once.
+    {
+        reset();
+        { std::ofstream(path) << R"({"audio_enabled":"false","bucket":"b"})"; }
+        std::vector<std::string> warns;
+        set_log_hook([&](int level, const char* m) { if (level == 4) warns.emplace_back(m); });
+        Config c;
+        CHECK(c.load(path, err) && c.audio_enabled && c.bucket == "b",
+              "a wrong-typed value keeps the default, the rest loads");
+        Config d; d.load(path, err);
+        set_log_hook(nullptr);
+        CHECK(warns.size() == 1 && warns[0].find("audio_enabled") != std::string::npos,
+              "one warning names the key, not one per load");
     }
 
     // A store that cannot write: the save fails and nothing on disk changes.
