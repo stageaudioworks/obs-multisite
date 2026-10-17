@@ -874,6 +874,11 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_include_directories(test_resume_state PRIVATE src/appliance)
     add_test(NAME resume_state COMMAND test_resume_state)
 
+    # A host (the Mac player's os_log) can receive every log line.
+    add_executable(test_log_hook tests/test_log_hook.cpp)
+    target_link_libraries(test_log_hook PRIVATE multisite_player_engine)
+    add_test(NAME log_hook COMMAND test_log_hook)
+
     # The restore-after-restart order (resume_driver.h), pure.
     add_executable(test_resume_driver tests/test_resume_driver.cpp)
     target_link_libraries(test_resume_driver PRIVATE multisite_player_engine)

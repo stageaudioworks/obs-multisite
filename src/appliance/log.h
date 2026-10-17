@@ -9,6 +9,7 @@
 // the web UI: an operator with a phone and no SSH should still be able to see
 // why nothing is playing.
 //
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,14 @@ void log_line(LogLevel level, const char* fmt, ...)
 #define plog_error(...) ::multisite_player::log_line(::multisite_player::LogLevel::Error, __VA_ARGS__)
 
 void set_debug_logging(bool on);
+
+// A host can receive every line too (the Mac player sends them to os_log).
+// `level` is the syslog number the stderr prefix uses (3 error, 4 warn, 6 info,
+// 7 debug); `message` is the formatted text without the "<N>[time]" prefix.
+// Called after the stderr and ring writes, on whatever thread logged, with no
+// lock held: the hook must be thread-safe and must not log. Safe to set or
+// clear at any time; an empty function clears it.
+void set_log_hook(std::function<void(int level, const char* message)> hook);
 
 struct LogEntry {
     long long   at_ms = 0;

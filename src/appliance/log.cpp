@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <ctime>
 #include <deque>
+#include <functional>
 #include <mutex>
 
 namespace multisite_player {
@@ -15,6 +16,7 @@ namespace {
 std::mutex           g_mtx;
 std::deque<LogEntry> g_ring;
 bool                 g_debug = false;
+std::function<void(int, const char*)> g_hook;   // under g_mtx
 
 // Enough to cover an event's worth of interesting events without letting a
 // chatty failure grow without bound on a box that runs for months.
@@ -41,6 +43,11 @@ const char* to_string(LogLevel l) {
 void set_debug_logging(bool on) {
     std::lock_guard<std::mutex> lk(g_mtx);
     g_debug = on;
+}
+
+void set_log_hook(std::function<void(int, const char*)> hook) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_hook = std::move(hook);
 }
 
 void log_line(LogLevel level, const char* fmt, ...) {
@@ -80,9 +87,15 @@ void log_line(LogLevel level, const char* fmt, ...) {
     std::fprintf(stderr, "%s[%s] %s\n", sd, stamp, buf);
     std::fflush(stderr);
 
-    std::lock_guard<std::mutex> lk(g_mtx);
-    g_ring.push_back(std::move(e));
-    while (g_ring.size() > kMaxLines) g_ring.pop_front();
+    std::function<void(int, const char*)> hook;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_ring.push_back(std::move(e));
+        while (g_ring.size() > kMaxLines) g_ring.pop_front();
+        hook = g_hook;
+    }
+    if (hook) hook(level == LogLevel::Error ? 3 : level == LogLevel::Warn ? 4
+                   : level == LogLevel::Debug ? 7 : 6, buf);
 }
 
 std::vector<LogEntry> recent_log(size_t max_lines) {
