@@ -1066,6 +1066,16 @@ things are still open, and neither is code: nothing has yet run a whole event,
 and the module is not in the Companion store — until it is, Companion loads it
 as a *developer module* and needs **Companion 4.0 or later**.
 
+**ProPresenter over RossTalk — campus player.** The player also listens for
+ProPresenter's RossTalk over TCP, so a slide can cue the recording: `CUE
+<marker>` seeks to the marker of that name and plays it, `PLAY` and `HOLD` are
+the transport, `LIVE` returns to the live edge, and ProPresenter's `CC ` prefix
+is accepted on any of them. It is **off by default**; when on it listens on
+`127.0.0.1:7790`, and only an explicit "accept from other computers" binds
+`0.0.0.0`, because RossTalk has no password. A cue **bypasses Lock** — it is the
+operator, and the lock is for the web page. A `CUE` whose marker is not found
+(or does not arrive in time) **holds where it is** rather than guessing.
+
 ---
 
 ## 8.4 Control pages served from the plugin

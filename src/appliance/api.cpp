@@ -40,7 +40,7 @@ namespace {
 // to come back again.
 constexpr char kSecretPlaceholder[] = "••••••••";
 
-json status_json(const Player& player) {
+json status_json(const Player& player, const RossTalkState& rt = {}) {
     Status s;
     player.status(s);
 
@@ -139,6 +139,11 @@ json status_json(const Player& player) {
     j["markers"] = std::move(markers);
     j["current_marker"] = s.current_marker;
 
+    j["rosstalk"] = {{"enabled", rt.enabled}, {"bind", rt.bind}, {"port", rt.port},
+                     {"error", rt.error},
+                     {"last", {{"text", rt.last_text}, {"at_ms", rt.last_at_ms},
+                               {"result", rt.last_result}}}};
+
     j["now_ms"]  = time_info().now_ms;
     j["version"] = player_version();
     return j;
@@ -223,6 +228,10 @@ json config_json(const Config& c) {
 
     j["web_port"] = c.web_port;
     j["web_bind"] = c.web_bind;
+
+    j["rosstalk_enabled"] = c.rosstalk_enabled;
+    j["rosstalk_bind"]    = c.rosstalk_bind;
+    j["rosstalk_port"]    = c.rosstalk_port;
 
     j["auto_play"]         = c.auto_play;
     j["delay_from_live_s"] = c.delay_from_live_s;
@@ -394,6 +403,10 @@ Config apply_edit(Config c, const json& j) {
     take(j, "web_port", c.web_port);
     take(j, "web_bind", c.web_bind);
 
+    take(j, "rosstalk_enabled", c.rosstalk_enabled);
+    take(j, "rosstalk_bind",    c.rosstalk_bind);
+    take(j, "rosstalk_port",    c.rosstalk_port);
+
     take(j, "auto_play",         c.auto_play);
     take(j, "delay_from_live_s", c.delay_from_live_s);
     take(j, "locked",            c.locked);
@@ -424,6 +437,8 @@ Config apply_edit(Config c, const json& j) {
     if (c.stale_after_ms     < 30000) c.stale_after_ms = 30000;
     if (c.web_port < 1 || c.web_port > 65535) c.web_port = 8080;
     if (c.lan_port < 1 || c.lan_port > 65535) c.lan_port = 9080;
+    if (c.rosstalk_bind != "127.0.0.1" && c.rosstalk_bind != "0.0.0.0") c.rosstalk_bind = "127.0.0.1";
+    if (c.rosstalk_port < 1 || c.rosstalk_port > 65535) c.rosstalk_port = 7790;
     return c;
 }
 
@@ -494,19 +509,20 @@ std::string player_status_json(const Player& player) {
     return status_json(player).dump();
 }
 
-void register_api(HttpServer& server, Player& player, std::string config_path) {
+void register_api(HttpServer& server, Player& player, std::string config_path,
+                  std::function<RossTalkState()> rosstalk_state) {
 
     // ── Status ───────────────────────────────────────────────────────────────
-    server.route("GET", "/api/status", [&player](const HttpRequest&,
+    server.route("GET", "/api/status", [&player, rosstalk_state](const HttpRequest&,
                                                  HttpResponse& res) {
-        res.json(status_json(player).dump());
+        res.json(status_json(player, rosstalk_state()).dump());
     });
 
     // Every control answers with the new status, so the interface never has to
     // guess what its own click did.
-    auto control = [&player, config_path](const char* name,
+    auto control = [&player, config_path, rosstalk_state](const char* name,
                                           std::function<void(const HttpRequest&)> act) {
-        return [&player, name, act](const HttpRequest& req, HttpResponse& res) {
+        return [&player, name, act, rosstalk_state](const HttpRequest& req, HttpResponse& res) {
             if (player.locked()) {
                 res.status = 409;
                 res.json(json{{"error", "the controls are locked"},
@@ -515,7 +531,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             }
             (void)name;
             act(req);
-            res.json(status_json(player).dump());
+            res.json(status_json(player, rosstalk_state()).dump());
         };
     };
 
@@ -550,7 +566,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     // Drop a cue with an operator-typed name. The one control here that
     // WRITES, so a refusal is reported to the page rather than swallowed —
     // "no site name is set" is something an operator has to fix.
-    server.route("POST", "/api/cue", [&player](const HttpRequest& req,
+    server.route("POST", "/api/cue", [&player, rosstalk_state](const HttpRequest& req,
                                                HttpResponse& res) {
         std::string err;
         if (!player.add_cue(req.param("label"), err)) {
@@ -558,7 +574,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             res.json(json{ {"ok", false}, {"error", err} }.dump());
             return;
         }
-        res.json(status_json(player).dump());
+        res.json(status_json(player, rosstalk_state()).dump());
     });
     server.route("POST", "/api/load", control("load",
         [&player](const HttpRequest& req) {
@@ -570,14 +586,14 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
 
     // Deliberately NOT behind the lock: locking is a control, and a lock you
     // cannot undo from the interface is a fault, not a safeguard.
-    server.route("POST", "/api/lock", [&player, config_path](
+    server.route("POST", "/api/lock", [&player, config_path, rosstalk_state](
                                           const HttpRequest& req,
                                           HttpResponse& res) {
         player.set_locked(bool_param(req, "on", true));
         Config c = player.config();
         std::string err;
         c.save(config_path, err);
-        res.json(status_json(player).dump());
+        res.json(status_json(player, rosstalk_state()).dump());
     });
 
     // ── Event list ───────────────────────────────────────────────────────────

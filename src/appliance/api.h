@@ -18,16 +18,20 @@
 //     stop the player by being leant on.
 //
 #include "player.h"
+#include "rosstalk_listener.h"
 #include "../core/http_server.h"
 
+#include <functional>
 #include <string>
 
 namespace multisite_player {
 
 // Registers every route on `server`. `config_path` is where edited settings
-// are written back to.
+// are written back to. `rosstalk_state` feeds the status document's "rosstalk"
+// object; callers without a listener leave the default, which says "off".
 void register_api(multisite::HttpServer& server, Player& player,
-                  std::string config_path);
+                  std::string config_path,
+                  std::function<RossTalkState()> rosstalk_state = [] { return RossTalkState{}; });
 
 // The status document as text — the same object the page polls, for the
 // monitoring heartbeat to filter and send.

@@ -143,6 +143,24 @@ int main() {
         r.listener.stop();
         CHECK(Clock::now() - t0 < std::chrono::seconds(2), "stop() after start() joins within 2 s");
     }
+    {
+        const std::string path = "/tmp/rosstalk_cfg_test.json";
+        std::string err;
+        Config c;
+        c.rosstalk_enabled = true; c.rosstalk_bind = "0.0.0.0"; c.rosstalk_port = 7791;
+        CHECK(c.save(path, err), "config save");
+        Config r;
+        CHECK(r.load(path, err), "config load");
+        CHECK(r.rosstalk_enabled && r.rosstalk_bind == "0.0.0.0" && r.rosstalk_port == 7791,
+              "config round trip keeps enabled/bind/port");
+        c.rosstalk_bind = "evil.example"; c.rosstalk_port = 70000;
+        c.save(path, err);
+        Config b;
+        b.load(path, err);
+        CHECK(b.rosstalk_bind == "127.0.0.1" && b.rosstalk_port == 7790,
+              "config load: bad bind and port fall back to the defaults");
+        ::unlink(path.c_str());
+    }
     std::printf(g_fail ? "FAILED\n" : "all ok\n");
     return g_fail ? 1 : 0;
 }

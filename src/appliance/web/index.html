@@ -487,6 +487,40 @@
     </details>
 
     <details class="settings-section">
+    <summary>ProPresenter (RossTalk)</summary>
+    <div class="field">
+      <label for="c-rosstalk-on">Take cues from ProPresenter</label>
+      <select id="c-rosstalk-on">
+        <option value="false">No — nothing listens</option>
+        <option value="true">Yes — listen for RossTalk commands</option>
+      </select>
+      <p class="hint">
+        ProPresenter can send <code>CUE</code> a marker's name, <code>PLAY</code>,
+        <code>HOLD</code> and <code>LIVE</code> to this player. These work even
+        when the controls are locked: the cue is the operator, and the lock is
+        for this page. A cue whose marker is not found leaves the player where
+        it is.
+      </p>
+      <dl class="facts"><dt>RossTalk</dt><dd id="rosstalk-facts"></dd></dl>
+    </div>
+    <div class="field">
+      <label for="c-rosstalk-port">Port</label>
+      <input id="c-rosstalk-port" type="number" min="1" max="65535" value="7790">
+    </div>
+    <div class="field">
+      <label for="c-rosstalk-open">Accept from other computers</label>
+      <select id="c-rosstalk-open">
+        <option value="false">No — only this computer (127.0.0.1)</option>
+        <option value="true">Yes — any computer on the network</option>
+      </select>
+      <p class="hint">
+        Turn this on when ProPresenter runs on a different computer. RossTalk
+        has no password, so anyone who can reach the port can cue the player.
+      </p>
+    </div>
+    </details>
+
+    <details class="settings-section">
     <summary>Updates</summary>
     <div class="field">
       <label for="c-checkupdates">Newer builds</label>
