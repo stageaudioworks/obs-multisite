@@ -190,6 +190,11 @@ struct Config {
     // dock has, for a tablet left on a music stand mid-event.
     bool locked = false;
 
+    // ── ProPresenter cues (RossTalk, rosstalk_listener.h) ─────────────────────
+    bool        rosstalk_enabled = false;
+    std::string rosstalk_bind = "127.0.0.1";
+    int         rosstalk_port = 7790;
+
     // ── Remote access ────────────────────────────────────────────────────────
     // A box at the back of a hall cannot be reached from the office without
     // somebody driving to the campus, and a church network rarely allows an
