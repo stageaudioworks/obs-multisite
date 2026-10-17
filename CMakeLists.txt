@@ -741,6 +741,10 @@ add_executable(test_audio_plan tests/test_audio_plan.cpp)
 target_include_directories(test_audio_plan PRIVATE src/appliance)
 add_test(NAME audio_plan COMMAND test_audio_plan)
 
+add_executable(test_track_merge tests/test_track_merge.cpp src/appliance/track_merge.cpp)
+target_include_directories(test_track_merge PRIVATE src/appliance src/core)
+add_test(NAME track_merge COMMAND test_track_merge)
+
 # How much silence the keep-alive thread keeps in the card, and how big the
 # buffer it writes from has to be. Two numbers, computed in two places once, and
 # on a card with a one millisecond period they came apart — so the top-up read
@@ -819,6 +823,7 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/config.cpp
         src/appliance/log.cpp
         src/appliance/player.cpp
+        src/appliance/track_merge.cpp
         src/appliance/resume_state.cpp
         src/appliance/resume_driver.cpp
         src/appliance/screen.cpp

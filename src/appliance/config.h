@@ -171,7 +171,8 @@ struct Config {
     // of LPCM, which is what makes packed multi-channel work on the cheap tier.
     int         audio_channels = 0;
     // Which audio track to put to air. OBS publishes up to six, and an event
-    // carries every one it was told to; a campus plays one of them.
+    // carries every one it was told to; a campus plays one of them, or -1 plays
+    // all of them at once, each on its own channels (track 0 first).
     int         audio_track = 0;
 
     // ── Control surface ──────────────────────────────────────────────────────

@@ -997,8 +997,34 @@ void Player::on_video(const DecodedVideoFrame& f) {
     enqueue(std::move(item));
 }
 
+std::vector<int> Player::audio_track_channels() const {
+    auto dec = decoder_ref();
+    return dec ? dec->audio_track_channels() : std::vector<int>{};
+}
+
 void Player::on_audio(const DecodedAudioFrame& f) {
     if (!m_running.load()) return;
+
+    // All tracks: each frame joins the others that share its pts, and the wide
+    // frames are what get queued.
+    if (config().audio_track < 0) {
+        auto dec = decoder_ref();
+        if (!dec) return;
+        const auto layout = dec->audio_track_channels();
+        if (layout.empty()) return;
+        if (layout != m_merger_layout || dec.get() != m_merger_decoder) {
+            m_merger.reset(layout, f.sample_rate);
+            m_merger_layout = layout;
+            m_merger_decoder = dec.get();
+            m_logged_merge_mismatch = false;
+        }
+        for (auto& merged : m_merger.push(f)) queue_audio(merged);
+        if (m_merger.size_mismatches() && !m_logged_merge_mismatch) {
+            m_logged_merge_mismatch = true;
+            plog_warn("audio tracks carry different frame lengths; the longer is cut");
+        }
+        return;
+    }
 
     // One track goes to air. OBS publishes up to six and an event carries
     // every one it was told to, so a six-track event used to put all six
@@ -1016,7 +1042,10 @@ void Player::on_audio(const DecodedAudioFrame& f) {
             return;
         }
     }
+    queue_audio(f);
+}
 
+void Player::queue_audio(const DecodedAudioFrame& f) {
     const int64_t first = anchor_pts(f.pts_ns, false);
 
     if (!m_logged_av_offset && m_last_video_pts_ns != 0) {

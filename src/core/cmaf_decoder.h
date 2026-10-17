@@ -112,6 +112,9 @@ public:
     int  video_width() const;
     int  video_height() const;
     int  audio_track_count() const;
+    // Each audio track's channel count, in track order; empty until a fragment
+    // has been opened. Safe to call from any thread.
+    std::vector<int> audio_track_channels() const;
     // Which decoder FFmpeg picked, and how many threads it opened it with.
     // Both are only known once a fragment has been opened.
     //

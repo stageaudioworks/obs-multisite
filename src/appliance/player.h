@@ -26,6 +26,7 @@
 // picture run on for a segment after the operator pressed Hold.
 //
 #include "config.h"
+#include "track_merge.h"
 #include "audio_levels.h"   // what the card was given, for the meters
 #include "audio_output.h"
 #include "reporter.h"       // PairView + the heartbeat worker Player owns
@@ -198,6 +199,10 @@ const char* to_string(AudioState s);
 
 class Player {
 public:
+    // Channel count of each audio track of the current event, in track order;
+    // empty until the decoder has read the stream. For mapping tracks to outputs.
+    std::vector<int> audio_track_channels() const;
+
     // `config_path` is where edited settings are written back to. The player
     // itself never needed it — settings arrive from the web interface already
     // saved — but the AES67 reconciler does: pointing the sound back at the
@@ -377,6 +382,7 @@ private:
     // name, and is open at the rate the feed actually runs at. Called both when
     // a frame arrives and when the box is idle — see the note at its
     // definition for why the idle case is not an optimisation.
+    void queue_audio(const multisite::DecodedAudioFrame& f);
     void ensure_audio_open(const Config& cfg, int feed_channels, int feed_rate);
 
     // Asks the delivery thread to let the current card go and open the one the
@@ -588,6 +594,12 @@ private:
     std::atomic<bool> m_logged_stream{true};
     // Said once per run, not once per discarded frame.
     std::atomic<bool> m_logged_audio_tracks{false};
+    // "All tracks" (audio_track == -1): joins the tracks' frames into one wide
+    // frame. Used only from the decode thread (on_audio).
+    TrackMerger m_merger;
+    std::vector<int> m_merger_layout;
+    const void* m_merger_decoder = nullptr;
+    bool m_logged_merge_mismatch = false;
     // Monotonic time of the last frame that reached the display. What
     // separates "playing" from "nothing is arriving", which is the difference
     // between leaving the picture alone and putting the splash back up.

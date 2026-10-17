@@ -135,6 +135,8 @@ struct CmafDecoder::Impl {
     std::map<int, Resampler> resamplers;
 
     int width = 0, height = 0, audio_tracks = 0;
+    mutable std::mutex ch_mtx;
+    std::vector<int> track_channels;   // per audio track, guarded by ch_mtx
     std::string video_codec;
     // The segment the decode thread is currently working on, stamped onto every
     // frame it emits.
@@ -336,6 +338,7 @@ struct CmafDecoder::Impl {
         std::vector<AVCodecContext*> ctxs(fmt->nb_streams, nullptr);
         std::vector<int> audio_idx(fmt->nb_streams, -1);
         int video_stream = -1, an = 0;
+        std::vector<int> a_channels;
         // The hardware video decoder for this unit, when the board has MPP. A
         // unit is self-contained — init + fragment, keyframe first — so a fresh
         // decoder per unit is correct, and matches the FFmpeg path below, which
@@ -500,9 +503,14 @@ struct CmafDecoder::Impl {
                 decode_threads = ctxs[i]->thread_count;
             }
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_stream < 0) video_stream = (int)i;
-            else if (par->codec_type == AVMEDIA_TYPE_AUDIO) audio_idx[i] = an++;
+            else if (par->codec_type == AVMEDIA_TYPE_AUDIO) {
+                audio_idx[i] = an++;
+                // Same fallback as emit_audio, so the two always agree.
+                a_channels.push_back(par->ch_layout.nb_channels > 0 ? par->ch_layout.nb_channels : 2);
+            }
         }
         audio_tracks = an;
+        { std::lock_guard<std::mutex> lk(ch_mtx); track_channels = a_channels; }
 
         // What is in the stream, and what decodes it.
         {
@@ -731,6 +739,10 @@ void CmafDecoder::set_stop_grace_ms_for_testing(int64_t ms) {
 int CmafDecoder::video_width() const { return d->width; }
 int CmafDecoder::video_height() const { return d->height; }
 int CmafDecoder::audio_track_count() const { return d->audio_tracks; }
+std::vector<int> CmafDecoder::audio_track_channels() const {
+    std::lock_guard<std::mutex> lk(d->ch_mtx);
+    return d->track_channels;
+}
 std::string CmafDecoder::video_codec() const { return d->video_codec; }
 int CmafDecoder::decode_threads() const { return d->decode_threads; }
 

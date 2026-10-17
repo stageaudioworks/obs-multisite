@@ -206,6 +206,7 @@ static int which_tone(const std::vector<float>& x) {
 
 struct Decoded {
     int tracks = 0;
+    std::vector<int> track_channels;
     std::map<int, int> channels;
     std::map<int, std::vector<std::vector<float>>> samples;
 };
@@ -238,6 +239,7 @@ static Decoded decode(const Stream& s) {
         if (now == last) ++stable; else { stable = 0; last = now; }
     }
     out.tracks = dec.audio_track_count();
+    out.track_channels = dec.audio_track_channels();
     dec.stop();
     return out;
 }
@@ -264,6 +266,8 @@ int main() {
     CHECK(encode(s), "a stream with a stereo, a mono and an eight-channel track");
     Decoded got = decode(s);
     CHECK(got.tracks == kTracks, "three audio tracks");
+    CHECK(got.track_channels == std::vector<int>(kChannels, kChannels + kTracks),
+          "the decoder reports each track's channel count");
     for (int t = 0; t < kTracks; ++t) {
         char what[160];
         std::snprintf(what, sizeof what, "track %d comes back with its own %d channel%s", t + 1,
