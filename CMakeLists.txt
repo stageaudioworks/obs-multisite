@@ -754,6 +754,11 @@ add_executable(test_idle_keepalive tests/test_idle_keepalive.cpp)
 target_include_directories(test_idle_keepalive PRIVATE src/appliance)
 add_test(NAME idle_keepalive COMMAND test_idle_keepalive)
 
+# What a player restores after a restart, and when that is too old.
+add_executable(test_resume_state tests/test_resume_state.cpp src/appliance/resume_state.cpp)
+target_include_directories(test_resume_state PRIVATE src/appliance)
+add_test(NAME resume_state COMMAND test_resume_state)
+
 add_executable(test_alsa_stall tests/test_alsa_stall.cpp)
 target_include_directories(test_alsa_stall PRIVATE src/appliance)
 add_test(NAME alsa_stall COMMAND test_alsa_stall)
@@ -819,6 +824,7 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/config.cpp
         src/appliance/log.cpp
         src/appliance/player.cpp
+        src/appliance/resume_state.cpp
         src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp

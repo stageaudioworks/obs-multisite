@@ -101,6 +101,9 @@ struct Status {
     // Clock times throughout. The UI never mentions a sequence number.
     long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
     long long   end_ms = 0, total_ms = 0;
+    // Position in media time (from the event's start), straight from the
+    // session. Not playhead_ms - started_ms: see BUGS #2b.
+    long long   playhead_media_ms = 0;
     long long   seek_target_ms = 0;     // where playback is heading, if moving
     double      behind_live_s = 0.0;
     double      delay_from_live_s = 0.0;
