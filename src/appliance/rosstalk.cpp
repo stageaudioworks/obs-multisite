@@ -56,4 +56,33 @@ long long find_cue_marker_ms(const std::vector<Status::MarkerEntry>& markers,
     return best;
 }
 
+long long seek_ms_for(long long target_ms) { return target_ms == 0 ? 1 : target_ms; }
+
+CueStep next_cue_step(long long target_ms, const Status& now, CueProgress& p,
+                      long long now_wall_ms) {
+    if (p.hold_sent) return CueStep::Done;
+    if (target_ms < 0) { p.outcome = "no such marker"; return CueStep::Hold; }
+    if (now_wall_ms - p.started_wall_ms > kCueGiveUpMs) {
+        p.outcome = "timed out";
+        return CueStep::Hold;
+    }
+    const bool idle = !now.playing || now.paused;
+    if (idle && !now.loading && !p.start_sent) { p.start_sent = true; return CueStep::Start; }
+    if (now.loading || (idle && p.start_sent)) return CueStep::Wait;
+    if (!p.seek_sent) { p.seek_sent = true; return CueStep::Seek; }
+    if (now.seek_target_ms != 0) return CueStep::Wait;
+    if (!p.target_cleared) {
+        p.target_cleared = true;
+        p.frames_at_clear = now.frames_out;
+        return CueStep::Wait;
+    }
+    long long off = now.playhead_ms - seek_ms_for(target_ms);
+    if (now.frames_out > p.frames_at_clear && off <= kCueLandToleranceMs
+        && off >= -kCueLandToleranceMs) {
+        p.outcome = "done";
+        return CueStep::Hold;
+    }
+    return CueStep::Wait;
+}
+
 } // namespace multisite_player

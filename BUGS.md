@@ -197,7 +197,8 @@ a recording.
 **The trap.** The zero-sentinel again (see the other entries that name it):
 do not patch it by special-casing 0 in the caller as the resume driver does;
 that hides it from every other caller. And `m_seek_target_ms` doubles as
-"a seek is pending", so a landing at 0 must not be read as "no seek".
+"a seek is pending", so a landing at 0 must not be read as "no seek". `seek_ms_for` in `src/appliance/rosstalk.cpp` (target 0 becomes
+1) is a second caller-side workaround, beside the resume driver, to remove when this is fixed.
 
 **Files:** `src/appliance/player.cpp`, `src/core/decoder_session.cpp`.
 
