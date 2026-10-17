@@ -88,6 +88,25 @@ int main() {
         auto a = next_resume_step(sv, st("", "evt", true), p, T0);
         CHECK(a == ResumeStep::Wait && !p.pinned_sent, "already pinned: waits, does not re-pin");
     }
+    {
+        // pin_event() no-ops with no session yet: the pin must be re-sent, and
+        // must not be mistaken for the operator choosing something else.
+        auto sv = saved(true, true);
+        ResumeProgress p;
+        CHECK(next_resume_step(sv, st("", "", true), p, T0) == ResumeStep::Pin, "pin sent");
+        resume_pin_result(sv, st("", "", true), p);   // no session: pin did not take
+        CHECK(next_resume_step(sv, st("", "", true), p, T0 + 250) == ResumeStep::Pin,
+              "pin that did not take is sent again, not Done");
+        resume_pin_result(sv, st("", "evt", true), p);  // took
+        CHECK(next_resume_step(sv, st("", "evt", true), p, T0 + 500) == ResumeStep::Wait,
+              "pin that took is not re-sent");
+    }
+    {
+        CHECK(resume_should_write(T0, T0, true), "a change is written at once");
+        CHECK(!resume_should_write(T0 + 9999, T0, false), "no change, under 10 s: no write");
+        CHECK(resume_should_write(T0 + 10000, T0, false),
+              "no change at all still rewrites every 10 s (held box stays fresh)");
+    }
     // ResumeKeeper::stop() is safe when start() never ran.
     // (A Player is heavy to build here, so this is covered by the smoke run.)
     std::printf(g_fail ? "FAILED\n" : "all ok\n");

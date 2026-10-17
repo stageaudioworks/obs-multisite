@@ -46,6 +46,16 @@ ResumeStep next_resume_step(const ResumeState& saved, const Status& now,
     return ResumeStep::Done;
 }
 
+void resume_pin_result(const ResumeState& saved, const Status& after_pin,
+                       ResumeProgress& p) {
+    if (after_pin.pinned_event_id != saved.event_id) p.pinned_sent = false;
+}
+
+bool resume_should_write(long long now_wall_ms, long long last_write_wall_ms,
+                         bool changed) {
+    return changed || now_wall_ms - last_write_wall_ms >= kResumeHeartbeatMs;
+}
+
 ResumeKeeper::ResumeKeeper(Player& player, std::string path)
     : m_player(player), m_path(std::move(path)) {}
 
@@ -100,13 +110,9 @@ void ResumeKeeper::restore(const ResumeState& saved) {
         case ResumeStep::Pin:
             m_player.pin_event(saved.event_id);
             {
-                // pin_event() does nothing while the Player has no session
-                // yet (just after start()). Unsent, so it is tried again —
-                // otherwise the next tick would read the missing pin as the
-                // operator choosing something else.
                 Status after;
                 m_player.status(after);
-                if (after.pinned_event_id != saved.event_id) p.pinned_sent = false;
+                resume_pin_result(saved, after, p);
             }
             break;
         case ResumeStep::Seek:
@@ -137,7 +143,7 @@ void ResumeKeeper::restore(const ResumeState& saved) {
 void ResumeKeeper::save_loop() {
     std::string last_event;
     bool last_pinned = false, last_paused = false, have_last = false;
-    long long last_media = 0, last_write_ms = 0;
+    long long last_write_ms = 0;
     for (;;) {
         Status st;
         m_player.status(st);
@@ -146,9 +152,7 @@ void ResumeKeeper::save_loop() {
             const long long now = wall_ms();
             const bool changed = !have_last || st.event_id != last_event ||
                                  pinned != last_pinned || st.paused != last_paused;
-            const bool moved = st.playhead_media_ms != last_media &&
-                               now - last_write_ms >= 10000;
-            if (changed || moved) {
+            if (resume_should_write(now, last_write_ms, changed)) {
                 ResumeState s;
                 s.event_id = st.event_id;
                 s.pinned = pinned;
@@ -159,7 +163,7 @@ void ResumeKeeper::save_loop() {
                 if (!save_resume_state(m_path, s, err))
                     plog_warn("resume: cannot write %s: %s", m_path.c_str(), err.c_str());
                 last_event = st.event_id; last_pinned = pinned;
-                last_paused = st.paused; last_media = st.playhead_media_ms;
+                last_paused = st.paused;
                 last_write_ms = now;
                 have_last = true;
             }

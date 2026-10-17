@@ -886,7 +886,9 @@ HTML with a WebSocket for live updates. It should carry the same plain language
 
 **After a restart.** The player writes `resume.json` beside its config — the
 event, whether it was pinned, whether it was held, and the position — straight
-away when any of the first three change and otherwise at most every 10 s. On
+away when any of the first three change and otherwise every 10 s, even when
+nothing moved, so a box held for an hour is still "down for under 30 minutes"
+when it restarts. On
 start, a file under 30 minutes old is restored with the Player's own controls,
 in this order: pin (only if not already pinned), seek, hold. The seek comes
 before the hold because a seek releases one. Each step is sent once, and

@@ -40,6 +40,21 @@ ResumeStep next_resume_step(const ResumeState& saved, const Status& now,
 // true when `Done` was the give-up, so the caller should undo its own pin.
 bool resume_gave_up(const ResumeProgress& p, long long now_wall_ms);
 
+// Called with the Status read straight after pin_event(). That call does
+// nothing while the Player has no session (just after start()); un-send it so
+// it is tried again, instead of the next tick reading the missing pin as the
+// operator choosing something else. Only meaningful in the same tick as the Pin.
+void resume_pin_result(const ResumeState& saved, const Status& after_pin,
+                       ResumeProgress& p);
+
+// When the keeper rewrites resume.json: at once when the event, pin or hold
+// changed, and otherwise every 10 s as a heartbeat, so a box that has sat
+// held for an hour still has a fresh saved_wall_ms (the rule is "down for
+// less than 30 minutes", not "last moved less than 30 minutes ago").
+constexpr long long kResumeHeartbeatMs = 10 * 1000;
+bool resume_should_write(long long now_wall_ms, long long last_write_wall_ms,
+                         bool changed);
+
 class ResumeKeeper {
 public:
     ResumeKeeper(Player& player, std::string path);
