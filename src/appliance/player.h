@@ -385,8 +385,9 @@ public:
     // Called first thing on each worker thread (poll, feed, deliver, aes67)
     // and handed to every decoder, with the role as a short string, so a host
     // can name the thread and set its priority. Not synchronised: set it
-    // before start(), which is what makes it take effect; later changes reach
-    // only decoders built afterwards.
+    // before start(), which is what makes it take effect; calling it after
+    // start() is not allowed (the threads read it unlocked). The hook must not
+    // throw.
     using ThreadHook = multisite::ThreadHook;
     void set_thread_hook(ThreadHook hook) { m_thread_hook = std::move(hook); }
     // Turns a native frame into I420 for the preview; the host supplies it.

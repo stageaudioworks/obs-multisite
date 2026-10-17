@@ -94,8 +94,16 @@ void log_line(LogLevel level, const char* fmt, ...) {
         while (g_ring.size() > kMaxLines) g_ring.pop_front();
         hook = g_hook;
     }
-    if (hook) hook(level == LogLevel::Error ? 3 : level == LogLevel::Warn ? 4
-                   : level == LogLevel::Debug ? 7 : 6, buf);
+    // A hook that logs would recurse; one that throws must not take the caller down.
+    thread_local bool in_hook = false;
+    if (hook && !in_hook) {
+        in_hook = true;
+        try {
+            hook(level == LogLevel::Error ? 3 : level == LogLevel::Warn ? 4
+                 : level == LogLevel::Debug ? 7 : 6, buf);
+        } catch (...) {}
+        in_hook = false;
+    }
 }
 
 std::vector<LogEntry> recent_log(size_t max_lines) {

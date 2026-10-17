@@ -34,8 +34,10 @@ void set_debug_logging(bool on);
 // `level` is the syslog number the stderr prefix uses (3 error, 4 warn, 6 info,
 // 7 debug); `message` is the formatted text without the "<N>[time]" prefix.
 // Called after the stderr and ring writes, on whatever thread logged, with no
-// lock held: the hook must be thread-safe and must not log. Safe to set or
-// clear at any time; an empty function clears it.
+// lock held: the hook must be thread-safe (a log line from inside the hook is
+// dropped from it, and an exception out of it is swallowed). Safe to set or
+// clear at any time; an empty function clears it, though a call already in
+// flight on another thread may still run the old hook once.
 void set_log_hook(std::function<void(int level, const char* message)> hook);
 
 struct LogEntry {

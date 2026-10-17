@@ -49,6 +49,9 @@ IdleMode    idle_mode_from_string(const std::string& s, IdleMode fallback);
 // back. A secret still in the file (an older config) is used as is and moves
 // to the store on the next save. Process-wide: set it once at start-up, before
 // any load or save. Either function may be empty; both return false on failure.
+// get for a key never stored returns true with "". A field whose get failed at
+// load is left alone in the store by later saves (an empty value there means
+// "unread", not "cleared").
 struct SecretStore {
     std::function<bool(const std::string& key, std::string& value)>       get;
     std::function<bool(const std::string& key, const std::string& value)> set;

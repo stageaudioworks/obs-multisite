@@ -93,6 +93,39 @@ int main() {
         CHECK(err == "secret store unavailable", "error says the store is unavailable");
     }
 
+    // A read that failed must not turn into a wipe on the next save.
+    {
+        reset();
+        set_secret_store(mem_store());
+        Config c; c.secret_access_key = "KEEP"; c.bucket = "b";
+        c.save(path, err);
+        g_get_fails = true;
+        Config d; d.load(path, err);
+        g_get_fails = false;                 // keychain unlocked again
+        CHECK(d.save(path, err), "save after a failed read");
+        CHECK(g_mem["secret_access_key"] == "KEEP", "the store still holds the secret");
+        CHECK(!has(slurp(path), "KEEP"), "the file still has no secret");
+        Config e; e.load(path, err);
+        CHECK(e.secret_access_key == "KEEP", "and it loads again");
+        // A deliberate clear after a successful read does clear.
+        e.secret_access_key.clear();
+        e.save(path, err);
+        CHECK(g_mem["secret_access_key"].empty(), "a clear after a good read clears");
+    }
+
+    // A store that cannot write: the save fails and nothing on disk changes.
+    {
+        reset();
+        { std::ofstream(path) << R"({"bucket":"b","secret_access_key":"OLD"})"; }
+        const std::string before = slurp(path);
+        SecretStore st = mem_store();
+        st.set = [](const std::string&, const std::string&) { return false; };
+        set_secret_store(st);
+        Config c; c.load(path, err);
+        CHECK(!c.save(path, err) && err == "secret store unavailable", "failing set fails save");
+        CHECK(slurp(path) == before, "file untouched, old secrets included");
+    }
+
     // No store: as before, secrets stay in the file.
     {
         reset();

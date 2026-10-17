@@ -53,7 +53,7 @@ int main() {
     }
 
     {
-        g_roles.clear();
+        { std::lock_guard<std::mutex> lk(g_mtx); g_roles.clear(); }
         multisite::CmafDecoder dec;
         dec.set_thread_hook(record);
         dec.start({0, 1, 2, 3});   // not a real stream; the thread still runs

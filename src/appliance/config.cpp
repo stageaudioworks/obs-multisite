@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -51,6 +52,18 @@ void take(const json& j, const char* key, T& out) {
 
 std::mutex  g_store_mtx;
 SecretStore g_store;
+// Keys whose last load could not read the store. Their fields are empty in
+// memory only because the read failed, so a save must not write "" over them.
+std::set<std::string> g_unread;
+
+bool is_unread(const char* key) {
+    std::lock_guard<std::mutex> lk(g_store_mtx);
+    return g_unread.count(key) != 0;
+}
+void mark_unread(const char* key, bool unread) {
+    std::lock_guard<std::mutex> lk(g_store_mtx);
+    if (unread) g_unread.insert(key); else g_unread.erase(key);
+}
 
 SecretStore secret_store() {
     std::lock_guard<std::mutex> lk(g_store_mtx);
@@ -62,6 +75,7 @@ SecretStore secret_store() {
 void set_secret_store(SecretStore store) {
     std::lock_guard<std::mutex> lk(g_store_mtx);
     g_store = std::move(store);
+    g_unread.clear();
 }
 
 bool Config::load(const std::string& path, std::string& error) {
@@ -175,7 +189,9 @@ bool Config::load(const std::string& path, std::string& error) {
                                    {"reporter_token", &reporter_token},
                                    {"cloudflared_token", &cloudflared_token} }) {
             if (!field->empty()) continue;   // older config: moves on next save
-            if (!st.get(key, *field)) {
+            const bool ok = st.get(key, *field);
+            mark_unread(key, !ok);
+            if (!ok) {
                 field->clear();
                 error = "secret store unavailable";
             }
@@ -263,10 +279,15 @@ bool Config::save(const std::string& path, std::string& error) const {
                                    {"lan_auth_token", &lan_auth_token},
                                    {"reporter_token", &reporter_token},
                                    {"cloudflared_token", &cloudflared_token} }) {
+            if (field->empty() && is_unread(key)) {   // not read, so not ours to clear
+                j[key] = "";
+                continue;
+            }
             if (!st.set(key, *field)) {
                 error = "secret store unavailable";
                 return false;
             }
+            mark_unread(key, false);
             j[key] = "";
         }
     }
