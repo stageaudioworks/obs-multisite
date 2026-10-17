@@ -880,6 +880,11 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_link_libraries(test_thread_hook PRIVATE multisite_player_engine)
     add_test(NAME thread_hook COMMAND test_thread_hook)
 
+    # A host (the Mac player's Keychain) can hold the config's secrets.
+    add_executable(test_config_secrets tests/test_config_secrets.cpp)
+    target_link_libraries(test_config_secrets PRIVATE multisite_player_engine)
+    add_test(NAME config_secrets COMMAND test_config_secrets)
+
     # A host (the Mac player's os_log) can receive every log line.
     add_executable(test_log_hook tests/test_log_hook.cpp)
     target_link_libraries(test_log_hook PRIVATE multisite_player_engine)

@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -48,7 +49,20 @@ void take(const json& j, const char* key, T& out) {
     }
 }
 
+std::mutex  g_store_mtx;
+SecretStore g_store;
+
+SecretStore secret_store() {
+    std::lock_guard<std::mutex> lk(g_store_mtx);
+    return g_store;
+}
+
 } // namespace
+
+void set_secret_store(SecretStore store) {
+    std::lock_guard<std::mutex> lk(g_store_mtx);
+    g_store = std::move(store);
+}
 
 bool Config::load(const std::string& path, std::string& error) {
     error.clear();
@@ -152,6 +166,21 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "aes67_address",        aes67_address);
     take(j, "aes67_channels",       aes67_channels);
     take(j, "aes67_previous_device", aes67_previous_device);
+
+    // Secrets the file no longer holds live in the host's store. A failed read
+    // leaves the field empty and says so, without failing the rest.
+    if (const SecretStore st = secret_store(); st.get) {
+        for (auto [key, field] : { std::pair<const char*, std::string*>{"secret_access_key", &secret_access_key},
+                                   {"lan_auth_token", &lan_auth_token},
+                                   {"reporter_token", &reporter_token},
+                                   {"cloudflared_token", &cloudflared_token} }) {
+            if (!field->empty()) continue;   // older config: moves on next save
+            if (!st.get(key, *field)) {
+                field->clear();
+                error = "secret store unavailable";
+            }
+        }
+    }
     return true;
 }
 
@@ -227,6 +256,20 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["aes67_address"]        = aes67_address;
     j["aes67_channels"]       = aes67_channels;
     j["aes67_previous_device"] = aes67_previous_device;
+
+    // With a store the secrets go there and the file gets "".
+    if (const SecretStore st = secret_store(); st.set) {
+        for (auto [key, field] : { std::pair<const char*, const std::string*>{"secret_access_key", &secret_access_key},
+                                   {"lan_auth_token", &lan_auth_token},
+                                   {"reporter_token", &reporter_token},
+                                   {"cloudflared_token", &cloudflared_token} }) {
+            if (!st.set(key, *field)) {
+                error = "secret store unavailable";
+                return false;
+            }
+            j[key] = "";
+        }
+    }
 
     const std::string tmp = path + ".tmp";
     {

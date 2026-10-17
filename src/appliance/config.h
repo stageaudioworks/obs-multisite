@@ -13,6 +13,7 @@
 // halves of the project describe the same things the same way and a setting
 // learned in one place means the same in the other.
 //
+#include <functional>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -40,6 +41,19 @@ enum class IdleMode {
 
 const char* to_string(IdleMode m);
 IdleMode    idle_mode_from_string(const std::string& s, IdleMode fallback);
+
+// A host's keychain. Unset (the default, and always on the Pi), the secret
+// fields stay in config.json as ever. Set, Config::save puts secret_access_key,
+// lan_auth_token, reporter_token and cloudflared_token in the store, keyed by
+// field name, and writes "" for them to the file; Config::load reads them
+// back. A secret still in the file (an older config) is used as is and moves
+// to the store on the next save. Process-wide: set it once at start-up, before
+// any load or save. Either function may be empty; both return false on failure.
+struct SecretStore {
+    std::function<bool(const std::string& key, std::string& value)>       get;
+    std::function<bool(const std::string& key, const std::string& value)> set;
+};
+void set_secret_store(SecretStore store);
 
 struct Config {
     // ── Storage (S3-compatible) ──────────────────────────────────────────────
