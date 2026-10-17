@@ -52,12 +52,12 @@ inline constexpr int kHeartbeatIdleIntervalS = 300;
 // Appliance kinds on the wire. This pass wires obs-encoder, obs-decoder and
 // pi-player; x86-player and relay are accepted strings with no host yet, so a
 // future host adds wiring rather than a protocol change. The campus player
-// sends pi-player unless its config names another player kind: outpost-light
-// and outpost-pro are the same player on other hardware, set by whatever
-// installed it there.
+// sends pi-player unless its config names another player kind: outpost-light,
+// outpost-pro and mac-player are the same player on other hardware, set by
+// whatever installed it there.
 inline constexpr const char* kReporterKinds[] = {
     "obs-encoder", "obs-decoder", "pi-player", "x86-player", "relay",
-    "outpost-light", "outpost-pro",
+    "outpost-light", "outpost-pro", "mac-player",
 };
 bool heartbeat_kind_known(const std::string& kind);
 

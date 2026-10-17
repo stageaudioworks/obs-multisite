@@ -329,7 +329,9 @@ int main() {
         CHECK(heartbeat_player_kind("") == "pi-player", "unset kind is pi-player");
         CHECK(heartbeat_player_kind("outpost-light") == "outpost-light",
               "a player kind is kept");
-        CHECK(heartbeat_player_kind("mac-player") == "mac-player", "mac-player is a kind");
+        CHECK(heartbeat_player_kind("mac-player") == "mac-player",
+              "mac-player is a kind");
+        CHECK(heartbeat_kind_known("mac-player"), "mac-player is on the wire list");
         CHECK(heartbeat_player_kind("obs-encoder") == "pi-player",
               "the player never reports an OBS kind");
         CHECK(heartbeat_player_kind("Outpost-Light") == "pi-player",

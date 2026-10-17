@@ -338,7 +338,8 @@ std::string heartbeat_pair_start_body(const std::string& device_id,
 
 std::string heartbeat_player_kind(const std::string& configured) {
     static const char* const kPlayerKinds[] = {
-        "pi-player", "x86-player", "mac-player", "outpost-light", "outpost-pro",
+        "pi-player", "x86-player", "mac-player", "outpost-light",
+        "outpost-pro",
     };
     for (const char* k : kPlayerKinds)
         if (configured == k) return configured;
