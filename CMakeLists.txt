@@ -825,6 +825,7 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/log.cpp
         src/appliance/player.cpp
         src/appliance/resume_state.cpp
+        src/appliance/resume_driver.cpp
         src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
@@ -859,6 +860,11 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
     target_link_libraries(multisite-player PRIVATE multisite_player_engine)
     target_compile_definitions(multisite-player PRIVATE
         MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
+
+    # The restore-after-restart order (resume_driver.h), pure.
+    add_executable(test_resume_driver tests/test_resume_driver.cpp)
+    target_link_libraries(test_resume_driver PRIVATE multisite_player_engine)
+    add_test(NAME resume_driver COMMAND test_resume_driver)
 
     # The preview re-encodes the same decoded frame to JPEG on every request,
     # so the encoder must be reusable across calls — otherwise the first frame

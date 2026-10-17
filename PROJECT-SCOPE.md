@@ -884,6 +884,19 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   feed — the interface lets the operator pick: the region going out, or the
   whole feed as received (`/preview.jpg?view=feed`). The default is the output.
 
+**After a restart.** The player writes `resume.json` beside its config — the
+event, whether it was pinned, whether it was held, and the position — straight
+away when any of the first three change and otherwise at most every 10 s. On
+start, a file under 30 minutes old is restored with the Player's own controls,
+in this order: pin (only if not already pinned), seek, hold. The seek comes
+before the hold because a seek releases one. Each step is sent once, and
+restoring gives up after 60 s (undoing its own pin) if the event never loads.
+It also stands down if the operator picks something else meanwhile, or if the
+room, unpinned, has moved on to a different event. A file older than 30
+minutes, or unreadable, is ignored and the box follows live as configured.
+Nothing is saved until the restore has finished. Position is the decode
+playhead, which can lead the screen by a fraction of a second.
+
 ## 8.2 Public simulcast relay
 
 **Status: built.**
