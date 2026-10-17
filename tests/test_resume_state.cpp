@@ -42,6 +42,15 @@ int main() {
     CHECK(!load_resume_state(p, got), "truncated file is false");
     std::remove(p.c_str());
 
+    // Invalid UTF-8 must not throw out of the keeper thread (terminate under
+    // Restart=always).
+    ResumeState bad = s;
+    bad.event_id = std::string("evt-\xff\xfe");
+    bool threw = false, ok = false;
+    try { ok = save_resume_state(p, bad, err); } catch (...) { threw = true; }
+    CHECK(!threw && ok, "invalid UTF-8 in event_id saves without throwing");
+    std::remove(p.c_str());
+
     const long long now = 1760000000000LL;
     ResumeState f;
     f.saved_wall_ms = now - 29LL * 60 * 1000;

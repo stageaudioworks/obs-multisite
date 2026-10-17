@@ -32,7 +32,9 @@ bool save_resume_state(const std::string& path, const ResumeState& s,
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) { error = "cannot write " + tmp; return false; }
-        out << j.dump(2) << "\n";
+        // replace, not throw: an event id with bad UTF-8 must not terminate
+        // the keeper thread (Restart=always would loop on it).
+        out << j.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
         out.flush();
         if (!out) { error = "failed writing " + tmp; return false; }
     }
