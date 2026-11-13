@@ -1040,6 +1040,10 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
+        # An AAC encoder whose eight channels are octagonal, not 7.1: OBS's own
+        # codes 7.1's fourth channel as an LFE, which is where packed mode's
+        # click went (BUGS.md entry 3).
+        src/obs/packed_aac.cpp
         src/obs/caption_bridge.cpp
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp

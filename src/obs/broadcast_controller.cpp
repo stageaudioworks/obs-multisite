@@ -446,12 +446,37 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
 
     // One AAC encoder per requested OBS mixer track.
     const int tracks = std::max(1, std::min(6, m_cfg.audio_tracks));
+    // Which AAC encoder, and it depends on the width of the mix.
+    //
+    // Packed multi-channel mode (PROJECT-SCOPE.md §4.3.1) carries arbitrary
+    // content in every channel, click on channel 4. OBS's ffmpeg_aac takes its
+    // layout from the global mix, which for eight channels is 7.1 — and 7.1's
+    // fourth channel is the LFE, which AAC codes low-band only, so the click
+    // came back as a thud (BUGS.md entry 3). The plugin's own encoder codes
+    // eight channels as OCTAGONAL instead: full-range in every position.
+    //
+    // Only when the mix is wider than stereo. Multi-track ISO mode at stereo
+    // is unchanged, down to the encoder OBS already uses.
+    const int mix_channels = (int)audio_output_get_channels(obs_get_audio());
+    const char* audio_encoder = mix_channels > 2 ? "multisite_packed_aac"
+                                                 : "ffmpeg_aac";
     for (int i = 0; i < tracks; ++i) {
         obs_data_t* as = obs_data_create();
         obs_data_set_int(as, "bitrate", m_cfg.audio_bitrate_kbps);
         std::string name = "multisite_a" + std::to_string(i + 1);
+        const char* used = audio_encoder;
         obs_encoder_t* enc = obs_audio_encoder_create(
-            "ffmpeg_aac", name.c_str(), as, (size_t)i, nullptr);
+            audio_encoder, name.c_str(), as, (size_t)i, nullptr);
+        if (!enc && mix_channels > 2) {
+            // Never trade a broadcast for the better layout: say so and fall
+            // back to OBS's encoder, which still sends the channel — with a
+            // low-passed fourth, which is the old behaviour.
+            mlog_warn("packed AAC encoder unavailable — falling back to OBS's "
+                      "ffmpeg_aac; channel 4 will be coded as an LFE");
+            enc = obs_audio_encoder_create("ffmpeg_aac", name.c_str(), as,
+                                           (size_t)i, nullptr);
+            used = "ffmpeg_aac";
+        }
         obs_data_release(as);
         if (!enc) {
             error = "could not create audio encoder for track " +
@@ -459,6 +484,9 @@ bool BroadcastController::go_live(std::string& error, bool force_new_event) {
             release_all();
             return false;
         }
+        if (i == 0)
+            mlog_info("audio encoder: %s, %d mixer track(s), %d channel(s) in "
+                      "the mix", used, tracks, mix_channels);
         obs_encoder_set_audio(enc, obs_get_audio());
         obs_output_set_audio_encoder(m_output, enc, (size_t)i);
         m_aencs.push_back(enc);

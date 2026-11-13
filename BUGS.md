@@ -11,7 +11,7 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-09-25.
+Last updated: 2026-11-13.
 
 ---
 
@@ -148,31 +148,41 @@ the one to read.
 
 ### 3. Packed audio from OBS: channel 4 is the LFE, and comes out low-passed
 
-**Status: open, not started.** Measured 2026-09-25, not yet heard in a room.
+**Status: FIXED 2026-11-13 — not yet heard in a room.** Measured 2026-09-25;
+the wiring is proven by the codec round-trip below, not by an operator's ears.
 
-**Symptom (expected, from the measurement).** In packed multi-channel mode
-(§4.3.1) the fourth channel — "Click" in the default `channel_labels` — reaches
-a satellite as low frequencies only. A click becomes a thud or nothing; a voice
-there, a mumble.
+**Symptom (as measured).** In packed multi-channel mode (§4.3.1) the fourth
+channel — "Click" in the default `channel_labels` — reached a satellite as low
+frequencies only. A click became a thud or nothing.
 
-**Root cause.** The OBS encoder sends eight channels as 7.1, because that is
-OBS's speaker setting and the AAC encoder takes OBS's layout. In 7.1 the fourth
-channel is the LFE, and AAC codes an LFE element as the lowest bands only.
-`tests/test_cmaf_tracks.cpp` shows it: a 3150 Hz tone on channel 4 of a 7.1
-track does not come back. The 2026-09-07 check proved channel *order*, which is
-intact; it did not play full-range sound on channel 4.
+**Root cause.** OBS's FFmpeg AAC encoder takes its channel layout from the
+global mix (`obs-ffmpeg-audio-encoders.c`,
+`av_channel_layout_default(audio_output_get_channels(audio))`). At eight
+channels that is 7.1, whose fourth channel is the LFE, and AAC codes an LFE
+element with the lowest bands only. `tests/test_cmaf_tracks.cpp` shows both
+halves: an octagonal eight keeps a 3150 Hz tone on channel 4, the same eight as
+7.1 does not. There is no setting to override it and no octagonal speaker enum
+in libobs, so no configuration could have fixed this.
 
-**Next step.** Encode the packed track as octagonal (eight full-range channels,
-no LFE; FFmpeg writes a PCE for it) whatever OBS's speaker layout, as the
-MultisiteOS encoder does (multisite-outpost, `audio_feed.cpp`). The satellite
-already ignores positions. Check the OBS satellite still presents eight
-channels to OBS's 7.1 mixer from an octagonal stream.
+**Fix.** `src/obs/packed_aac.cpp` registers `multisite_packed_aac`, an AAC
+encoder on libobs's audio-encoder interface whose codec context is
+`AV_CHANNEL_LAYOUT_OCTAGONAL`. libobs still hands it the mix as 7.1 — that is
+the channel count and the plane order — while the bitstream declares eight
+full-range channels (a PCE, in the init segment).
+`broadcast_controller.cpp` uses it whenever the mix is wider than stereo, and
+falls back to `ffmpeg_aac` with a warning if it cannot be created. Channel
+order is untouched: plane *i* in is plane *i* out, and the satellite still
+routes by the published `channel_labels`.
+
+**Still to check on a machine with OBS:** that a 7.1 mix with a tone on channel
+4 survives to an eighth-channel receiver, and that the OBS satellite presents
+eight channels to OBS's own 7.1 mixer from the octagonal stream.
 
 **The trap.** Do not move "Click" to another channel as the fix: every channel
 of a packed track must be full range, and the next user's click is on 4.
 
-**Files:** `src/obs/multisite_output.cpp` (the packed path),
-`tests/test_cmaf_tracks.cpp`.
+**Files:** `src/obs/packed_aac.cpp`, `src/obs/broadcast_controller.cpp`,
+`src/obs/plugin-main.cpp`, `tests/test_cmaf_tracks.cpp`.
 
 ---
 
