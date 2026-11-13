@@ -229,27 +229,47 @@ public:
     using DropCallback = std::function<void(const SpoolDrop&)>;
     void set_drop_callback(DropCallback cb) { m_on_drop = std::move(cb); }
 
+    // Test seam (obs-multisite#36). Called from enqueue() after the segment
+    // bytes are durable and before its sidecar is written — i.e. inside the
+    // window that used to hold m_mtx across a segment's SHA-256 and both file
+    // writes. test_spool_lock blocks here and proves state() and
+    // pending_count() still answer.
+    using EnqueuePause = std::function<void()>;
+    void set_enqueue_pause_for_testing(EnqueuePause pause) {
+        m_enqueue_pause = std::move(pause);
+    }
+
 private:
     std::string m_root;
     std::string m_dir;     // the current event's folder; empty when there is none
     uint64_t    m_max_bytes = 0;
+    // m_mtx guards the in-memory state only — never disk I/O (obs-multisite#36:
+    // a held lock across an enqueue made every Session::status() wait 336 ms
+    // for the disk on a ROCK 5B encoder).
     mutable std::mutex m_mtx;
-    SpoolState  m_state;
+    // m_io_mtx serialises the writers (enqueue, confirm, begin_event, …). It is
+    // what lets each of them build a state snapshot under m_mtx, release it,
+    // and then do the fsync — without two snapshots landing out of order, and
+    // without begin_event() swapping m_dir under an in-flight segment write.
+    // Lock order is always m_io_mtx → m_mtx; readers take m_mtx alone.
+    std::mutex m_io_mtx;    SpoolState  m_state;
     uint64_t    m_bytes_pending = 0;
     std::atomic<uint64_t> m_dropped_count{0};
     DropCallback m_on_drop;
+    EnqueuePause m_enqueue_pause;
 
-    std::string seg_path(uint64_t seq) const;
-    std::string meta_path(uint64_t seq) const;
+    static std::string seg_path_in(const std::string& dir, uint64_t seq);
+    static std::string meta_path_in(const std::string& dir, uint64_t seq);
     std::string state_path() const;
     void load_state();
-    void save_state();
-    std::vector<uint64_t> pending_seqs() const; // sorted ascending
-    // Removes seq's files, advances the floor past it, records the drop.
-    // Caller holds m_mtx and appends the result to `out` for the callback to
-    // be invoked once the lock is released (the callback may re-enter code
-    // that itself locks a caller's mutex — never call it locked).
-    uint64_t evict_locked(uint64_t seq, std::vector<SpoolDrop>& out);
+    // A state.json document for `st` (the on-disk text, no lock needed).
+    static std::string state_json(const SpoolState& st);
+    // Writes a document built by state_json() to `dir`/state.json, durably.
+    // Takes no lock: the caller has already released m_mtx and holds m_io_mtx.
+    static void write_state_doc(const std::string& dir, const std::string& doc);
+    // Reads `dir` for `.seg` files, sorted ascending. Takes no lock: callers
+    // capture m_dir under m_mtx first (and, for writers, hold m_io_mtx).
+    static std::vector<uint64_t> pending_seqs_in(const std::string& dir);
 };
 
 } // namespace multisite

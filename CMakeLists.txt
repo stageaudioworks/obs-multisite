@@ -355,6 +355,10 @@ add_executable(test_spool_targets tests/test_spool_targets.cpp)
 target_link_libraries(test_spool_targets PRIVATE multisite_core)
 add_test(NAME spool_targets COMMAND test_spool_targets)
 
+add_executable(test_spool_lock tests/test_spool_lock.cpp)
+target_link_libraries(test_spool_lock PRIVATE multisite_core)
+add_test(NAME spool_lock COMMAND test_spool_lock)
+
 # Two upload streams over one spool, and the mirror's yield rule (Phase 9).
 add_executable(test_mirror_upload tests/test_mirror_upload.cpp)
 target_link_libraries(test_mirror_upload PRIVATE multisite_core)
