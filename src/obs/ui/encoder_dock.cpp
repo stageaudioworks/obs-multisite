@@ -16,6 +16,7 @@
 #include "web_box.h"
 #include "secondary_box.h"
 #include "storage_dialog.h"
+#include "paired_storage_note.h"
 
 #include "../../core/s3_transport.h"
 #include "../../core/storage_providers.h"
@@ -846,21 +847,10 @@ void EncoderDock::onDisableCloudToggled(bool checked) {    if (!checked) { onSav
 
 void EncoderDock::refreshPairedStorageNote() {
     if (!m_pairedStorageNote) return;
-    // Reads the plugin's ONE cloud identity — the same one the encoder writes
-    // through — so what the panel says is what the session does, not a
-    // reconstruction from form fields.
-    auto id = reporter_cloud_identity(multisite::CloudRole::Encoder);
-    QString t;
-    if (!id || !id->paired()) {
-        t = tr_("Dock.PairedNotYet");
-    } else if (!id->credentials().present()) {
-        t = tr_("Dock.PairedNoCreds");
-    } else {
-        const multisite::Credentials c = id->credentials();
-        t = id->credentials().from_last_good
-            ? tr_("Dock.PairedStale").arg(QString::fromStdString(c.bucket))
-            : tr_("Dock.PairedBucket").arg(QString::fromStdString(c.bucket));
-    }
+    // One implementation for both docks (paired_storage_note.h): the encoder
+    // and the decoder are two windows on the same collector connection, and a
+    // copy of this wording in each is how they come to disagree about it.
+    const QString t = paired_storage_note(multisite::CloudRole::Encoder);
     if (m_pairedStorageNote->text() != t) m_pairedStorageNote->setText(t);
 }
 
@@ -937,6 +927,12 @@ void EncoderDock::refreshPairing() {
             m_pairCancel->setEnabled(false);
             break;
     }
+    // The paired-storage note is in the Storage box, not this one, and it
+    // changes when pairing completes or the first credentials land. Refreshed
+    // here so an operator watching the dialog sees it happen, instead of it
+    // staying "Not paired yet" until the provider dropdown is touched.
+    if (m_pairedStorageNote && m_pairedStorageNote->isVisible())
+        refreshPairedStorageNote();
 }
 
 void EncoderDock::onOpenSettings() {

@@ -11,6 +11,7 @@
 #include "fit_label.h"
 #include "web_box.h"
 #include "secondary_box.h"
+#include "paired_storage_note.h"
 
 #include "../../core/position_interp.h"
 #include "../../core/storage_providers.h"
@@ -684,6 +685,15 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("AccessKeyID"), m_keyId);
     form->addRow(tr_("SecretKey"), m_secret);
     form->addRow(tr_("Region"), m_region);
+    // Replaces the hidden typed fields when Multisite Cloud is the provider.
+    // Read-only: the bucket and its credentials come from the collector, so
+    // there is nothing here to type. The encoder dock had this from the start;
+    // the decoder hid every field and put NOTHING in their place, which is the
+    // dead end obs-multisite#13 exists to close.
+    m_pairedStorageNote = new QLabel(storeBox);
+    m_pairedStorageNote->setWordWrap(true);
+    m_pairedStorageNote->setVisible(false);
+    form->addRow(QString(), m_pairedStorageNote);
     form->addRow(tr_("RoomID"), m_roomId);
     m_siteName = new QLineEdit(storeBox);
     m_siteName->setToolTip(tr_("Dock.SiteNameHint"));
@@ -1087,6 +1097,11 @@ void DecoderDock::refreshPairing() {
             m_pairCancel->setEnabled(false);
             break;
     }
+    // The paired-storage note lives in the Storage box and changes when
+    // pairing completes or the first credentials land — same rule, and same
+    // reason, as the encoder dock's refresh here.
+    if (m_pairedStorageNote && m_pairedStorageNote->isVisible())
+        refreshPairedStorageNote();
 }
 
 void DecoderDock::onOpenSettings() {
@@ -1142,6 +1157,27 @@ void DecoderDock::updateProviderFields() {
         form->setRowVisible(m_keyId,     !cloud);
         form->setRowVisible(m_secret,    !cloud);
     }
+    if (m_pairedStorageNote) {
+        m_pairedStorageNote->setVisible(cloud);
+        if (cloud) refreshPairedStorageNote();
+    }
+    // Pressing Multisite Cloud leaves the operator needing Connect, which is in
+    // the Cloud box ABOVE — first on the page, but possibly scrolled off it.
+    // Bring it into view rather than leaving them staring at an empty storage
+    // box: the encoder dock does the same, for the same reason.
+    if (cloud && m_reporterEnabled) {
+        if (auto* scroll = qobject_cast<QScrollArea*>(
+                m_reporterEnabled->window()->findChild<QScrollArea*>()))
+            scroll->ensureWidgetVisible(m_reporterEnabled);
+    }
+}
+
+void DecoderDock::refreshPairedStorageNote() {
+    if (!m_pairedStorageNote) return;
+    // One implementation for both docks (paired_storage_note.h). The decoder
+    // words it as reading, because a campus does not write the bucket.
+    const QString t = paired_storage_note(multisite::CloudRole::Decoder);
+    if (m_pairedStorageNote->text() != t) m_pairedStorageNote->setText(t);
 }
 
 void DecoderDock::onSaveSettings() {

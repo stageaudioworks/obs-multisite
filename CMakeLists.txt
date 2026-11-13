@@ -1110,6 +1110,7 @@ if(BUILD_OBS_PLUGIN)
             src/obs/ui/decoder_dock.cpp
             src/obs/ui/cues_dock.cpp
             src/obs/ui/storage_dialog.cpp
+            src/obs/ui/paired_storage_note.cpp
             src/obs/ui/role_selector.cpp
             src/obs/ui/settings_tabs.cpp
             src/obs/ui/web_box.cpp
