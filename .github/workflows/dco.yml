@@ -26,7 +26,7 @@ jobs:
       # The PR head itself, not the merge commit GitHub synthesises: the merge
       # commit is created by GitHub and has no sign-off, and it is not what
       # lands on main anyway.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
