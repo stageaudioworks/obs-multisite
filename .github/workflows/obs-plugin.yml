@@ -101,7 +101,7 @@ jobs:
             echo "ok: $sym (mangled)"
           done
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: obs-multisite-linux
           path: build/obs-multisite.so
@@ -457,7 +457,7 @@ jobs:
           Write-Host "--- staged ---"
           Get-ChildItem -Recurse dist | Select-Object FullName | Format-Table -AutoSize
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: success()
         with:
           name: obs-multisite-windows
@@ -465,7 +465,7 @@ jobs:
 
       # Separate artifact so the symbols are fetched only when a crash needs
       # reading, and never end up in the public release download.
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: success()
         with:
           name: obs-multisite-windows-symbols
@@ -691,7 +691,7 @@ jobs:
           } > dist/INSTALL-MACOS.txt
           cat dist/INSTALL-MACOS.txt
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: obs-multisite-macos-arm64
           path: dist/
@@ -707,7 +707,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Collect the built plugins
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
