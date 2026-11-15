@@ -20,7 +20,7 @@ constexpr size_t kMaxEntries = 4;
 // After a failed refresh with a live set still held, try again within this
 // long rather than at half the remaining lifetime — which, on a twelve-hour
 // credential, could be hours after the collector came back.
-constexpr long long kCueRetryCapMs = 5 * 60 * 1000;
+constexpr long long kCueRetryCapMs = 5LL * 60 * 1000;
 
 } // namespace
 

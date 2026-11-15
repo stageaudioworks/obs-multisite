@@ -528,7 +528,7 @@ void HttpServer::serve_connection(long long handle) {
 #else
     timeval rtv{};
     rtv.tv_sec  = kRecvTimeoutMs / 1000;
-    rtv.tv_usec = (kRecvTimeoutMs % 1000) * 1000;
+    rtv.tv_usec = static_cast<suseconds_t>(kRecvTimeoutMs % 1000) * 1000;
     timeval stv{};
     stv.tv_sec = 30;
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rtv, sizeof(rtv));

@@ -1458,10 +1458,9 @@ void Player::deliver_loop() {
         // Keep the reported time in step with the frame going to air, so it
         // advances continuously rather than once per segment.
         {
-            int64_t base = m_seg_first_pts_ns.load();
             const int64_t pts = item.is_video ? item.video.pts_ns
                                               : item.audio.pts_ns;
-            if (base < 0) { m_seg_first_pts_ns = pts; base = pts; }
+            if (m_seg_first_pts_ns.load() < 0) m_seg_first_pts_ns = pts;
             // The position IS the frame's pts: how far into the programme it
             // sits. This used to be the segment's recorded wall time plus the
             // offset within it, which needed the segment's at_ms to be right —
