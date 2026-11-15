@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for the sanitizers workflow.
+#
+# libcrypto is the system OpenSSL, not built with -fsanitize=thread, so TSan
+# sees its memory accesses through the memcmp/memcpy interceptors but not the
+# synchronisation around them. OpenSSL 3.3+ reads its method-fetch cache
+# lock-free (RCU) while a writer holds the store lock; the reader's side is
+# invisible to TSan, so two threads hashing at once (SigV4 signing in
+# test_cloud_cancel) is reported as a race. It began when ubuntu-latest moved
+# to Ubuntu 26 and its newer OpenSSL on 2026-10-19. Scoped to frames inside
+# libcrypto only: a race in our own code that merely calls into it still fails.
+called_from_lib:libcrypto.so

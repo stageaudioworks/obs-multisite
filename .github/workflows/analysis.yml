@@ -74,7 +74,8 @@ jobs:
       # result is worth far less than the whole list.
       - name: Test
         env:
-          TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1
+          # tests/tsan.supp says why libcrypto is excluded and what still fails.
+          TSAN_OPTIONS: halt_on_error=0 second_deadlock_stack=1 suppressions=${{ github.workspace }}/tests/tsan.supp
           UBSAN_OPTIONS: print_stacktrace=1 halt_on_error=0
           ASAN_OPTIONS: detect_leaks=1
         run: ctest --test-dir build --output-on-failure
