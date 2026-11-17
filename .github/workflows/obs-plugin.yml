@@ -34,11 +34,11 @@ env:
   # Match the OBS version you actually run. The obs-deps version is read from
   # this release's own buildspec.json, so FFmpeg/curl DLL versions line up with
   # what your OBS ships — otherwise the plugin fails to load with error 126.
-  OBS_TAG: "32.2.2"
+  OBS_TAG: "33.0.0-rc1"
   # Used only if the pinned obs-deps version cannot be read from the OBS source
   # tree. OBS 32 keeps it in CMakePresets.json; older releases used
   # buildspec.json. Keep this matched to OBS_TAG.
-  OBS_DEPS_FALLBACK: "2026-07-15"
+  OBS_DEPS_FALLBACK: "2026-08-26"
 
 jobs:
   # Fast guard on our OBS API usage, against distro libobs headers.
@@ -141,6 +141,21 @@ jobs:
           Expand-Archive obs.zip -DestinationPath obs-src
           $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
           Write-Host "obs source dir: $obs"
+
+          # OBS 33.0.0-rc1 cannot configure libobs with ENABLE_CORE_MODULES=OFF:
+          # that path returns before set_obs_core_modules(), which generates
+          # obs-core-modules.c, a source libobs always compiles. Leaving core
+          # modules on is no way out either — it needs obs-browser, a submodule
+          # this tarball does not carry. Generate the (empty) list before the
+          # return. A no-op on releases without the block, 32.2.2 among them.
+          # Reported upstream as obsproject/obs-studio#14013; drop this once fixed.
+          $mods = Join-Path $obs "plugins/CMakeLists.txt"
+          $text = Get-Content $mods -Raw
+          $patched = $text -replace '(OBS_FEATURES_DISABLED "Core Modules"\)\r?\n)(\s*return\(\))', "`$1  set_obs_core_modules()`n`$2"
+          if ($patched -ne $text) {
+            Set-Content $mods $patched -NoNewline
+            Write-Host "patched plugins/CMakeLists.txt to generate an empty core-module list"
+          }
 
           # Where OBS keeps its dependency pins has moved: OBS 32 uses the
           # "dependencies" configure preset in CMakePresets.json, releases up
@@ -264,11 +279,14 @@ jobs:
           # obs-frontend-api targets are BUILT, not the whole OBS app.
           # GITHUB_ENV only affects LATER steps, so track the decision locally
           # within this step and publish it once at the end.
+          # OBS 33 renamed ENABLE_PLUGINS to ENABLE_CORE_MODULES and ignores the old
+          # name, so it tried to build obs-browser, a submodule the source
+          # tarball does not carry. Both are passed so either release configures.
           $haveQt = ($env:HAVE_QT -eq "1")
           $uiFlag = if ($haveQt) { "-DENABLE_UI=ON" } else { "-DENABLE_UI=OFF" }
           cmake -S $env:OBS_SRC -B obs-build @genArgs `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
-            -DENABLE_PLUGINS=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
+            -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
             -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
             -DCMAKE_BUILD_TYPE=Release
@@ -279,7 +297,7 @@ jobs:
               $haveQt = $false
               cmake -S $env:OBS_SRC -B obs-build @genArgs `
                 -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
-                -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
+                -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
                 -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
                 -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
                 -DCMAKE_BUILD_TYPE=Release
