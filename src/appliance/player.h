@@ -98,7 +98,8 @@ struct Status {
     bool        locked = false;
 
     // ── Where in the programme ───────────────────────────────────────────────
-    // Clock times throughout. The UI never mentions a sequence number.
+    // Positions are MEDIA time (how far into the programme); started_ms alone
+    // is a time of day. The UI never mentions a sequence number.
     long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
     long long   end_ms = 0, total_ms = 0;
     long long   seek_target_ms = 0;     // where playback is heading, if moving

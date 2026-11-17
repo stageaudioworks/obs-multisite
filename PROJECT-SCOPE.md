@@ -884,6 +884,27 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   feed — the interface lets the operator pick: the region going out, or the
   whole feed as received (`/preview.jpg?view=feed`). The default is the output.
 
+**After a restart.** The player writes `resume.json` beside its config — the
+event, whether it was pinned, whether it was held, and the position — straight
+away when any of the first three change and otherwise every 10 s, even when
+nothing moved, so a box held for an hour is still "down for under 30 minutes"
+when it restarts. On
+start, a file under 30 minutes old is restored with the Player's own controls,
+in this order: pin (only if not already pinned), seek, hold. The seek comes
+before the hold because a seek releases one. Each step is sent once, and
+restoring gives up after 60 s (undoing its own pin) if the event never loads.
+It also stands down if the operator picks something else meanwhile, or if the
+room, unpinned, has moved on to a different event. A file older than 30
+minutes, or unreadable, is ignored and the box follows live as configured.
+Nothing is saved until the restore has finished. Position is the media time
+of the frame last delivered to the screen (`Status::playhead_ms`), not the
+download head, which runs whole segments ahead. A box held at the very start
+is restored without a seek (a seek to 0 is the failure value, BUGS #9). The
+hold is re-applied only once the seek has landed. Freshness is judged only
+after the system clock is synchronised, waiting up to 30 s; if it is not, the
+file is treated as stale, because a box with no RTC boots with the clock of
+its last shutdown.
+
 ## 8.2 Public simulcast relay
 
 **Status: built.**
