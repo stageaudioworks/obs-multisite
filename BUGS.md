@@ -186,33 +186,34 @@ of a packed track must be full range, and the next user's click is on 4.
 
 ### 11. `test_session` case 22 fails now and then under the sanitizers
 
-**Status: OPEN — a test that fails on timing, not a product fault.** Seen once,
-2026-11-22, in the `address+undefined` job of PR #54, which changed only
-`dco.yml`. A re-run of that job passed. The same job passed on main at
-`17bf69f` and on #53 that day.
+**Status: FIXED 2026-11-22 — waiting on a few CI runs to confirm.** Seen once,
+in the `address+undefined` job of PR #54, which changed only `dco.yml`. A
+re-run passed.
 
-**Symptom.** Case 22 ("a stalled live.json heartbeat does not block status() or
-the next segment") printed `publish_segment() 300 ms, during a 1200 ms
+**Symptom.** Case 22 printed `publish_segment() 300 ms, during a 1200 ms
 live.json PUT` and failed `CHECK(pub_ms < 300, …)`. `status()` took 0 ms.
 
-**Cause (inferred, not measured).** The check is a wall-clock bound, and an
-ASan+UBSan build on a shared runner sits close to it. The fault it pins (#8
-under "Recently landed") measured 1197 ms, the length of the stalled PUT. A
-300 ms result is not that fault returning: a real block would read about
-1200 ms.
+**Cause (inferred, not measured).** `publish_segment()` writes the segment to
+the spool and calls `fsync` on the file and its directory
+(`spool_queue.cpp:219,228`). On a shared runner's virtual disk that can take
+hundreds of milliseconds. On a Mac it takes 2–3 ms, even under ASan. Nothing on
+that path waits on the stalled PUT. The fault the case pins (#8 under "Recently
+landed") measured 1197 ms, the whole stall.
 
-**Next step.** Raise the bound in a way that still catches the real block, for
-example `pub_ms < 600`, or compare it with the stall (`pub_ms < 1200 / 2`).
-Cases 21 and 23 use the same 300 ms bound (lines 1012 and 1092), so change them
-too.
-Run the suite a few times under `analysis.yml` before calling it fixed.
+**Fix.** Cases 21–23 now share `kStallMs` (1200) and fail at `kPromptMs`, half
+the stall (600 ms), instead of 300 ms. To prove the new bound still catches the
+real fault, the `live.json` PUT was put back under `m_mtx` temporarily: case 22
+then failed with `status() 1204 ms`. Five local ASan+UBSan runs passed, the
+slowest call at 3 ms.
+
+**If it comes back.** A reading between 600 and 1200 ms is the runner's disk
+again. Measure the `fsync` before you raise the bound further. A reading of
+about 1200 ms is the real fault.
 
 **The trap.** Do not delete the check or skip it under sanitizers. It is the
-only test pinning #8, and the sanitizer build is where a lock taken on the
-upload path would show up first.
+only test pinning #8.
 
-**Files:** `tests/test_session.cpp` (case 22, about line 1071),
-`.github/workflows/analysis.yml`.
+**Files:** `tests/test_session.cpp` (cases 21–23), `src/core/spool_queue.cpp`.
 
 ---
 

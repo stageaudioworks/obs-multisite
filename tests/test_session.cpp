@@ -958,6 +958,14 @@ int main() {
     }
 
 
+    // Cases 21-23 stall one PUT for kStallMs and time a call that must not
+    // wait for it. The fault they pin made that call take the whole stall
+    // (1197 ms measured), so the bound is half of it: far enough from a real
+    // block to read it as one, and far enough from 0 that a sanitized build on
+    // a shared runner does not trip it (300 ms did, once: BUGS #11).
+    static constexpr int kStallMs = 1200;
+    static constexpr long long kPromptMs = kStallMs / 2;
+
     std::printf("== 21. a stalled manifest upload does not block status() ==\n");
     {
         // BUGS #6, reported as "live, when uploads are stalling" — OBS freezing
@@ -978,7 +986,7 @@ int main() {
                           const std::map<std::string,std::string>& tags) override {
                 if (key.find("manifest.json") != std::string::npos) {
                     ++manifest_puts;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kStallMs));
                 }
                 return MemStore::put(key, body, ct, tags);
             }
@@ -1007,9 +1015,9 @@ int main() {
         const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0).count();
         (void)st;
-        std::printf("         status() took %lld ms while a 1200 ms PUT was in flight\n",
-                    (long long)took);
-        CHECK(took < 300,
+        std::printf("         status() took %lld ms while a %d ms PUT was in flight\n",
+                    (long long)took, kStallMs);
+        CHECK(took < kPromptMs,
               "status() returns promptly while a manifest upload is stalled");
 
         ses.end();
@@ -1033,7 +1041,7 @@ int main() {
                       const std::map<std::string,std::string>& tags) override {
             if (slow && key.find(slow_key) != std::string::npos) {
                 ++slow_puts;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+                std::this_thread::sleep_for(std::chrono::milliseconds(kStallMs));
             }
             return MemStore::put(key, body, ct, tags);
         }
@@ -1065,10 +1073,10 @@ int main() {
         t0 = std::chrono::steady_clock::now();
         ses.publish_segment(blob(2, 4000), 6.0, 6.0);
         const long long pub_ms = elapsed_ms(t0);
-        std::printf("         status() %lld ms, publish_segment() %lld ms, during a 1200 ms live.json PUT\n",
-                    st_ms, pub_ms);
-        CHECK(st_ms < 300, "status() returns promptly while the heartbeat is stalled");
-        CHECK(pub_ms < 300, "  and so does the next segment");
+        std::printf("         status() %lld ms, publish_segment() %lld ms, during a %d ms live.json PUT\n",
+                    st_ms, pub_ms, kStallMs);
+        CHECK(st_ms < kPromptMs, "status() returns promptly while the heartbeat is stalled");
+        CHECK(pub_ms < kPromptMs, "  and so does the next segment");
         ses.end();
     }
 
@@ -1088,8 +1096,9 @@ int main() {
         const auto t0 = std::chrono::steady_clock::now();
         (void)ses.status();
         const long long st_ms = elapsed_ms(t0);
-        std::printf("         status() took %lld ms during a 1200 ms markers.json PUT\n", st_ms);
-        CHECK(st_ms < 300, "status() returns promptly while a cue is uploading");
+        std::printf("         status() took %lld ms during a %d ms markers.json PUT\n",
+                    st_ms, kStallMs);
+        CHECK(st_ms < kPromptMs, "status() returns promptly while a cue is uploading");
         cue.join();
         ses.end();
     }
