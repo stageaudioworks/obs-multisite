@@ -18,6 +18,8 @@
 //   events/{event_id}/markers.json
 //
 #include "model.h"
+#include "object_queue.h"
+#include "parity.h"
 #include "spool_budget.h"
 #include "spool_queue.h"
 #include "retry_uploader.h"
@@ -72,6 +74,11 @@ struct SessionConfig {
     int64_t     resume_stale_after_ms = 30LL * 60 * 1000; // 30 minutes
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size
+    // Segments per group for the checksum index and parity (parity.h,
+    // docs/adr/0004). 0 publishes no groups. Costs about 1/k more upload and
+    // storage. Fixed by configuration and never adapted to measured loss or
+    // latency (docs/adr/0003 §5). A resumed event keeps the k it began with.
+    int         parity_group = 10;
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
     // requests carrying x-amz-tagging. R2 users should instead configure a
     // bucket lifecycle rule by prefix/age. Default off for broad compatibility.
@@ -210,6 +217,9 @@ public:
         uint64_t    spool_cap_bytes = 0;
         uint64_t    spool_pending_bytes = 0;
         double      spool_seconds_left = -1.0;
+        // Segment groups whose index (and parity) are stored (parity.h).
+        uint64_t    groups_published = 0;
+        size_t      groups_pending = 0;
 
         // Set once, the moment this event was resumed rather than started
         // fresh — empty event_id means this run started with start_new().
@@ -326,6 +336,20 @@ private:
     std::unique_ptr<RetryUploader> m_uploader;
     // The second target's stream. Null unless a mirror transport was supplied.
     std::unique_ptr<RetryUploader> m_mirror;
+
+    // ── Segment groups (parity.h) ───────────────────────────────────────────
+    // The accumulator is fed in confirmation order by the upload thread (and
+    // by end()'s drain); m_parity_mtx guards it. The queue carries each
+    // finished group's parity and index to the store, durably, in that order.
+    // Leftover queues are other events' groups a previous run did not finish
+    // sending; they drain while this event is live.
+    std::mutex                          m_parity_mtx;
+    std::unique_ptr<ParityAccumulator>  m_parity;
+    std::unique_ptr<ObjectQueue>        m_group_q;
+    std::vector<std::unique_ptr<ObjectQueue>> m_leftover_qs;
+    void publish_groups(std::vector<ParityAccumulator::Finished> done);
+    std::string groups_root() const { return m_cfg.spool_dir + ".objects"; }
+    void stop_group_queues();
 
     // ── The mirror's copy of the small objects (Phase 9) ─────────────────────
     // The manifest, live.json, event.json and the cue objects go to the second

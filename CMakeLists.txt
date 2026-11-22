@@ -64,6 +64,8 @@ endif()
 add_library(multisite_core STATIC
     src/core/spool_queue.cpp
     src/core/retry_uploader.cpp
+    src/core/parity.cpp
+    src/core/object_queue.cpp
     src/core/model.cpp
     src/core/log.cpp
     src/core/session.cpp
@@ -210,6 +212,13 @@ add_test(NAME upload_integrity COMMAND test_upload_integrity)
 add_executable(test_spool_budget tests/test_spool_budget.cpp)
 target_link_libraries(test_spool_budget PRIVATE multisite_core)
 add_test(NAME spool_budget COMMAND test_spool_budget)
+
+# Segment groups: a checksum index for every segment and XOR parity, so a
+# campus verifies segments outside the manifest's window and rebuilds one the
+# store lost or damaged, with nothing re-sent (R5, ADR-0004).
+add_executable(test_parity tests/test_parity.cpp)
+target_link_libraries(test_parity PRIVATE multisite_core)
+add_test(NAME parity COMMAND test_parity)
 
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
