@@ -9,6 +9,10 @@ and plays them out. The twenty-minute version of everything below is
 **In a hurry?** [QUICKSTART.md](../QUICKSTART.md) is the short version of
 everything below.
 
+**About to run a first real service?** Rehearse it with
+[FIRST-SERVICE.md](FIRST-SERVICE.md), and print
+[VOLUNTEER-CARD.md](VOLUNTEER-CARD.md) for each machine.
+
 ### Installing the plugin
 
 Builds are attached to each [release](https://github.com/stageaudioworks/obs-multisite/releases),
