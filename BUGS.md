@@ -308,6 +308,23 @@ each, so the history is findable without being 1,100 lines in the way.
   runs to the next keyframe, or for the last to its last frame's end, and a last
   segment under 0.5 s is dropped (`cmaf_muxer.cpp`, `test_cmaf_durations`).
   FIXED. New events record 6.000 s, not 5.967.
+- **Upload delivery review, 2026-11-22** (`docs/scope/upload-delivery-assurance.md`).
+  Five faults found and fixed on one branch, each pinned by a test verified
+  against the old behaviour:
+  - a campus more than 50 segments behind live stored segments with no
+    checksum check at all, because checksums came only from the manifest's
+    window (`test_parity` §6);
+  - the fixed 4 GiB spool dropped the start of a service after an outage of
+    about an hour, on disks with hundreds of GB free (`test_spool_budget`);
+  - a 403 was retried every 200 ms under "uploading has stopped"
+    (`test_upload_integrity` §3);
+  - S3's BadDigest / XAmzContentSHA256Mismatch were told to "check the
+    credentials" and never retried (`test_s3_put_integrity` §3);
+  - the dock read the mirror's status only when LAN delivery was on.
+
+  The trap: a "repair" of a segment the store acknowledged must never be the
+  uploader testing its own 2xx and re-sending (ADR-0003 §1). Parity rebuilds
+  it at the campus instead.
 
 ---
 

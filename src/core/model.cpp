@@ -293,6 +293,7 @@ std::string Manifest::to_json() const {
     json gp = json::array();
     for (const auto& g : gaps) gp.push_back({ g.first, g.second });
     j["gaps"] = gp;
+    if (group_k > 0) j["group_k"] = group_k;
     return j.dump();
 }
 
@@ -347,6 +348,10 @@ Manifest Manifest::from_json(const std::string& s) {
             if (g.is_array() && g.size() == 2 && g[0].is_number_unsigned() &&
                 g[1].is_number_unsigned() && g[0].get<uint64_t>() <= g[1].get<uint64_t>())
                 m.gaps.emplace_back(g[0].get<uint64_t>(), g[1].get<uint64_t>());
+    if (j.contains("group_k") && j["group_k"].is_number_integer()) {
+        const int k = j["group_k"].get<int>();
+        m.group_k = (k > 0 && k <= 1000) ? k : 0;
+    }
     return m;
 }
 

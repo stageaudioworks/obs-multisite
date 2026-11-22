@@ -402,8 +402,22 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
 
         // The eviction list is taken before m_mtx so the directory scan is not
         // done under it either; m_io_mtx keeps the folder still.
+        // The cap for THIS enqueue. A provider (Session's, sized from the free
+        // disk — spool_budget.h) is asked with the segment already on disk, so
+        // its bytes count as pending and no longer as free. Asked with m_io_mtx
+        // held and m_mtx not: it measures the disk.
+        uint64_t cap = m_max_bytes;
+        if (m_cap_fn) {
+            uint64_t pending_now;
+            {
+                std::lock_guard<std::mutex> lk(m_mtx);
+                pending_now = m_bytes_pending + seg.data.size();
+            }
+            cap = m_cap_fn(pending_now);
+            m_last_cap = cap;
+        }
         std::vector<uint64_t> pend;
-        if (m_max_bytes > 0) pend = pending_seqs_in(dir);
+        if (cap > 0) pend = pending_seqs_in(dir);
 
         std::vector<std::string> remove;
         std::string doc;
@@ -417,9 +431,9 @@ std::string SpoolQueue::enqueue(SpooledSegment seg) {
 
             // Over the disk cap: drop the OLDEST unconfirmed segments (never the
             // one just written) until back under it, or only one is left.
-            if (m_max_bytes > 0) {
+            if (cap > 0) {
                 size_t i = 0;
-                while (m_bytes_pending > m_max_bytes && pend.size() - i > 1) {
+                while (m_bytes_pending > cap && pend.size() - i > 1) {
                     uint64_t victim = pend[i];
                     if (victim == seg.seq) break; // never evict what we just wrote
                     std::error_code ec;

@@ -13,6 +13,7 @@
 // deterministically. The OBS layer wraps this in threads.
 //
 #include "model.h"
+#include "parity.h"
 #include "segment_cache.h"
 #include "transport.h"
 #include "cue_credentials.h"
@@ -424,6 +425,12 @@ public:
         // rather than waiting on forever. Distinct from gaps_waited, which is
         // the ordinary "not published yet" case.
         uint64_t gap_skips = 0;
+        // Segments outside the manifest's window verified against their
+        // group's checksum index — before groups, they were stored unchecked.
+        uint64_t verified_by_group = 0;
+        // Segments the store could not serve intact, rebuilt from the group's
+        // parity and the other members (parity.h). Nothing was re-sent.
+        uint64_t rebuilt = 0;
     };
     const Stats& stats() const { return m_stats; }
 
@@ -507,6 +514,15 @@ private:
     // head skips it, as it does an eviction, instead of holding for ever.
     // Guarded by m_mtx; cleared with the event.
     std::map<uint64_t, int> m_unavailable;
+    // Group indexes fetched for this event (parity.h), by group number.
+    // Guarded by m_mtx; cleared with the event.
+    std::map<uint64_t, GroupIndex> m_groups;
+    // The group's index: from m_groups, or fetched (no lock held across the
+    // request). nullopt when there is none — yet, or ever.
+    std::optional<GroupIndex> group_index_for(const std::string& prefix, uint64_t group);
+    // Rebuild a segment the store refused, from its group. Unlocked.
+    std::optional<std::vector<uint8_t>> rebuild_from_group(
+        const std::string& prefix, uint64_t seq, int group_k, std::string& checksum);
     static constexpr int kGapAttempts = 3;
 
     Stats m_stats;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "event_finisher.h"
+#include "receipt.h"
 
 #include "log.h"
 #include "model.h"
@@ -208,6 +209,31 @@ bool EventFinisher::finish(const std::string& event_id) {
     // the room's live.json, which End may not have reached either. Until both
     // land the folder stays, and the next pass tries again.
     if (!publish() || !end_live_pointer(*tx, event_id)) return false;
+
+    // The receipt End wrote said "finishing"; this is the one that settles
+    // it (receipt.h). Whether anything was ever enqueued cannot be read from
+    // last_enqueued alone — it is 0 for "nothing" and for "segment 0" — so it
+    // is inferred from anything this event did leave a trace of. Best effort:
+    // a refused write leaves End's receipt, which is out of date, not wrong
+    // about what it counted.
+    {
+        const SpoolState st = q.state();
+        DeliveryReceipt rc;
+        {
+            std::lock_guard<std::mutex> lk(mm);
+            const bool any = total > 0 || st.any_confirmed || !m.gaps.empty();
+            rc = make_receipt(m, any, st.last_enqueued, 0);
+        }
+        rc.writer        = "finisher";
+        rc.written_at_ms = now_ms();
+        const std::string j = rc.to_json();
+        if (!tx->put(receipt_key(event_id), std::vector<uint8_t>(j.begin(), j.end()),
+                     "application/json", {}).success)
+            log_warn("receipt: could not store the final receipt for event %s",
+                     event_id.c_str());
+        else
+            log_info("receipt: event %s — %s", event_id.c_str(), rc.summary().c_str());
+    }
     SpoolQueue::discard_event(m_cfg.spool_root, event_id);
     if (total > 0)
         log_info("upload: event %s is complete in storage — the %zu segment(s) left "

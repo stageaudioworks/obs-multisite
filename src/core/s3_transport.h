@@ -50,6 +50,11 @@ struct S3Config {
     // endpoint and bucket do not; a caller holding an S3Transport open across a
     // refresh sets it before the next request.
     std::string session_token;
+    // Send Content-MD5 with every PUT, so the store checks the body inside the
+    // request even where it does not verify the signed payload hash (md5.h,
+    // docs/adr/0003 §1). On by default; the switch exists for a store found
+    // to mishandle the header, which would otherwise refuse every upload.
+    bool        send_content_md5 = true;
 };
 
 class S3Transport : public Transport {

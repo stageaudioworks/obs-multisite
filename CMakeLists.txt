@@ -64,6 +64,9 @@ endif()
 add_library(multisite_core STATIC
     src/core/spool_queue.cpp
     src/core/retry_uploader.cpp
+    src/core/parity.cpp
+    src/core/object_queue.cpp
+    src/core/receipt.cpp
     src/core/model.cpp
     src/core/log.cpp
     src/core/session.cpp
@@ -197,6 +200,38 @@ target_link_libraries(test_reliability PRIVATE multisite_core)
 add_executable(test_retry_cancel tests/test_retry_cancel.cpp)
 target_link_libraries(test_retry_cancel PRIVATE multisite_core)
 add_test(NAME retry_cancel COMMAND test_retry_cancel)
+
+# What a failed PUT means (damage in transit is retried, not "check the
+# credentials"), Content-MD5, and a permanent refusal backing off instead of
+# being retried every 200 ms. docs/scope/upload-delivery-assurance.md R4.
+add_executable(test_upload_integrity tests/test_upload_integrity.cpp)
+target_link_libraries(test_upload_integrity PRIVATE multisite_core)
+add_test(NAME upload_integrity COMMAND test_upload_integrity)
+
+# The spool sized from the free disk rather than a fixed 4 GiB, and the
+# "time left if the link stays down" figure (R2).
+add_executable(test_spool_budget tests/test_spool_budget.cpp)
+target_link_libraries(test_spool_budget PRIVATE multisite_core)
+add_test(NAME spool_budget COMMAND test_spool_budget)
+
+# Segment groups: a checksum index for every segment and XOR parity, so a
+# campus verifies segments outside the manifest's window and rebuilds one the
+# store lost or damaged, with nothing re-sent (R5, ADR-0004).
+add_executable(test_parity tests/test_parity.cpp)
+target_link_libraries(test_parity PRIVATE multisite_core)
+add_test(NAME parity COMMAND test_parity)
+
+# The delivery receipt: what an event delivered, written at End and settled by
+# EventFinisher once a backlog lands (R1).
+add_executable(test_receipt tests/test_receipt.cpp)
+target_link_libraries(test_receipt PRIVATE multisite_core)
+add_test(NAME receipt COMMAND test_receipt)
+
+# The delivery claim end to end in compressed time: 1,500 segments through
+# three outages and a store that loses and damages objects after a 2xx (R7).
+add_executable(test_soak tests/test_soak.cpp)
+target_link_libraries(test_soak PRIVATE multisite_core)
+add_test(NAME soak COMMAND test_soak)
 
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
@@ -563,6 +598,11 @@ if(CURL_FOUND)
         add_executable(test_s3_cancel tests/test_s3_cancel.cpp)
         target_link_libraries(test_s3_cancel PRIVATE multisite_s3)
         add_test(NAME s3_cancel COMMAND test_s3_cancel)
+        # The same loopback listener, recording what a PUT sends: Content-MD5
+        # present and correct, and a BadDigest answer retried (R4).
+        add_executable(test_s3_put_integrity tests/test_s3_put_integrity.cpp)
+        target_link_libraries(test_s3_put_integrity PRIVATE multisite_s3)
+        add_test(NAME s3_put_integrity COMMAND test_s3_put_integrity)
         # The same stalled listener, one layer up: a stop after a credential
         # refresh must reach the request begun on the inner it replaced.
         add_executable(test_cloud_cancel tests/test_cloud_cancel.cpp)

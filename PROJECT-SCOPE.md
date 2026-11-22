@@ -129,6 +129,9 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
     segments/{seq:08d}.m4s        # ONE fragment per seq carrying video + all audio tracks
     manifest.json                 # rolling window of recent segments (live edge)
     markers.json                  # append-only cue/marker list
+    groups/{group:08d}.json       # every k segments: each member's length + checksum
+    parity/{group:08d}.bin        # XOR of the group's members (rebuilds one)
+    receipt.json                  # what the event delivered (§5)
 ```
 
 - `room_id` is the broadcast source (e.g. `main-auditorium`).
@@ -277,6 +280,17 @@ The field is additive, so `protocol_version` is unchanged (§4.8): a reader that
 predates it still gets past each missing segment by the refusal rule in §5,
 only more slowly.
 
+`group_k` (default 10, absent when off) says the encoder publishes **segment
+groups**: for every `k` consecutive sequence numbers, `groups/{g}.json` lists
+each member's length and checksum, and `parity/{g}.bin` is the XOR of the
+members padded to the longest (`parity.h`). The parity is stored before the
+index, and the index only after every member is confirmed, so an index a
+reader can see means the members and parity exist. A decoder uses the index
+for the checksum of any segment outside the manifest's window, and rebuilds
+one member per group that the store will not serve intact from the parity and
+the others. Additive; no protocol bump. Built within ADR-0004 (one bucket
+gives the guarantee) and ADR-0003 §1 (nothing is re-sent).
+
 ### 4.5 Markers
 
 `markers.json` is append-only:
@@ -376,7 +390,10 @@ is more use to an operator than an event that silently is not there.
 ## 5. Reliability
 
 - **Durable encoder queue.** Segments are written to disk before upload, bounded
-  only by disk. Survives OBS crash and power loss. Plain files with atomic
+  only by disk: the cap is the disk's free space less a reserve of
+  max(20 GiB, 10 % of the drive), measured at every enqueue (`spool_budget.h`).
+  Past it the oldest unsent segment is dropped and listed as a gap. While live,
+  the dock shows how long the spool would last if the link stayed down. Survives OBS crash and power loss. Plain files with atomic
   write-then-rename, deliberately not a database: that gives the durability
   guarantee needed here and is trivial to reason about and to test. **One
   folder per event**, so nothing ever deletes another event's backlog.
@@ -395,8 +412,21 @@ is more use to an operator than an event that silently is not there.
 - **Retry with backoff.** Failed uploads retry with exponential backoff and
   jitter, in strict sequence order, for as long as the event is live. No segment
   is abandoned.
-- **Checksums.** Each segment's hash is recorded in the manifest; decoders verify
-  after download and re-fetch on mismatch.
+- **Checksums.** Each segment's hash is recorded in the manifest, and for the
+  whole event in the group indexes (§4.4); decoders verify after download and
+  re-fetch on mismatch. Every PUT carries Content-MD5 as well as the signed
+  SHA-256, so the store refuses damaged bytes inside the request; that refusal
+  is retried like any failed upload. Nothing is tested after a 2xx
+  (ADR-0003 §1).
+- **Recovery without re-sending.** A segment the store acknowledged but will
+  not serve intact (missing, or failing its checksum, behind the live edge) is
+  rebuilt by the decoder from its group's parity (§4.4). Two bad in one group
+  cannot be; they are refused and skipped as any refusal is.
+- **Delivery receipt.** At End the encoder writes `receipt.json`: segments
+  captured, in the cloud, lost before upload (with the gaps) and pending, and a
+  state of complete, finishing or incomplete. `EventFinisher` rewrites it when a
+  backlog left at End lands. The dock shows the last one while idle
+  (`receipt.h`).
 - **Resume-after-crash.** Event state (event_id, last sequence, queue, and how
   far media time had reached) is persisted, so a crashed or power-cycled
   encoder can continue the same event rather than starting a new one with a

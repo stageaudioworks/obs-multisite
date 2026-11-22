@@ -658,6 +658,7 @@ BroadcastStatus BroadcastController::status() const {
             st.disk_health     = (int)multisite::classify_disk_free(sp.available);
         }
     }
+    st.last_receipt = last_receipt();
     st.lan_enabled = m_cfg.lan_enabled;   // true whether idle or live: what
                                            // Go Live will do next time
     st.cloud_enabled = m_cfg.cloud_enabled;
@@ -698,6 +699,8 @@ BroadcastStatus BroadcastController::status() const {
             st.mirror_waiting_on_primary = es.mirror_waiting_on_primary;
             st.mirror_unreachable   = es.mirror_unreachable;
             st.mirror_complete      = es.mirror_complete;
+            st.spool_seconds_left   = es.spool_seconds_left;
+            st.dropped_for_disk     = es.dropped_for_disk;
         }
         st.link_known = true;   // the uploader always reports once live
         return st;

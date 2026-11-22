@@ -89,6 +89,8 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
             // BUGS #2 — a value checked after it has been set.
             const LinkHealth was = m_health;
             m_health = LinkHealth::Healthy;
+            m_last_permanent   = false;
+            m_permanent_logged = false;
             // Publish the manifest entry BEFORE clearing the spool file (a
             // crash in between must not orphan the object), then clear it so
             // status counters reflect reality for the confirm callback.
@@ -113,18 +115,29 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
         // that came from somewhere else.
         if (!m_running || m_transport.last_request_cancelled()) return false;
         if (!r.retryable) {
-            // Permanent error (e.g. auth). Don't spin forever on this segment;
-            // surface it and stop draining so the operator can fix credentials.
+            // Permanent error (e.g. auth). Leave this segment to run(), which
+            // waits permanent_backoff_ms before trying it again: the operator
+            // may fix the key mid-service, and the queue must then move on its
+            // own.
             m_stats.permanent_failures++;
             m_health = LinkHealth::Offline;
-            // ERROR, not warn, and never rate-limited: this one stops the drain
-            // and will not fix itself. An operator who sees the queue frozen
-            // needs the provider's own words, because the answer is almost
-            // always a key scoped to the wrong bucket.
-            log_error("upload: %s refused permanently — HTTP %ld%s%s. "
-                      "Uploading has stopped; check the storage credentials.",
-                      seg.key.c_str(), r.http_status,
-                      r.error.empty() ? "" : " — ", r.error.c_str());
+            m_last_permanent = true;
+            // ERROR, once per refusal rather than once per attempt. It used to
+            // be logged every 200 ms, under "uploading has stopped", while the
+            // loop went on retrying — five lines a second burying the one that
+            // said when it started. The provider's own words stay in it,
+            // because the answer is almost always a key scoped to the wrong
+            // bucket.
+            if (!m_permanent_logged) {
+                m_permanent_logged = true;
+                log_error("upload: %s refused — HTTP %ld%s%s. The queue is held "
+                          "and this segment is tried again every %d s; %s.",
+                          seg.key.c_str(), r.http_status,
+                          r.error.empty() ? "" : " — ", r.error.c_str(),
+                          m_cfg.permanent_backoff_ms / 1000,
+                          r.advice.empty() ? "check the storage credentials and bucket name"
+                                           : r.advice.c_str());
+            }
             return false;
         }
         m_stats.retries++;
@@ -146,10 +159,11 @@ bool RetryUploader::upload_one(const SpooledSegment& seg,
         // because "it retried" is not the question — "how far behind is this
         // getting" is.
         if (attempt == 1 || m_health != health_before) {
-            log_warn("upload: %s failed (attempt %d) — HTTP %ld%s%s. "
+            log_warn("upload: %s failed (attempt %d) — HTTP %ld%s%s. %s%s"
                      "Retrying in %d ms; link is now %s.",
                      seg.key.c_str(), attempt, r.http_status,
-                     r.error.empty() ? "" : " — ", r.error.c_str(), wait,
+                     r.error.empty() ? "" : " — ", r.error.c_str(),
+                     r.advice.c_str(), r.advice.empty() ? "" : ". ", wait,
                      m_health == LinkHealth::Offline ? "offline" : "degraded");
         }
         // sleep in small slices so stop() and a drain deadline are responsive
@@ -178,10 +192,15 @@ void RetryUploader::run() {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
-        // Strict in-order: if this one hits a permanent failure, pause the loop
-        // briefly rather than reordering past it.
-        if (!upload_one(*next) && m_running)
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // Strict in-order: if this one fails, pause rather than reordering
+        // past it. A permanent refusal waits permanent_backoff_ms; anything
+        // else (an eviction, a cancelled request) only briefly.
+        m_last_permanent = false;
+        if (!upload_one(*next) && m_running) {
+            const int wait = m_last_permanent ? m_cfg.permanent_backoff_ms : 200;
+            for (int slept = 0; slept < wait && m_running; slept += 25)
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
     }
 }
 

@@ -18,6 +18,10 @@
 //   events/{event_id}/markers.json
 //
 #include "model.h"
+#include "object_queue.h"
+#include "parity.h"
+#include "receipt.h"
+#include "spool_budget.h"
 #include "spool_queue.h"
 #include "retry_uploader.h"
 #include "transport.h"
@@ -41,13 +45,20 @@ struct SessionConfig {
     // Empty means "no custom name" — the satellite falls back to the time.
     std::string event_name;
     std::string spool_dir;                 // local durable queue location
-    // Local disk cap for unconfirmed segments (0 = unlimited, retry forever).
-    // Protects the encoder machine's disk when the upload link is down or too
-    // slow to keep up for a long stretch, at the cost of the oldest queued
-    // segments — see spool_queue.h. 4 GiB is generous headroom for normal
-    // operation (the spool should sit near-empty) while still bounding a
-    // multi-hour outage on a small drive.
-    uint64_t    max_spool_bytes = 4ull * 1024 * 1024 * 1024;
+    // Local disk cap for unconfirmed segments. Protects the encoder machine's
+    // disk when the upload link is down or too slow for a long stretch, at the
+    // cost of the oldest queued segments — see spool_queue.h.
+    //
+    // 0, the default, sizes the cap from the free space on the spool's disk
+    // (spool_budget.h): everything but a reserve. A nonzero value is a fixed
+    // cap. It used to be a fixed 4 GiB, about 72 minutes of an 8 Mbit/s
+    // programme, which cost the start of a service to an outage of just over
+    // an hour on machines with hundreds of GB free.
+    uint64_t    max_spool_bytes = 0;
+    SpoolBudget spool_budget;
+    // Measures the spool's disk: free and total bytes, false when it cannot.
+    // Null means std::filesystem::space(spool_dir). A test seam.
+    std::function<bool(uint64_t& free_bytes, uint64_t& capacity_bytes)> disk_space;
     // The second bucket, when redundancy is configured (PROJECT-SCOPE.md §10
     // Phase 9). Borrowed, not owned — the caller keeps it alive for the
     // Session's lifetime, exactly as it does the primary. Null means one target,
@@ -64,6 +75,11 @@ struct SessionConfig {
     int64_t     resume_stale_after_ms = 30LL * 60 * 1000; // 30 minutes
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size
+    // Segments per group for the checksum index and parity (parity.h,
+    // docs/adr/0004). 0 publishes no groups. Costs about 1/k more upload and
+    // storage. Fixed by configuration and never adapted to measured loss or
+    // latency (docs/adr/0003 §5). A resumed event keeps the k it began with.
+    int         parity_group = 10;
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
     // requests carrying x-amz-tagging. R2 users should instead configure a
     // bucket lifecycle rule by prefix/age. Default off for broad compatibility.
@@ -178,6 +194,9 @@ public:
     // the caller is expected to say so rather than sign off with the tidy
     // "stopped" line it prints either way. last_error() has the detail.
     bool end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(8000));
+    // What this event delivered, as end() left it (receipt.h). Empty event_id
+    // until end() has run. Also written to events/{id}/receipt.json.
+    DeliveryReceipt receipt() const;
 
     // Status for the encoder UI.
     struct Status {
@@ -195,6 +214,16 @@ public:
         // for disk space (see SessionConfig::max_spool_bytes). Zero in normal
         // operation; the encoder dock surfaces this as an operator warning.
         uint64_t    dropped_for_disk = 0;
+        // How much the spool may hold before it drops (0: no cap), how much it
+        // holds now, and how long it could absorb the programme if nothing
+        // more were uploaded — -1 until a bitrate has been measured. The dock's
+        // "if the link stays down" line (docs/scope/upload-delivery-assurance.md, R2).
+        uint64_t    spool_cap_bytes = 0;
+        uint64_t    spool_pending_bytes = 0;
+        double      spool_seconds_left = -1.0;
+        // Segment groups whose index (and parity) are stored (parity.h).
+        uint64_t    groups_published = 0;
+        size_t      groups_pending = 0;
 
         // Set once, the moment this event was resumed rather than started
         // fresh — empty event_id means this run started with start_new().
@@ -312,6 +341,21 @@ private:
     // The second target's stream. Null unless a mirror transport was supplied.
     std::unique_ptr<RetryUploader> m_mirror;
 
+    // ── Segment groups (parity.h) ───────────────────────────────────────────
+    // The accumulator is fed in confirmation order by the upload thread (and
+    // by end()'s drain); m_parity_mtx guards it. The queue carries each
+    // finished group's parity and index to the store, durably, in that order.
+    // Leftover queues are other events' groups a previous run did not finish
+    // sending; they drain while this event is live.
+    std::mutex                          m_parity_mtx;
+    std::unique_ptr<ParityAccumulator>  m_parity;
+    std::unique_ptr<ObjectQueue>        m_group_q;
+    std::vector<std::unique_ptr<ObjectQueue>> m_leftover_qs;
+    void publish_groups(std::vector<ParityAccumulator::Finished> done);
+    std::string groups_root() const { return m_cfg.spool_dir + ".objects"; }
+    void stop_group_queues();
+    DeliveryReceipt m_receipt;   // guarded by m_mtx; set by end()
+
     // ── The mirror's copy of the small objects (Phase 9) ─────────────────────
     // The manifest, live.json, event.json and the cue objects go to the second
     // bucket too, but NOT by duplicating the put: put_bytes() runs on the encode
@@ -371,6 +415,9 @@ private:
     // Atomic because publish_segment runs on the encode path while add_marker
     // runs on whoever pressed the button.
     std::atomic<int64_t> m_live_media_ms{0};
+    // Bytes per second of programme, smoothed over recent segments. Written
+    // by the encode thread in publish_segment(), read by status().
+    std::atomic<double>  m_encode_bytes_per_s{0.0};
     // Written by publish_live() and read by on_confirmed() on the uploader's
     // thread, so atomic rather than guarded by m_mtx.
     std::atomic<int64_t> m_last_heartbeat_ms{0};

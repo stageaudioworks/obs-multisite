@@ -154,6 +154,14 @@ struct BroadcastStatus {
     int         disk_health = 0;
     bool        disk_known = false;
     unsigned long long disk_free_bytes = 0;
+    // While live: how long the spool could absorb the programme if the link
+    // stayed down before it drops the oldest unsent segments (-1 unknown), and
+    // how many it has dropped. See EncoderStats.
+    double             spool_seconds_left = -1.0;
+    unsigned long long dropped_for_disk = 0;
+    // The last broadcast's delivery receipt, one sentence; empty before the
+    // first End since the plugin loaded.
+    std::string        last_receipt;
     // Set for the life of the broadcast when it began by resuming an
     // interrupted event rather than starting fresh — empty means this run
     // started with start_new(). The dock shows this persistently, not just

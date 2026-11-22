@@ -210,6 +210,10 @@ struct Manifest {
     // eviction moved first_available_seq above the evicted segment, which
     // hid every segment below it too, sent or not.
     std::vector<std::pair<uint64_t, uint64_t>> gaps;
+    // Width of the segment groups the encoder publishes an index and parity
+    // for (parity.h); 0 when it publishes none. Additive: a reader that
+    // predates it never looks for groups.
+    int group_k = 0;
     void add_gap(uint64_t seq);
     // The last seq of the gap holding `seq`, or nullopt when it is not in one.
     std::optional<uint64_t> gap_end(uint64_t seq) const;

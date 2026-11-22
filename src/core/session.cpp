@@ -6,6 +6,7 @@
 #include <random>
 #include <cstdio>
 #include <algorithm>
+#include <filesystem>
 
 namespace multisite {
 
@@ -40,6 +41,28 @@ Session::Session(SessionConfig cfg, Transport& transport)
     : m_cfg(std::move(cfg)), m_tx(transport) {
     m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir, m_cfg.max_spool_bytes);
     m_spool->set_drop_callback([this](const SpoolDrop& d) { on_dropped(d); });
+    if (m_cfg.max_spool_bytes == 0) {
+        // Sized from the disk at every enqueue, so a disk that fills for other
+        // reasons (OBS recording to it) shrinks the cap as it goes.
+        auto measure = m_cfg.disk_space;
+        const std::string dir = m_cfg.spool_dir;
+        const SpoolBudget budget = m_cfg.spool_budget;
+        m_spool->set_cap_provider([measure, dir, budget](uint64_t pending) -> uint64_t {
+            uint64_t free_b = 0, cap_b = 0;
+            bool ok = false;
+            if (measure) {
+                ok = measure(free_b, cap_b);
+            } else {
+                std::error_code ec;
+                const auto sp = std::filesystem::space(dir, ec);
+                if (!ec) { free_b = sp.available; cap_b = sp.capacity; ok = true; }
+            }
+            // A disk that cannot be measured falls back to the old fixed cap
+            // rather than none: unbounded is the one answer that can fill it.
+            if (!ok) return 4ull * 1024 * 1024 * 1024;
+            return spool_cap_from_disk(pending, free_b, cap_b, budget);
+        });
+    }
 
     // How many targets must hold a segment comes from the CONFIGURATION IN
     // FORCE, not from what was persisted. A spool left at two targets after the
@@ -62,8 +85,16 @@ Session::Session(SessionConfig cfg, Transport& transport)
     // A segment the uploader found damaged on this disk is never uploaded
     // (RetryUploader::upload_one); it is a gap, said so in the manifest.
     m_uploader->set_skipped_callback([this](uint64_t seq) {
-        std::lock_guard<std::mutex> lk(m_mtx);
-        m_manifest.add_gap(seq);
+        {
+            std::lock_guard<std::mutex> lk(m_mtx);
+            m_manifest.add_gap(seq);
+        }
+        std::vector<ParityAccumulator::Finished> done;
+        {
+            std::lock_guard<std::mutex> pl(m_parity_mtx);
+            if (m_parity) done = m_parity->skip(seq);
+        }
+        publish_groups(std::move(done));
     });
     m_uploader->set_confirm_callback(
         [this](const SpooledSegment& s) { on_confirmed(s); });
@@ -120,7 +151,33 @@ Session::~Session() {
     if (m_mirror) m_mirror->stop();
     m_obj_run = false;
     if (m_obj_thread.joinable()) m_obj_thread.join();
+    stop_group_queues();
     if (m_uploader) m_uploader->stop();
+}
+
+void Session::stop_group_queues() {
+    if (m_group_q) m_group_q->stop();
+    for (auto& q : m_leftover_qs) {
+        q->stop();
+        q->remove_dir_if_empty();
+    }
+    m_leftover_qs.clear();
+}
+
+void Session::publish_groups(std::vector<ParityAccumulator::Finished> done) {
+    if (!m_group_q || done.empty()) return;
+    const std::string prefix = event_prefix();
+    for (auto& f : done) {
+        // Parity before the index that names it: an index a campus can read
+        // means its parity is there too.
+        if (f.index.parity_len > 0)
+            m_group_q->enqueue(group_parity_key(prefix, f.index.group), f.parity,
+                               "application/octet-stream");
+        const std::string j = f.index.to_json();
+        m_group_q->enqueue(group_index_key(prefix, f.index.group),
+                           std::vector<uint8_t>(j.begin(), j.end()),
+                           "application/json");
+    }
 }
 
 std::string Session::event_prefix() const {
@@ -328,7 +385,34 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         }
         m_manifest.status              = "live";
         m_manifest.updated_at_ms       = now_ms();
+        // A resumed event keeps the group width it began with, or its groups
+        // would straddle two widths.
+        if (!(cont && cont->have_manifest && cont->manifest.group_k > 0))
+            m_manifest.group_k = std::max(0, m_cfg.parity_group);
         manifest_json = queue_manifest_locked();
+    }
+    {
+        int k;
+        { std::lock_guard<std::mutex> lk(m_mtx); k = m_manifest.group_k; }
+        if (k > 0) {
+            // Under m_mtx as well: status() reads m_group_q holding it.
+            std::lock_guard<std::mutex> lk(m_mtx);
+            std::lock_guard<std::mutex> pl(m_parity_mtx);
+            m_parity  = std::make_unique<ParityAccumulator>(k);
+            m_group_q = std::make_unique<ObjectQueue>(
+                groups_root() + "/" + m_event_id, m_tx,
+                m_cfg.base_backoff_ms, m_cfg.max_backoff_ms);
+        }
+        // Other events' groups that a previous run left unsent: an End whose
+        // drain ran out of time, or a crash.
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(groups_root(), ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code dec;
+            if (!it->is_directory(dec) || it->path().filename() == m_event_id) continue;
+            m_leftover_qs.push_back(std::make_unique<ObjectQueue>(
+                it->path().string(), m_tx, m_cfg.base_backoff_ms, m_cfg.max_backoff_ms));
+        }
     }
     // Waited for, unlike the per-segment ones: until this object exists a
     // satellite cannot find the event at all, so Go Live has not really
@@ -339,6 +423,8 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
 
     publish_live("live");
     m_uploader->start();
+    if (m_group_q) m_group_q->start();
+    for (auto& q : m_leftover_qs) q->start();
     // The mirror starts with the event. It will mostly sit yielded; that is the
     // point, and it costs one sleeping thread.
     if (m_mirror) {
@@ -447,6 +533,13 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
     // formula for a quantity the encoder already has exactly, and the two drift
     // apart whenever a segment is not exactly the nominal length (BUGS #2b).
     m_live_media_ms = (int64_t)((pts_offset_s + duration_s) * 1000.0);
+    if (duration_s > 0.0) {
+        // Smoothed over about ten segments: one keyframe-heavy segment should
+        // not swing the "minutes left" figure an operator is reading.
+        const double rate = (double)s.data.size() / duration_s;
+        const double prev = m_encode_bytes_per_s.load();
+        m_encode_bytes_per_s = prev <= 0.0 ? rate : prev * 0.9 + rate * 0.1;
+    }
     s.key          = segment_key(seq);
     m_spool->enqueue(std::move(s));   // durable BEFORE any upload attempt
     return seq;
@@ -509,6 +602,15 @@ void Session::on_confirmed(const SpooledSegment& seg) {
   // ONLY place they still exist locally, unless the caller retains them.
   if (m_on_segment_confirmed) m_on_segment_confirmed(seg.seq, seg.data);
   if (m_on_manifest_published) m_on_manifest_published(manifest_json);
+
+  // Into the open group. Confirmed, so it is in the store: a group's index
+  // only ever names segments that exist (the §4.7 rule, carried over).
+  std::vector<ParityAccumulator::Finished> done;
+  {
+    std::lock_guard<std::mutex> pl(m_parity_mtx);
+    if (m_parity) done = m_parity->add(seg.seq, seg.data, seg.checksum);
+  }
+  publish_groups(std::move(done));
 }
 
 // A segment was dropped from the local spool for disk space, before it could
@@ -746,11 +848,35 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     if (m_mirror) m_mirror->stop();
     m_obj_run = false;
     if (m_obj_thread.joinable()) m_obj_thread.join();
+    stop_group_queues();
     m_uploader->stop();
     m_tx.resume_pending();
 
     // Drain whatever is still spooled so nothing is lost on a clean stop.
+    const auto drain_start = std::chrono::steady_clock::now();
     m_uploader->drain_blocking(drain_deadline);
+
+    // The last group closes with whatever it holds, and the groups go after
+    // the segments: they protect the segments and are worth nothing without
+    // them. Whatever the deadline leaves stays on disk and is sent the next
+    // time this encoder goes live.
+    {
+        std::vector<ParityAccumulator::Finished> done;
+        {
+            std::lock_guard<std::mutex> pl(m_parity_mtx);
+            if (m_parity)
+                if (auto f = m_parity->flush()) done.push_back(std::move(*f));
+        }
+        publish_groups(std::move(done));
+        if (m_group_q) {
+            const auto used = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - drain_start);
+            const auto left = drain_deadline > used ? drain_deadline - used
+                                                    : std::chrono::milliseconds(0);
+            m_group_q->drain_blocking((int)std::max<int64_t>(1000, left.count()));
+            m_group_q->remove_dir_if_empty();
+        }
+    }
 
     // These two writes are the whole of "this event is over" as far as any
     // satellite is concerned, and until now they could both fail without
@@ -776,6 +902,38 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     stop_manifest_publisher();
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
+
+    // The receipt (receipt.h): what was captured, what is in the cloud, what
+    // was lost and what is still to go. Counted from m_next_seq rather than
+    // the spool's last_enqueued, which reads 0 both for "nothing yet" and for
+    // "segment 0" (CONTEXT.md, Sentinels). Its write is not part of "the
+    // event ended" and must not make end() report failure, so it goes
+    // straight to the transport and is only logged if refused.
+    {
+        DeliveryReceipt rc;
+        {
+            std::lock_guard<std::mutex> lk(m_mtx);
+            const uint64_t first = m_manifest.first_available_seq;
+            const bool any = m_next_seq > first;
+            rc = make_receipt(m_manifest, any, any ? m_next_seq - 1 : 0,
+                              m_spool->pending_count());
+            if (m_cfg.mirror_transport) {
+                rc.mirror_configured = true;
+                rc.mirror_complete   = m_spool->caught_up(1);
+            }
+            rc.writer        = "encoder";
+            rc.written_at_ms = now_ms();
+            m_receipt = rc;
+        }
+        const std::string j = rc.to_json();
+        PutResult r = m_tx.put(receipt_key(rc.event_id),
+                               std::vector<uint8_t>(j.begin(), j.end()),
+                               "application/json", {});
+        if (!r.success)
+            log_warn("receipt: could not store %s — HTTP %ld %s",
+                     receipt_key(rc.event_id).c_str(), r.http_status, r.error.c_str());
+        log_info("receipt: event %s — %s", rc.event_id.c_str(), rc.summary().c_str());
+    }
     // If either write failed — the link was down at End — the ending is owed:
     // the folder is kept and EventFinisher publishes it once it can. It used
     // to be logged and forgotten, so campuses called a finished event
@@ -786,6 +944,11 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     // it used to stay only until the next Go Live deleted it.
     m_spool->remove_if_done();
     return last_error().empty();
+}
+
+DeliveryReceipt Session::receipt() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_receipt;
 }
 
 Session::Status Session::status() const {
@@ -803,6 +966,15 @@ Session::Status Session::status() const {
     s.verify_note     = m_uploader->last_verify_note();
     s.health          = m_uploader->health();
     s.dropped_for_disk = m_dropped_total;
+    if (m_group_q) {
+        s.groups_published = m_group_q->stored_of_type("application/json");
+        s.groups_pending   = m_group_q->pending();
+    }
+    s.spool_cap_bytes     = m_spool->current_cap();
+    s.spool_pending_bytes = m_spool->bytes_pending();
+    if (s.spool_cap_bytes > 0)
+        s.spool_seconds_left = seconds_until_spool_drops(
+            s.spool_cap_bytes, s.spool_pending_bytes, m_encode_bytes_per_s.load());
     s.resumed_event_id           = m_resumed_event_id;
     s.resumed_event_started_ms   = m_resumed_event_started_ms;
     s.resumed_already_confirmed  = m_resumed_already_confirmed;

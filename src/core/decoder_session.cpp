@@ -162,6 +162,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
             m_end_hold_done = false;   // ...and it has not been seen to end yet
             ++m_discontinuity;      // new event: new init segment and timeline
             m_unavailable.clear();
+            m_groups.clear();
         }
         event_id = m_event_id;
         if (now - m_markers_checked_ms > 5000) {
@@ -386,12 +387,14 @@ int DecoderSession::pump_downloads(int max) {
     uint64_t from = 0, to = 0;
     std::vector<std::pair<uint64_t, std::string>> wanted;   // seq, checksum
     bool need_init = false;
+    int group_k = 0;
 
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         if (m_event_id.empty()) return 0;
         prefix = event_prefix_for(m_event_id);
         need_init = !m_cache->has_init();
+        group_k = m_manifest.group_k;
 
         if (m_head_set.load()) {
             from = m_head.load();
@@ -460,10 +463,33 @@ int DecoderSession::pump_downloads(int max) {
     }
 
     int fetched = 0;
-    uint64_t dl = 0, dlfail = 0, ckfail = 0;
+    uint64_t dl = 0, dlfail = 0, ckfail = 0, by_group = 0, rebuilt = 0;
     std::string err;
     std::vector<uint64_t> got, refused;   // for m_unavailable, under the lock below
-    for (const auto& w : wanted) {
+    // A refusal behind the live edge is final (uploads are in order and only
+    // confirmed segments are listed), so that is when a rebuild is tried.
+    // A rebuilt segment is verified against its index before it is stored.
+    auto try_rebuild = [&](uint64_t seq) -> bool {
+        if (group_k <= 0 || seq >= m_latest_seq.load()) return false;
+        std::string sum;
+        auto bytes = rebuild_from_group(prefix, seq, group_k, sum);
+        if (!bytes || !m_cache->store(seq, *bytes, sum)) return false;
+        log_info("segment %llu: rebuilt from its group's parity",
+                 (unsigned long long)seq);
+        got.push_back(seq);
+        ++rebuilt; ++dl; ++fetched;
+        return true;
+    };
+    for (auto w : wanted) {
+        // Outside the manifest's window there is no checksum in it. The
+        // group's index has one for every segment of the event.
+        if (w.second.empty() && group_k > 0) {
+            if (auto gi = group_index_for(prefix, group_of(w.first, group_k)))
+                if (const GroupMember* m = gi->member(w.first)) {
+                    w.second = m->checksum;
+                    ++by_group;
+                }
+        }
         char name[16];
         std::snprintf(name, sizeof(name), "%08llu",
                       (unsigned long long)w.first);
@@ -481,7 +507,8 @@ int DecoderSession::pump_downloads(int max) {
                 err = "segment " + std::to_string(w.first) + ": HTTP " +
                       std::to_string(r.http_status) + " " + r.error;
             }
-            if (r.http_status == 404) refused.push_back(w.first);
+            if (r.http_status == 404 && !try_rebuild(w.first))
+                refused.push_back(w.first);
             continue;
         }
         if (!m_cache->store(w.first, r.body, w.second)) {
@@ -490,7 +517,8 @@ int DecoderSession::pump_downloads(int max) {
             ++ckfail;
             err = "segment " + std::to_string(w.first) +
                   " failed checksum verification";
-            refused.push_back(w.first);
+            if (try_rebuild(w.first)) err.clear();
+            else refused.push_back(w.first);
             continue;
         }
         got.push_back(w.first);
@@ -504,6 +532,8 @@ int DecoderSession::pump_downloads(int max) {
         m_stats.downloaded        += dl;
         m_stats.download_failures += dlfail;
         m_stats.checksum_failures += ckfail;
+        m_stats.verified_by_group += by_group;
+        m_stats.rebuilt           += rebuilt;
         // Only behind the live edge is a refusal final (see m_unavailable).
         for (uint64_t sq : refused)
             if (sq < m_latest_seq.load()) ++m_unavailable[sq];
@@ -524,6 +554,52 @@ int DecoderSession::pump_downloads(int max) {
         }
     }
     return fetched;
+}
+
+std::optional<GroupIndex> DecoderSession::group_index_for(const std::string& prefix,
+                                                         uint64_t group) {
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        auto it = m_groups.find(group);
+        if (it != m_groups.end()) return it->second;
+    }
+    auto r = m_tx.get(group_index_key(prefix, group));
+    if (!r.success) return std::nullopt;   // not published yet, or never
+    try {
+        GroupIndex gi = GroupIndex::from_json(std::string(r.body.begin(), r.body.end()));
+        if (gi.group != group) return std::nullopt;
+        std::lock_guard<std::mutex> lk(m_mtx);
+        // Only for the event still being followed: a switch while this was in
+        // flight cleared the map, and this index belongs to the old event.
+        if (event_prefix_for(m_event_id) != prefix) return std::nullopt;
+        m_groups[group] = gi;
+        return gi;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<std::vector<uint8_t>> DecoderSession::rebuild_from_group(
+        const std::string& prefix, uint64_t seq, int group_k, std::string& checksum) {
+    auto gi = group_index_for(prefix, group_of(seq, group_k));
+    if (!gi) return std::nullopt;
+    const GroupMember* target = gi->member(seq);
+    if (!target || gi->parity_len == 0) return std::nullopt;
+    auto p = m_tx.get(group_parity_key(prefix, gi->group));
+    if (!p.success) return std::nullopt;
+    std::map<uint64_t, std::vector<uint8_t>> others;
+    for (const auto& m : gi->members) {
+        if (m.seq == seq) continue;
+        if (auto c = m_cache->load(m.seq)) { others[m.seq] = std::move(*c); continue; }
+        char name[16];
+        std::snprintf(name, sizeof(name), "%08llu", (unsigned long long)m.seq);
+        auto r = m_tx.get(prefix + "segments/" + name + ".m4s");
+        if (!r.success) return std::nullopt;   // two missing: XOR cannot help
+        others[m.seq] = std::move(r.body);
+    }
+    auto out = rebuild_member(*gi, seq, p.body, others);
+    if (out) checksum = target->checksum;
+    return out;
 }
 
 // ── Playback ─────────────────────────────────────────────────────────────────

@@ -112,6 +112,17 @@ bool encoder_stats(EncoderStats& out) {
     return true;
 }
 
+static std::mutex  g_receipt_mtx;
+static std::string g_last_receipt;
+void set_last_receipt(const std::string& summary) {
+    std::lock_guard<std::mutex> lk(g_receipt_mtx);
+    g_last_receipt = summary;
+}
+std::string last_receipt() {
+    std::lock_guard<std::mutex> lk(g_receipt_mtx);
+    return g_last_receipt;
+}
+
 void forward_marker_to_encoder(const std::string& label) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (!g_encoder) {
