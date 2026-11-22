@@ -50,9 +50,12 @@ ObjectQueue::~ObjectQueue() { stop(); }
 
 std::vector<std::string> ObjectQueue::list_locked() const {
     std::vector<std::string> out;
+    // Non-throwing increments: the range-for form throws from operator++ on a
+    // directory changing underneath it, and this runs on the queue's thread,
+    // where an uncaught exception ends the process.
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(m_dir, ec))
-        if (e.path().extension() == ".obj") out.push_back(e.path().string());
+    for (fs::directory_iterator it(m_dir, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".obj") out.push_back(it->path().string());
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -82,20 +85,30 @@ int ObjectQueue::try_one() {
         if (all.empty()) return 0;
         path = all.front();
     }
-    std::ifstream f(path, std::ios::binary);
-    std::string header;
-    std::getline(f, header);
     std::string key, type;
     size_t len = 0;
-    try {
-        json h = json::parse(header);
-        key  = h.value("key", "");
-        type = h.value("content_type", "application/octet-stream");
-        len  = h.value("len", (size_t)0);
-    } catch (...) {}
-    std::vector<uint8_t> body(len);
-    if (len) f.read((char*)body.data(), (std::streamsize)len);
-    if (key.empty() || (size_t)f.gcount() != len) {
+    std::vector<uint8_t> body;
+    bool readable = false;
+    {
+        // Closed before anything below removes the file. Windows refuses to
+        // delete a file that is still open, so with the stream alive the
+        // remove failed, the object stayed first in the queue, and it was
+        // uploaded again for ever while nothing behind it moved (CI,
+        // windows-latest: no group index ever reached the store).
+        std::ifstream f(path, std::ios::binary);
+        std::string header;
+        std::getline(f, header);
+        try {
+            json h = json::parse(header);
+            key  = h.value("key", "");
+            type = h.value("content_type", "application/octet-stream");
+            len  = h.value("len", (size_t)0);
+        } catch (...) {}
+        body.resize(len);
+        if (len) f.read((char*)body.data(), (std::streamsize)len);
+        readable = !key.empty() && (len == 0 || (size_t)f.gcount() == len);
+    }
+    if (!readable) {
         // Unreadable: a write that never completed its rename cannot be here,
         // so this is damage on the disk. Nothing to send; say so and move on.
         log_error("object queue: %s is unreadable — skipping it", path.c_str());
@@ -106,6 +119,14 @@ int ObjectQueue::try_one() {
     if (!r.success) return -1;
     std::error_code ec;
     fs::remove(path, ec);
+    if (ec) {
+        // Stored, but still queued: it will be sent again (harmless — a PUT
+        // of the same bytes) on the next try, and nothing behind it moves
+        // until the remove succeeds. Said, because that is a stuck queue.
+        log_error("object queue: %s is stored but could not be removed from "
+                  "the queue (%s)", key.c_str(), ec.message().c_str());
+        return -1;
+    }
     m_stored++;
     {
         std::lock_guard<std::mutex> lk(m_mtx);

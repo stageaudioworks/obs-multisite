@@ -74,6 +74,9 @@ std::optional<ParityAccumulator::Finished> ParityAccumulator::close() {
     m_index.parity_len = m_acc.size();
     f.index  = std::move(m_index);
     f.parity = std::move(m_acc);
+    // Both left in a known state, not merely a valid one: open() resets them
+    // before the next use, but nothing should depend on that ordering.
+    m_index = GroupIndex{};
     m_acc.clear();
     return f;
 }

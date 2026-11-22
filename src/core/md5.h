@@ -51,7 +51,7 @@ inline std::vector<uint8_t> md5(const uint8_t* data, size_t len) {
     for (size_t off = 0; off < padded; off += 64) {
         uint32_t M[16];
         for (int i = 0; i < 16; ++i) {
-            const uint8_t* p = &msg[off + i * 4];
+            const uint8_t* p = &msg[off + (size_t)i * 4];
             M[i] = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
                    ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
         }

@@ -406,10 +406,12 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         // Other events' groups that a previous run left unsent: an End whose
         // drain ran out of time, or a crash.
         std::error_code ec;
-        for (const auto& e : std::filesystem::directory_iterator(groups_root(), ec)) {
-            if (!e.is_directory(ec) || e.path().filename() == m_event_id) continue;
+        for (std::filesystem::directory_iterator it(groups_root(), ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code dec;
+            if (!it->is_directory(dec) || it->path().filename() == m_event_id) continue;
             m_leftover_qs.push_back(std::make_unique<ObjectQueue>(
-                e.path().string(), m_tx, m_cfg.base_backoff_ms, m_cfg.max_backoff_ms));
+                it->path().string(), m_tx, m_cfg.base_backoff_ms, m_cfg.max_backoff_ms));
         }
     }
     // Waited for, unlike the per-segment ones: until this object exists a
