@@ -291,6 +291,15 @@ one member per group that the store will not serve intact from the parity and
 the others. Additive; no protocol bump. Built within ADR-0004 (one bucket
 gives the guarantee) and ADR-0003 §1 (nothing is re-sent).
 
+Groups are formed for every segment the event ever stores, not only the ones
+sent while it was live: the backlog `EventFinisher` uploads after End joins
+groups the same way (§5). A group End published in part is carried on by the
+finisher and overwritten, parity first, with an index whose members are a
+strict superset of the old one's, so nothing a reader verified against the
+old index becomes untrue; where that cannot be guaranteed the finisher leaves
+the group as it is and starts at the next boundary (`parity.h`). With a second
+bucket configured, the group objects are copied to it too (§5).
+
 ### 4.5 Markers
 
 `markers.json` is append-only:
@@ -409,6 +418,11 @@ is more use to an operator than an event that silently is not there.
   only while it still names this event, never over a newer broadcast. An event
   abandoned by starting a new one over it is owed its ending the same way. It used to be marked ended with the event and deleted by
   the next Go Live, which cost the end of the recording on a slow uplink.
+  The backlog gets segment groups (§4.4) like the rest of the event: the
+  finisher first sends the groups End could not, carries on the group End left
+  half-done, and flushes the last one before the final receipt. The groups are
+  uploaded after the receipt; what the link or a quit leaves of them goes at
+  the next Go Live.
 - **Retry with backoff.** Failed uploads retry with exponential backoff and
   jitter, in strict sequence order, for as long as the event is live. No segment
   is abandoned.
@@ -421,7 +435,12 @@ is more use to an operator than an event that silently is not there.
 - **Recovery without re-sending.** A segment the store acknowledged but will
   not serve intact (missing, or failing its checksum, behind the live edge) is
   rebuilt by the decoder from its group's parity (§4.4). Two bad in one group
-  cannot be; they are refused and skipped as any refusal is.
+  cannot be; they are refused and skipped as any refusal is. With a second
+  bucket configured, each group's parity and index are queued for it as well,
+  durably and in that order, and sent under the mirror's yield rule, so the
+  live feed never waits on the second bucket; what End leaves for it goes at
+  the next Go Live. The backlog finished after End is the primary's only, as
+  its segments are.
 - **Delivery receipt.** At End the encoder writes `receipt.json`: segments
   captured, in the cloud, lost before upload (with the gaps) and pending, and a
   state of complete, finishing or incomplete. `EventFinisher` rewrites it when a

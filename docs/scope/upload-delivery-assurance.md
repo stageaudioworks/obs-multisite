@@ -22,6 +22,14 @@ branch built:
 | R3 local archive | Not built: R5 repairs; the archive was only ever a last resort |  |
 | R6 live-first catch-up | Not built: a protocol bump, worth it only if E2 shows up in the field |  |
 
+Closed 2026-11-22 (`test_parity` §7, §8): the backlog EventFinisher uploads
+after End now joins groups. It sends the groups End left on disk first,
+carries on the group End published in part (a strict superset, read back from
+the bucket, parity first; otherwise it starts at the next boundary, see
+`parity.h`), and flushes the last group before the final receipt. And with a
+second bucket, every group's parity and index are queued for it too, under the
+mirror's yield rule.
+
 Also found and fixed on the way: a campus more than 50 segments behind live
 stored segments **unchecked** (checksums came only from the manifest's window;
 the group index now covers the whole event), and the dock read the mirror's
@@ -31,10 +39,9 @@ Still open:
 - **Hardware half of R7.** Real links, real disks, OBS, and Content-MD5 accepted
   by each store we support (R2, B2, others). Only a loopback server has seen
   the header so far.
-- **Groups for backlogs finished after End.** EventFinisher uploads segments
-  but forms no groups for them, and does not upload group objects left on disk
-  by an End that ran out of time (the next Go Live sends those).
-- **Groups are not copied to the mirror bucket.**
+- **The mirror bucket and the backlog.** Groups now reach the second bucket
+  (closed 2026-11-22, below), but a backlog finished after End goes to the
+  primary only, segments and groups alike, as it always has.
 - **The campus half of the receipt** — what each campus received — belongs to
   the collector in multisite-cloud: the campus counts (`rebuilt`,
   `verified_by_group`, `gap_skips`) are in `DecoderSession::Stats` but not on

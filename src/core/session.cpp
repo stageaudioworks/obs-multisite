@@ -157,6 +157,7 @@ Session::~Session() {
 
 void Session::stop_group_queues() {
     if (m_group_q) m_group_q->stop();
+    if (m_mirror_group_q) m_mirror_group_q->stop();
     for (auto& q : m_leftover_qs) {
         q->stop();
         q->remove_dir_if_empty();
@@ -168,15 +169,17 @@ void Session::publish_groups(std::vector<ParityAccumulator::Finished> done) {
     if (!m_group_q || done.empty()) return;
     const std::string prefix = event_prefix();
     for (auto& f : done) {
-        // Parity before the index that names it: an index a campus can read
-        // means its parity is there too.
-        if (f.index.parity_len > 0)
-            m_group_q->enqueue(group_parity_key(prefix, f.index.group), f.parity,
-                               "application/octet-stream");
         const std::string j = f.index.to_json();
-        m_group_q->enqueue(group_index_key(prefix, f.index.group),
-                           std::vector<uint8_t>(j.begin(), j.end()),
-                           "application/json");
+        const std::vector<uint8_t> index(j.begin(), j.end());
+        for (ObjectQueue* q : { m_group_q.get(), m_mirror_group_q.get() }) {
+            if (!q) continue;
+            // Parity before the index that names it: an index a campus can
+            // read means its parity is there too.
+            if (f.index.parity_len > 0)
+                q->enqueue(group_parity_key(prefix, f.index.group), f.parity,
+                           "application/octet-stream");
+            q->enqueue(group_index_key(prefix, f.index.group), index, "application/json");
+        }
     }
 }
 
@@ -317,8 +320,11 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     // exactly this — arrives switched off, and every publish below would fail
     // for a reason no error message would ever explain. Re-arm it here, at
     // the one point where a Session starts issuing requests, rather than
-    // relying on every caller to hand over a factory-fresh transport.
+    // relying on every caller to hand over a factory-fresh transport. The
+    // second bucket's likewise: End stops its uploader and its group queue,
+    // and the leftovers that queue left are sent from here on.
     m_tx.resume_pending();
+    if (m_cfg.mirror_transport) m_cfg.mirror_transport->resume_pending();
     // event.json — static descriptor, written once. A resume keeps the
     // original: its start time is what every time of day in the event is
     // measured from, and its first_seq is where the event begins.
@@ -402,16 +408,59 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
             m_group_q = std::make_unique<ObjectQueue>(
                 groups_root() + "/" + m_event_id, m_tx,
                 m_cfg.base_backoff_ms, m_cfg.max_backoff_ms);
+            if (m_cfg.mirror_transport) {
+                m_mirror_group_q = std::make_unique<ObjectQueue>(
+                    mirror_groups_root() + "/" + m_event_id, *m_cfg.mirror_transport,
+                    m_cfg.base_backoff_ms, m_cfg.max_backoff_ms);
+                m_mirror_group_q->set_may_upload([this] { return mirror_may_go(); });
+            }
         }
         // Other events' groups that a previous run left unsent: an End whose
-        // drain ran out of time, or a crash.
+        // drain ran out of time, or a crash. Not an event the finisher is
+        // still working on: it sends that one's groups itself, and must read
+        // back what End stored before carrying a group on (parity.h), so two
+        // senders on one folder could store a stale group over its fuller one.
+        const auto finishing = SpoolQueue::finishing_events(m_cfg.spool_dir);
+        auto skip = [&](const std::filesystem::path& p) {
+            const std::string id = p.filename().string();
+            return id == m_event_id ||
+                   std::find(finishing.begin(), finishing.end(), id) != finishing.end();
+        };
         std::error_code ec;
         for (std::filesystem::directory_iterator it(groups_root(), ec), end;
              !ec && it != end; it.increment(ec)) {
             std::error_code dec;
-            if (!it->is_directory(dec) || it->path().filename() == m_event_id) continue;
+            if (!it->is_directory(dec) || skip(it->path())) continue;
             m_leftover_qs.push_back(std::make_unique<ObjectQueue>(
                 it->path().string(), m_tx, m_cfg.base_backoff_ms, m_cfg.max_backoff_ms));
+        }
+        // And the second bucket's, under its yield rule. With no second
+        // bucket configured any more they are dropped, as set_targets(1)
+        // drops the media it was owed.
+        // Listed first, then acted on: the loop below may remove folders, and
+        // the non-throwing increment is main's rule for every scan (477d35c).
+        std::vector<std::filesystem::path> mirror_left;
+        std::error_code mec;
+        for (std::filesystem::directory_iterator it(mirror_groups_root(), mec), end;
+             !mec && it != end; it.increment(mec)) {
+            std::error_code dec;
+            if (it->is_directory(dec) && it->path().filename() != m_event_id)
+                mirror_left.push_back(it->path());
+        }
+        for (const auto& p : mirror_left) {
+            if (!m_cfg.mirror_transport) {
+                log_info("second bucket: no longer configured — dropping the segment "
+                         "groups queued for it for event %s",
+                         p.filename().string().c_str());
+                std::error_code rec;
+                std::filesystem::remove_all(p, rec);
+                continue;
+            }
+            auto q = std::make_unique<ObjectQueue>(
+                p.string(), *m_cfg.mirror_transport,
+                m_cfg.base_backoff_ms, m_cfg.max_backoff_ms);
+            q->set_may_upload([this] { return mirror_may_go(); });
+            m_leftover_qs.push_back(std::move(q));
         }
     }
     // Waited for, unlike the per-segment ones: until this object exists a
@@ -424,6 +473,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     publish_live("live");
     m_uploader->start();
     if (m_group_q) m_group_q->start();
+    if (m_mirror_group_q) m_mirror_group_q->start();
     for (auto& q : m_leftover_qs) q->start();
     // The mirror starts with the event. It will mostly sit yielded; that is the
     // point, and it costs one sleeping thread.
@@ -876,6 +926,9 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
             m_group_q->drain_blocking((int)std::max<int64_t>(1000, left.count()));
             m_group_q->remove_dir_if_empty();
         }
+        // The second bucket's copy is not drained here: End does not wait on
+        // the mirror. It goes at the next Go Live, as a leftover.
+        if (m_mirror_group_q) m_mirror_group_q->remove_dir_if_empty();
     }
 
     // These two writes are the whole of "this event is over" as far as any

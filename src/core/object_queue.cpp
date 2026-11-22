@@ -150,7 +150,7 @@ void ObjectQueue::remove_dir_if_empty() {
 void ObjectQueue::run() {
     int attempt = 0;
     while (m_running) {
-        const int r = try_one();
+        const int r = (!m_may_upload || m_may_upload()) ? try_one() : 0;
         if (r == 1) { attempt = 0; continue; }
         int wait = 100;                      // idle poll
         if (r < 0) {
