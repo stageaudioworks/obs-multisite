@@ -7,6 +7,41 @@ code stands, names where the guarantee really breaks, and ranks the fixes.
 Authority for the design is `PROJECT-SCOPE.md` §4.7, §5 and §5.1. Patent limits
 are in `docs/adr/0003`. Read item 1 there before touching any retry code.
 
+## Status (2026-11-22, branch `claude/protocol-reliability-uploads-6db510`)
+
+The failure map below describes the code **before** this branch. What the
+branch built:
+
+| Item | State | Pinned by |
+| --- | --- | --- |
+| R1 delivery receipt | Built, encoder side: `receipt.json` at End, rewritten by EventFinisher, shown in the dock | `test_receipt` |
+| R2 spool sized from free disk | Built, with "time left if the internet drops" in the dock | `test_spool_budget` |
+| R4 uploader fixes, Content-MD5 | Built | `test_upload_integrity`, `test_s3_put_integrity` |
+| R5 segment groups (index + parity) | Built, encoder and campus (and the relay, which reads the same way) | `test_parity` |
+| R7 soak | Software half built: 1,500 segments, outages of 5/30/90 min, store faults → 1500/1500 at both campuses | `test_soak` |
+| R3 local archive | Not built: R5 repairs; the archive was only ever a last resort |  |
+| R6 live-first catch-up | Not built: a protocol bump, worth it only if E2 shows up in the field |  |
+
+Also found and fixed on the way: a campus more than 50 segments behind live
+stored segments **unchecked** (checksums came only from the manifest's window;
+the group index now covers the whole event), and the dock read the mirror's
+status only when LAN delivery was on.
+
+Still open:
+- **Hardware half of R7.** Real links, real disks, OBS, and Content-MD5 accepted
+  by each store we support (R2, B2, others). Only a loopback server has seen
+  the header so far.
+- **Groups for backlogs finished after End.** EventFinisher uploads segments
+  but forms no groups for them, and does not upload group objects left on disk
+  by an End that ran out of time (the next Go Live sends those).
+- **Groups are not copied to the mirror bucket.**
+- **The campus half of the receipt** — what each campus received — belongs to
+  the collector in multisite-cloud: the campus counts (`rebuilt`,
+  `verified_by_group`, `gap_skips`) are in `DecoderSession::Stats` but not on
+  the heartbeat yet.
+- **Patent counsel** on FEC over segments (R5), before release.
+- **On screen.** The dock's new lines are built with Qt but not yet seen in OBS.
+
 ## 1. RSP compared with ours
 
 Resi's public description of RSP (marketing copy, not a spec): the encoder
@@ -197,24 +232,25 @@ losing data at scale. That is the honest limit of a single bucket. Before
 quoting a provider's durability or uptime figures to a customer, check them
 against that provider's current terms. See ADR-0004.
 
-## 6. What we can honestly tell a prospective user today
+## 6. What we can honestly tell a prospective user
+
+With this branch released, and once the hardware half of R7 confirms it:
 
 > Every segment is written to the encoder's disk before it is sent, and is
 > retried until the cloud confirms it — through outages, crashes and power
-> cuts, and after the service has ended. The cloud checks each upload's
-> fingerprint as it arrives, and every campus checks it again before playing.
-> If the internet is down for longer than the encoder's local buffer
-> (currently about an hour at typical bitrates), the oldest unsent minutes are
-> dropped to protect the disk, and every campus skips them cleanly rather than
-> stalling.
+> cuts, and after the service has ended. The encoder keeps as much backlog as
+> its disk can spare, which on a typical machine is many hours, and shows how
+> long that is while you are live. The cloud checks each upload's fingerprint
+> as it arrives, and every campus checks every segment again before playing.
+> If the cloud ever loses or damages a stored segment, each campus rebuilds it
+> from recovery data sent alongside, with no second storage account needed.
+> After every service you get a receipt saying how much of it is in the cloud.
 
-Once R1, R2, R5 and R7 are done, the buffer sentence becomes "many hours",
-and we can add two sentences:
-- "If the cloud ever damages a stored segment, each campus rebuilds it from
-  recovery data sent alongside, with no second storage account needed."
-- "After every service you get a receipt showing every campus received all of
-  it."
+What it must not say: that nothing can ever be lost. An encoder disk that
+fails before upload loses what only it held, a disk that fills drops the
+oldest unsent minutes (and the receipt says so), and a provider outage longer
+than a campus's buffer is covered only by the optional second bucket.
 
-Figures here (72 min, 95 min, 10 %) are arithmetic from the 4 GiB default,
-assumed bitrates and K = 10. They are not measurements. R7 turns them into
-measurements.
+Figures: "many hours" follows from the free-disk cap (spool_budget.h) and is
+arithmetic until the hardware soak measures it; 10 % is the parity overhead
+at k = 10. The software soak's numbers are in the R7 commit, not here.
