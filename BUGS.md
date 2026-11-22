@@ -11,7 +11,7 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-11-13.
+Last updated: 2026-11-22.
 
 ---
 
@@ -183,6 +183,36 @@ of a packed track must be full range, and the next user's click is on 4.
 
 **Files:** `src/obs/packed_aac.cpp`, `src/obs/broadcast_controller.cpp`,
 `src/obs/plugin-main.cpp`, `tests/test_cmaf_tracks.cpp`.
+
+### 11. `test_session` case 22 fails now and then under the sanitizers
+
+**Status: OPEN — a test that fails on timing, not a product fault.** Seen once,
+2026-11-22, in the `address+undefined` job of PR #54, which changed only
+`dco.yml`. A re-run of that job passed. The same job passed on main at
+`17bf69f` and on #53 that day.
+
+**Symptom.** Case 22 ("a stalled live.json heartbeat does not block status() or
+the next segment") printed `publish_segment() 300 ms, during a 1200 ms
+live.json PUT` and failed `CHECK(pub_ms < 300, …)`. `status()` took 0 ms.
+
+**Cause (inferred, not measured).** The check is a wall-clock bound, and an
+ASan+UBSan build on a shared runner sits close to it. The fault it pins (#8
+under "Recently landed") measured 1197 ms, the length of the stalled PUT. A
+300 ms result is not that fault returning: a real block would read about
+1200 ms.
+
+**Next step.** Raise the bound in a way that still catches the real block, for
+example `pub_ms < 600`, or compare it with the stall (`pub_ms < 1200 / 2`).
+Cases 21 and 23 use the same 300 ms bound (lines 1012 and 1092), so change them
+too.
+Run the suite a few times under `analysis.yml` before calling it fixed.
+
+**The trap.** Do not delete the check or skip it under sanitizers. It is the
+only test pinning #8, and the sanitizer build is where a lock taken on the
+upload path would show up first.
+
+**Files:** `tests/test_session.cpp` (case 22, about line 1071),
+`.github/workflows/analysis.yml`.
 
 ---
 
