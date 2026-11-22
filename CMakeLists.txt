@@ -227,6 +227,12 @@ add_executable(test_receipt tests/test_receipt.cpp)
 target_link_libraries(test_receipt PRIVATE multisite_core)
 add_test(NAME receipt COMMAND test_receipt)
 
+# The delivery claim end to end in compressed time: 1,500 segments through
+# three outages and a store that loses and damages objects after a 2xx (R7).
+add_executable(test_soak tests/test_soak.cpp)
+target_link_libraries(test_soak PRIVATE multisite_core)
+add_test(NAME soak COMMAND test_soak)
+
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
 add_test(NAME timebase COMMAND test_timebase)
