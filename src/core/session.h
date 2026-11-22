@@ -20,6 +20,7 @@
 #include "model.h"
 #include "object_queue.h"
 #include "parity.h"
+#include "receipt.h"
 #include "spool_budget.h"
 #include "spool_queue.h"
 #include "retry_uploader.h"
@@ -193,6 +194,9 @@ public:
     // the caller is expected to say so rather than sign off with the tidy
     // "stopped" line it prints either way. last_error() has the detail.
     bool end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(8000));
+    // What this event delivered, as end() left it (receipt.h). Empty event_id
+    // until end() has run. Also written to events/{id}/receipt.json.
+    DeliveryReceipt receipt() const;
 
     // Status for the encoder UI.
     struct Status {
@@ -350,6 +354,7 @@ private:
     void publish_groups(std::vector<ParityAccumulator::Finished> done);
     std::string groups_root() const { return m_cfg.spool_dir + ".objects"; }
     void stop_group_queues();
+    DeliveryReceipt m_receipt;   // guarded by m_mtx; set by end()
 
     // ── The mirror's copy of the small objects (Phase 9) ─────────────────────
     // The manifest, live.json, event.json and the cue objects go to the second

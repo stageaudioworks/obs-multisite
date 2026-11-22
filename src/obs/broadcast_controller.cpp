@@ -658,6 +658,7 @@ BroadcastStatus BroadcastController::status() const {
             st.disk_health     = (int)multisite::classify_disk_free(sp.available);
         }
     }
+    st.last_receipt = last_receipt();
     st.lan_enabled = m_cfg.lan_enabled;   // true whether idle or live: what
                                            // Go Live will do next time
     st.cloud_enabled = m_cfg.cloud_enabled;

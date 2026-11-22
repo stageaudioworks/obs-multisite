@@ -1223,6 +1223,7 @@ static void stop_output(OutputCtx* ctx, bool from_obs) {
         if (ctx->segments_muxed == 0)
             mlog_warn("no segments were produced — check that the video "
                       "encoder's keyframe interval is <= the segment duration");
+        set_last_receipt(ctx->session->receipt().summary());
     }
 // controls were unregistered at the top, before ctx->mtx was taken
     ctx->started = false;

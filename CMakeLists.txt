@@ -66,6 +66,7 @@ add_library(multisite_core STATIC
     src/core/retry_uploader.cpp
     src/core/parity.cpp
     src/core/object_queue.cpp
+    src/core/receipt.cpp
     src/core/model.cpp
     src/core/log.cpp
     src/core/session.cpp
@@ -219,6 +220,12 @@ add_test(NAME spool_budget COMMAND test_spool_budget)
 add_executable(test_parity tests/test_parity.cpp)
 target_link_libraries(test_parity PRIVATE multisite_core)
 add_test(NAME parity COMMAND test_parity)
+
+# The delivery receipt: what an event delivered, written at End and settled by
+# EventFinisher once a backlog lands (R1).
+add_executable(test_receipt tests/test_receipt.cpp)
+target_link_libraries(test_receipt PRIVATE multisite_core)
+add_test(NAME receipt COMMAND test_receipt)
 
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)

@@ -1485,7 +1485,13 @@ void EncoderDock::refresh() {
         if (on)
             m_backlog->setText(tr_("Dock.BacklogUploading")
                                    .arg((qulonglong)bs.finishing_segments));
-        m_backlog->setVisible(on);
+        // Idle with nothing left to send: the last broadcast's receipt, so
+        // "did it all get there?" is answered on screen, not from a log.
+        const bool receipt = !on && !bs.live && !bs.last_receipt.empty();
+        if (receipt)
+            m_backlog->setText(tr_("Dock.LastReceipt")
+                                   .arg(QString::fromStdString(bs.last_receipt)));
+        m_backlog->setVisible(on || receipt);
         m_abandonBacklog->setVisible(on);
     }
     // The update check is about this machine, not about the broadcast, so it is

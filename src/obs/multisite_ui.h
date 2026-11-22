@@ -196,6 +196,10 @@ void unregister_ui();
 
 // Reaches whichever encoder is currently broadcasting, if any.
 bool encoder_stats(EncoderStats& out);
+// The last broadcast's delivery receipt, in one sentence (receipt.h), kept
+// after its output is gone so the dock can show it until the next Go Live.
+void set_last_receipt(const std::string& summary);
+std::string last_receipt();
 void forward_marker_to_encoder(const std::string& label);
 
 // Snapshot of the decoder sources, for the decoder dock.

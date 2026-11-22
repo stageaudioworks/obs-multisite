@@ -900,6 +900,38 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     stop_manifest_publisher();
     if (m_on_manifest_published) m_on_manifest_published(manifest_json);
     publish_live("ended");
+
+    // The receipt (receipt.h): what was captured, what is in the cloud, what
+    // was lost and what is still to go. Counted from m_next_seq rather than
+    // the spool's last_enqueued, which reads 0 both for "nothing yet" and for
+    // "segment 0" (CONTEXT.md, Sentinels). Its write is not part of "the
+    // event ended" and must not make end() report failure, so it goes
+    // straight to the transport and is only logged if refused.
+    {
+        DeliveryReceipt rc;
+        {
+            std::lock_guard<std::mutex> lk(m_mtx);
+            const uint64_t first = m_manifest.first_available_seq;
+            const bool any = m_next_seq > first;
+            rc = make_receipt(m_manifest, any, any ? m_next_seq - 1 : 0,
+                              m_spool->pending_count());
+            if (m_cfg.mirror_transport) {
+                rc.mirror_configured = true;
+                rc.mirror_complete   = m_spool->caught_up(1);
+            }
+            rc.writer        = "encoder";
+            rc.written_at_ms = now_ms();
+            m_receipt = rc;
+        }
+        const std::string j = rc.to_json();
+        PutResult r = m_tx.put(receipt_key(rc.event_id),
+                               std::vector<uint8_t>(j.begin(), j.end()),
+                               "application/json", {});
+        if (!r.success)
+            log_warn("receipt: could not store %s — HTTP %ld %s",
+                     receipt_key(rc.event_id).c_str(), r.http_status, r.error.c_str());
+        log_info("receipt: event %s — %s", rc.event_id.c_str(), rc.summary().c_str());
+    }
     // If either write failed — the link was down at End — the ending is owed:
     // the folder is kept and EventFinisher publishes it once it can. It used
     // to be logged and forgotten, so campuses called a finished event
@@ -910,6 +942,11 @@ bool Session::end(std::chrono::milliseconds drain_deadline) {
     // it used to stay only until the next Go Live deleted it.
     m_spool->remove_if_done();
     return last_error().empty();
+}
+
+DeliveryReceipt Session::receipt() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_receipt;
 }
 
 Session::Status Session::status() const {
