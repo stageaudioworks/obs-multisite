@@ -116,6 +116,11 @@ private slots:
     // Shows only the storage fields the selected provider actually needs
     // (PROJECT-SCOPE.md §8.6) — the same dropdown as the encoder dock.
     void updateProviderFields();
+    // Fills m_pairedStorageNote from the plugin's live identity: the bucket in
+    // use and whether its credentials are current. shared with the encoder
+    // dock (paired_storage_note.h), so the two cannot describe one machine
+    // differently.
+    void refreshPairedStorageNote();
     void onPause();
     void onResume();
     void onJumpLive();
@@ -254,6 +259,9 @@ private:
     QLineEdit* m_keyId = nullptr;
     QLineEdit* m_secret = nullptr;
     QLineEdit* m_region = nullptr;
+    // The read-only summary that replaces the typed fields when Multisite Cloud
+    // is the provider — the bucket in use and its credential state.
+    QLabel*    m_pairedStorageNote = nullptr;
     QLineEdit* m_roomId = nullptr;
     // What this box is called, stamped on the cues it drops (shared cues).
     QLineEdit* m_siteName = nullptr;

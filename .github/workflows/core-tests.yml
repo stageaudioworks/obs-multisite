@@ -31,11 +31,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 is Apple Silicon. It is here to keep the CommonCrypto
+        # macos-15 is Apple Silicon. It is here to keep the CommonCrypto
         # decision true: a Mac has no OpenSSL, so a regression reintroducing
         # that dependency would build on the other two runners and fail only
-        # on the platform nobody was testing.
-        os: [ ubuntu-latest, windows-latest, macos-14 ]
+        # on the platform nobody was testing. (It was macos-14 until GitHub
+        # retired that image; the leg then failed in one second with
+        # "configuration not supported", which reads as a cancel, not a fail.)
+        os: [ ubuntu-latest, windows-latest, macos-15 ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5

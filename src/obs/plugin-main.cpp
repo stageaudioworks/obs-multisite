@@ -10,6 +10,9 @@ OBS_MODULE_USE_DEFAULT_LOCALE("obs-multisite", "en-US")
 namespace multisite_obs {
 void register_output();
 void register_source();
+// The packed-audio AAC encoder (BUGS.md entry 3): eight full-range channels,
+// which OBS's own encoder cannot express at 7.1.
+void register_packed_aac();
 void register_ui();
 void unregister_ui();
 void start_web_ui();
@@ -56,6 +59,10 @@ bool obs_module_load(void) {
     // preference is no reason to take a source type away from one.
     multisite_obs::register_output();   // main campus: sends
     multisite_obs::register_source();   // satellite: receives
+    // An encoder type, not a source: used only by the packed multi-channel
+    // path (broadcast_controller.cpp), where OBS's own AAC encoder cannot
+    // avoid coding channel 4 as an LFE.
+    multisite_obs::register_packed_aac();
     multisite_obs::register_ui();       // hotkeys + Tools menu (no Qt needed)
 #ifdef MULTISITE_HAVE_QT
     multisite_obs::register_docks();    // encoder + decoder operator panels

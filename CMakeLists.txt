@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs_multisite VERSION 0.1.31 LANGUAGES CXX)
+project(obs_multisite VERSION 0.1.32 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -354,6 +354,10 @@ add_test(NAME mpp_convert COMMAND test_mpp_convert)
 add_executable(test_spool_targets tests/test_spool_targets.cpp)
 target_link_libraries(test_spool_targets PRIVATE multisite_core)
 add_test(NAME spool_targets COMMAND test_spool_targets)
+
+add_executable(test_spool_lock tests/test_spool_lock.cpp)
+target_link_libraries(test_spool_lock PRIVATE multisite_core)
+add_test(NAME spool_lock COMMAND test_spool_lock)
 
 # Two upload streams over one spool, and the mirror's yield rule (Phase 9).
 add_executable(test_mirror_upload tests/test_mirror_upload.cpp)
@@ -1036,6 +1040,10 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
+        # An AAC encoder whose eight channels are octagonal, not 7.1: OBS's own
+        # codes 7.1's fourth channel as an LFE, which is where packed mode's
+        # click went (BUGS.md entry 3).
+        src/obs/packed_aac.cpp
         src/obs/caption_bridge.cpp
         src/obs/decoder_settings.cpp
         src/obs/plugin_role.cpp
@@ -1106,6 +1114,7 @@ if(BUILD_OBS_PLUGIN)
             src/obs/ui/decoder_dock.cpp
             src/obs/ui/cues_dock.cpp
             src/obs/ui/storage_dialog.cpp
+            src/obs/ui/paired_storage_note.cpp
             src/obs/ui/role_selector.cpp
             src/obs/ui/settings_tabs.cpp
             src/obs/ui/web_box.cpp

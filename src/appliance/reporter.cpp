@@ -170,6 +170,8 @@ Reporter::Reporter() : m_worker(new Worker()) {}
 Reporter::~Reporter() { stop(); }
 
 void Reporter::serve_once() {
+    // loop() calls this whether or not start() has handed it a player yet.
+    if (!m_worker->player) return;
     Player& player = *m_worker->player;
     const auto now = std::chrono::steady_clock::now();
     {

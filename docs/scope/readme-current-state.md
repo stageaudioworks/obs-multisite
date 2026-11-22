@@ -270,7 +270,7 @@ three things that are no longer part of this project, and why.</summary>
   a church can deploy this unaided, and they are the three this removes. The
   service address is a setting, not a constant — anyone can run their own — and
   nothing contacts anything until an operator asks it to. Designed in
-  [PROJECT-SCOPE.md §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
+  [PROJECT-SCOPE.md §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered).
 - **Phase 13 — Storage provider selection.** ✅ A dropdown — Cloudflare R2,
   AWS S3, Backblaze B2, Wasabi, or a custom endpoint — that shows only the
   fields each provider actually needs and works out the rest, instead of six

@@ -282,6 +282,13 @@ jobs:
           # OBS 33 renamed ENABLE_PLUGINS to ENABLE_CORE_MODULES and ignores the old
           # name, so it tried to build obs-browser, a submodule the source
           # tarball does not carry. Both are passed so either release configures.
+          #
+          # CMAKE_COMPILE_WARNING_AS_ERROR=OFF: OBS turns warnings into errors
+          # unless this is already defined (cmake/common/compiler_common.cmake).
+          # A runner's newer MSVC (19.52, Visual Studio 2026, from 2026-11-22)
+          # warns on OBS 32.2.2's own obs-properties.c (C4244) and so failed to
+          # build libobs at all. This is OBS's source, not ours, and only
+          # libobs is configured here; the plugin's own warnings are unchanged.
           $haveQt = ($env:HAVE_QT -eq "1")
           $uiFlag = if ($haveQt) { "-DENABLE_UI=ON" } else { "-DENABLE_UI=OFF" }
           cmake -S $env:OBS_SRC -B obs-build @genArgs `
@@ -289,6 +296,7 @@ jobs:
             -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
             -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF `
             -DCMAKE_BUILD_TYPE=Release
           if ($LASTEXITCODE -ne 0) {
             Write-Host "libobs CONFIGURE failed (UI flag: $uiFlag)"
@@ -300,6 +308,7 @@ jobs:
                 -DENABLE_PLUGINS=OFF -DENABLE_CORE_MODULES=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
                 -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
                 -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
+                -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF `
                 -DCMAKE_BUILD_TYPE=Release
               if ($LASTEXITCODE -ne 0) { Write-Host "libobs CONFIGURE failed again"; exit 1 }
             } else { exit 1 }
