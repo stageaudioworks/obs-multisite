@@ -31,6 +31,35 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.32-alpha
+
+**Putting this in front of a congregation for the first time?** Two new pages:
+[docs/FIRST-SERVICE.md](https://github.com/stageaudioworks/obs-multisite/blob/main/docs/FIRST-SERVICE.md)
+is a rehearsal and set of fault drills for the technical lead, and
+[docs/VOLUNTEER-CARD.md](https://github.com/stageaudioworks/obs-multisite/blob/main/docs/VOLUNTEER-CARD.md)
+is one printable page for whoever is at each machine on the day.
+
+**The docks no longer wait on a busy disk.** Writing each segment to the
+encoder's queue held a lock that the dock's status readout also needed, so on a
+slow disk the dock paused with every segment (336 ms measured on one encoder).
+The write now happens outside that lock, in the same crash-safe order as
+before (#36).
+
+**A click on channel 4 of packed audio arrives full-range.** In packed
+eight-channel mode, OBS's AAC encoder treated the mix as 7.1, whose fourth
+channel is the subwoofer channel, so a click there reached a campus as low
+frequencies only. The plugin now encodes packed audio as eight full-range
+channels. Channel order is unchanged. This has been proven in a codec test and
+by OBS loading the new encoder, **not yet by ear in a room**: for a first
+service, prefer multi-track audio.
+
+**Multisite Cloud on a campus no longer leaves an empty storage section.**
+Choosing it in the decoder dock hid the bucket fields and showed nothing in
+their place; it now says the machine reads from its paired bucket, and the
+note updates as soon as pairing completes (#13).
+
+**Captions are still not in this release**, for the same reasons as before.
+
 ## What's new in v0.1.31-alpha
 
 **The campus page in OBS works again.** The plugin's phone page for a campus
