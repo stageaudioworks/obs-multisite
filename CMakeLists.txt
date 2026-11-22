@@ -198,6 +198,13 @@ add_executable(test_retry_cancel tests/test_retry_cancel.cpp)
 target_link_libraries(test_retry_cancel PRIVATE multisite_core)
 add_test(NAME retry_cancel COMMAND test_retry_cancel)
 
+# What a failed PUT means (damage in transit is retried, not "check the
+# credentials"), Content-MD5, and a permanent refusal backing off instead of
+# being retried every 200 ms. docs/scope/upload-delivery-assurance.md R4.
+add_executable(test_upload_integrity tests/test_upload_integrity.cpp)
+target_link_libraries(test_upload_integrity PRIVATE multisite_core)
+add_test(NAME upload_integrity COMMAND test_upload_integrity)
+
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
 add_test(NAME timebase COMMAND test_timebase)
@@ -563,6 +570,11 @@ if(CURL_FOUND)
         add_executable(test_s3_cancel tests/test_s3_cancel.cpp)
         target_link_libraries(test_s3_cancel PRIVATE multisite_s3)
         add_test(NAME s3_cancel COMMAND test_s3_cancel)
+        # The same loopback listener, recording what a PUT sends: Content-MD5
+        # present and correct, and a BadDigest answer retried (R4).
+        add_executable(test_s3_put_integrity tests/test_s3_put_integrity.cpp)
+        target_link_libraries(test_s3_put_integrity PRIVATE multisite_s3)
+        add_test(NAME s3_put_integrity COMMAND test_s3_put_integrity)
         # The same stalled listener, one layer up: a stop after a credential
         # refresh must reach the request begun on the inner it replaced.
         add_executable(test_cloud_cancel tests/test_cloud_cancel.cpp)

@@ -19,6 +19,9 @@ struct PutResult {
     long        http_status = 0;
     bool        retryable = true;   // false for permanent errors (e.g. 403)
     std::string error;
+    // What the operator should do, in their terms, when the transport can
+    // tell (put_failure.h). Empty means the uploader's generic wording.
+    std::string advice;
 };
 
 struct GetResult {

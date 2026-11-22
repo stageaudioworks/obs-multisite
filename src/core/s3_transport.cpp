@@ -3,6 +3,8 @@
 #include "aws_sigv4.h"
 #include "s3_list_xml.h"
 #include "http_date.h"
+#include "md5.h"
+#include "put_failure.h"
 
 #include <curl/curl.h>
 
@@ -205,6 +207,7 @@ struct S3Transport::Impl {
         std::string tg = tag_header(tags);
         if (!tg.empty()) extra["x-amz-tagging"] = tg;
         extra["Cache-Control"] = "max-age=604800";
+        if (cfg.send_content_md5) extra["Content-MD5"] = content_md5(body);
         add_session_token(extra);
 
         SigV4Signer signer(cfg.access_key_id, cfg.secret_access_key,
@@ -252,13 +255,15 @@ struct S3Transport::Impl {
                 ? (double)(total_us - start_us) / 1e6 : 0.0;
             observe(hc, (uint64_t)body.size(), transfer_s, true);
             if (!res.success) {
-                // 4xx (except 408/429) are permanent: bad creds, bad bucket,
-                // bad request. Retrying those forever would mask a config error.
-                res.retryable = !(code >= 400 && code < 500) ||
-                                code == 408 || code == 429;
-                std::string bodytxt(resp.begin(),
-                    resp.begin() + std::min<size_t>(resp.size(), 400));
-                res.error = "HTTP " + std::to_string(code) + " " + bodytxt;
+                // Most 4xx are permanent (bad creds, bad bucket), but not the
+                // store refusing damaged or stalled bytes — see put_failure.h.
+                const std::string bodytxt(resp.begin(), resp.end());
+                const PutFailure pf = classify_put_failure(code, bodytxt);
+                res.retryable = pf.retryable;
+                if (pf.kind != PutFailureKind::Transient)
+                    res.advice = put_failure_advice(pf.kind);
+                res.error = "HTTP " + std::to_string(code) + " " +
+                            bodytxt.substr(0, 400);
             }
         } else {
             // Network-level failure → retryable (this is the outage case).

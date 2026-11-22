@@ -25,6 +25,12 @@ struct UploaderConfig {
     int    max_backoff_ms  = 15000;   // cap
     double jitter          = 0.30;    // ±30%
     int    max_attempts    = 0;       // 0 = retry forever (production)
+    // How long to wait before trying a permanently refused segment again
+    // (wrong key, wrong bucket, clock skew). Still retried — the operator may
+    // fix it mid-service and the queue must move on its own — but not every
+    // 200 ms, which is what it was: five refused requests and five ERROR lines
+    // a second, under a message saying uploading had stopped.
+    int    permanent_backoff_ms = 30000;
     std::string content_type = "video/mp4";
     // Verify (via HEAD) that the first N successful uploads really persisted,
     // with the expected byte count. Catches a store that returns 2xx without
@@ -111,6 +117,11 @@ private:
     std::thread          m_thread;
     std::atomic<bool>    m_running{false};
     std::atomic<LinkHealth> m_health{LinkHealth::Healthy};
+    // Upload thread only. Whether the last attempt was refused permanently
+    // (so run() waits permanent_backoff_ms), and whether that refusal has
+    // already been logged (so a held queue writes one ERROR, not one a try).
+    bool m_last_permanent   = false;
+    bool m_permanent_logged = false;
 
     // The only writer of the note above, so the lock lives in one place.
     void set_verify_note(std::string note) {
