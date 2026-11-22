@@ -9,6 +9,12 @@ name: DCO
 # normal shape for this: the point of the DCO is knowing where an outside
 # contribution came from, and a maintainer pushing to their own repository is
 # not that. Maintainers should still commit with -s.
+#
+# Renovate's own commits are exempt. A bot cannot certify anything, so its
+# dependency bumps would otherwise fail here forever. The exemption needs both
+# halves: the pull request was opened by the Renovate app (GitHub sets that, a
+# contributor cannot), and the commit is authored by Renovate's address. A
+# human commit pushed onto a Renovate branch is still checked.
 
 # No workflow_dispatch: every step below reads github.event.pull_request, which
 # a manual run does not have.
@@ -39,6 +45,7 @@ jobs:
       - name: Every commit carries a Signed-off-by matching its author
         env:
           BASE: origin/${{ github.event.pull_request.base.ref }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
         run: |
           set -uo pipefail
 
@@ -51,10 +58,18 @@ jobs:
             exit 0
           fi
 
+          renovate_author='29139614+renovate[bot]@users.noreply.github.com'
+
           fail=0
           for sha in $commits; do
             subject="$(git show -s --format='%s' "$sha")"
             author="$(git show -s --format='%ae' "$sha")"
+
+            if [ "$PR_USER" = 'renovate[bot]' ] && [ "$author" = "$renovate_author" ]; then
+              echo "ok  ${sha:0:9}  $subject  (Renovate, exempt)"
+              continue
+            fi
+
             # Every sign-off on the commit, lowercased, one per line.
             signoffs="$(git show -s --format='%B' "$sha" \
                         | sed -n 's/^[Ss]igned-off-by:.*<\(.*\)>.*/\1/p' \
