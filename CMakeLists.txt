@@ -205,6 +205,12 @@ add_executable(test_upload_integrity tests/test_upload_integrity.cpp)
 target_link_libraries(test_upload_integrity PRIVATE multisite_core)
 add_test(NAME upload_integrity COMMAND test_upload_integrity)
 
+# The spool sized from the free disk rather than a fixed 4 GiB, and the
+# "time left if the link stays down" figure (R2).
+add_executable(test_spool_budget tests/test_spool_budget.cpp)
+target_link_libraries(test_spool_budget PRIVATE multisite_core)
+add_test(NAME spool_budget COMMAND test_spool_budget)
+
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
 add_test(NAME timebase COMMAND test_timebase)

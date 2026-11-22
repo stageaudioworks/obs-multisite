@@ -425,12 +425,19 @@ EncoderStats OutputCtx::stats() const {
     if (lan_server) {
         es.lan_port            = lan_server->port();
         es.lan_cached_segments = (unsigned long long)lan_server->cached_count();
-        es.mirror_configured    = st.mirror_configured;
-        es.mirror_behind        = st.mirror_behind;
-        es.mirror_waiting_on_primary = st.mirror_waiting_on_primary;
-        es.mirror_unreachable   = st.mirror_unreachable;
-        es.mirror_complete      = st.mirror_complete;
     }
+    // Outside the LAN block. They were inside it, so the dock saw the second
+    // bucket's state only on an encoder that also had LAN delivery running —
+    // a mirror without LAN always read as "not configured".
+    es.mirror_configured    = st.mirror_configured;
+    es.mirror_behind        = st.mirror_behind;
+    es.mirror_waiting_on_primary = st.mirror_waiting_on_primary;
+    es.mirror_unreachable   = st.mirror_unreachable;
+    es.mirror_complete      = st.mirror_complete;
+    es.spool_cap_bytes      = st.spool_cap_bytes;
+    es.spool_pending_bytes  = st.spool_pending_bytes;
+    es.spool_seconds_left   = st.spool_seconds_left;
+    es.dropped_for_disk     = st.dropped_for_disk;
     es.lan_error = lan_error;
     // Colo/host/rate are S3Transport-specific (not part of the abstract
     // Transport interface) and meaningless against a NullTransport — there is

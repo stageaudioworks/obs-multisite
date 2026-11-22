@@ -89,6 +89,16 @@ static QString friendly_duration(double seconds) {
     return QObject::tr("%1 min %2 sec").arg(mins).arg(secs);
 }
 
+// A longer span, for the spool's "if the link stays down" figure: hours when
+// there are hours, so "418 min" is never what an operator has to divide.
+static QString friendly_span(double seconds) {
+    if (seconds < 3600.0) return friendly_duration(seconds);
+    const int total_min = (int)(seconds / 60.0);
+    const int h = total_min / 60, m = total_min % 60;
+    if (h >= 10 || m == 0) return QObject::tr("%1 h").arg(h);
+    return QObject::tr("%1 h %2 min").arg(h).arg(m);
+}
+
 // The link line and the elided status values live in status_text.h, included
 // above, so this dock and the decoder's cannot drift apart on wording.
 
@@ -1538,6 +1548,16 @@ void EncoderDock::refresh() {
         }
         QString free = QString::number(
             st.disk_free_bytes / (1024.0 * 1024.0 * 1024.0), 'f', 1) + " GB";
+        // While live, the figure that matters during an outage: how long the
+        // spool can go on absorbing the programme before it drops anything.
+        // Segments already dropped override everything — that is a loss.
+        if (st.live && st.dropped_for_disk > 0) {
+            m_disk->setText(tr_("Dock.DiskDropped").arg((qulonglong)st.dropped_for_disk));
+            m_disk->setStyleSheet("color: #e5484d;");
+            return;
+        }
+        if (st.live && st.spool_seconds_left >= 0.0)
+            free += " · " + tr_("Dock.DiskBuffer").arg(friendly_span(st.spool_seconds_left));
         switch (st.disk_health) {
             case 0:
                 m_disk->setText(tr_("Dock.DiskHealthy") + " (" + free + ")");

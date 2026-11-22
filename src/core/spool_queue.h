@@ -229,6 +229,17 @@ public:
     using DropCallback = std::function<void(const SpoolDrop&)>;
     void set_drop_callback(DropCallback cb) { m_on_drop = std::move(cb); }
 
+    // Sizes the cap per enqueue instead of fixing it at construction: given
+    // the bytes pending (the new segment included), returns the cap, 0 for
+    // none. Replaces `max_bytes` while set. Session uses it to size the spool
+    // from the free disk (spool_budget.h). Set once, before the spool is used
+    // from more than one thread.
+    using CapFn = std::function<uint64_t(uint64_t pending_bytes)>;
+    void set_cap_provider(CapFn fn) { m_cap_fn = std::move(fn); }
+    // The cap the last enqueue worked to: max_bytes, or what the provider
+    // answered. 0 means none.
+    uint64_t current_cap() const { return m_cap_fn ? m_last_cap.load() : m_max_bytes; }
+
     // Test seam (obs-multisite#36). Called from enqueue() after the segment
     // bytes are durable and before its sidecar is written — i.e. inside the
     // window that used to hold m_mtx across a segment's SHA-256 and both file
@@ -256,6 +267,8 @@ private:
     uint64_t    m_bytes_pending = 0;
     std::atomic<uint64_t> m_dropped_count{0};
     DropCallback m_on_drop;
+    CapFn        m_cap_fn;
+    std::atomic<uint64_t> m_last_cap{0};
     EnqueuePause m_enqueue_pause;
 
     static std::string seg_path_in(const std::string& dir, uint64_t seq);

@@ -79,6 +79,14 @@ struct EncoderStats {
     // when nothing has been observed. A large value means THIS box is the one
     // that is out; see Transport::server_clock_skew_ms.
     long long   clock_skew_ms = 0;
+
+    // The spool against its cap (Session::Status, spool_budget.h): what it
+    // may hold, what it holds, how long it could absorb the programme if the
+    // link stayed down (-1 unknown), and how many segments it has dropped.
+    unsigned long long spool_cap_bytes = 0;
+    unsigned long long spool_pending_bytes = 0;
+    double             spool_seconds_left = -1.0;
+    unsigned long long dropped_for_disk = 0;
 };
 
 struct EncoderControls {

@@ -18,6 +18,7 @@
 //   events/{event_id}/markers.json
 //
 #include "model.h"
+#include "spool_budget.h"
 #include "spool_queue.h"
 #include "retry_uploader.h"
 #include "transport.h"
@@ -41,13 +42,20 @@ struct SessionConfig {
     // Empty means "no custom name" — the satellite falls back to the time.
     std::string event_name;
     std::string spool_dir;                 // local durable queue location
-    // Local disk cap for unconfirmed segments (0 = unlimited, retry forever).
-    // Protects the encoder machine's disk when the upload link is down or too
-    // slow to keep up for a long stretch, at the cost of the oldest queued
-    // segments — see spool_queue.h. 4 GiB is generous headroom for normal
-    // operation (the spool should sit near-empty) while still bounding a
-    // multi-hour outage on a small drive.
-    uint64_t    max_spool_bytes = 4ull * 1024 * 1024 * 1024;
+    // Local disk cap for unconfirmed segments. Protects the encoder machine's
+    // disk when the upload link is down or too slow for a long stretch, at the
+    // cost of the oldest queued segments — see spool_queue.h.
+    //
+    // 0, the default, sizes the cap from the free space on the spool's disk
+    // (spool_budget.h): everything but a reserve. A nonzero value is a fixed
+    // cap. It used to be a fixed 4 GiB, about 72 minutes of an 8 Mbit/s
+    // programme, which cost the start of a service to an outage of just over
+    // an hour on machines with hundreds of GB free.
+    uint64_t    max_spool_bytes = 0;
+    SpoolBudget spool_budget;
+    // Measures the spool's disk: free and total bytes, false when it cannot.
+    // Null means std::filesystem::space(spool_dir). A test seam.
+    std::function<bool(uint64_t& free_bytes, uint64_t& capacity_bytes)> disk_space;
     // The second bucket, when redundancy is configured (PROJECT-SCOPE.md §10
     // Phase 9). Borrowed, not owned — the caller keeps it alive for the
     // Session's lifetime, exactly as it does the primary. Null means one target,
@@ -195,6 +203,13 @@ public:
         // for disk space (see SessionConfig::max_spool_bytes). Zero in normal
         // operation; the encoder dock surfaces this as an operator warning.
         uint64_t    dropped_for_disk = 0;
+        // How much the spool may hold before it drops (0: no cap), how much it
+        // holds now, and how long it could absorb the programme if nothing
+        // more were uploaded — -1 until a bitrate has been measured. The dock's
+        // "if the link stays down" line (docs/scope/upload-delivery-assurance.md, R2).
+        uint64_t    spool_cap_bytes = 0;
+        uint64_t    spool_pending_bytes = 0;
+        double      spool_seconds_left = -1.0;
 
         // Set once, the moment this event was resumed rather than started
         // fresh — empty event_id means this run started with start_new().
@@ -371,6 +386,9 @@ private:
     // Atomic because publish_segment runs on the encode path while add_marker
     // runs on whoever pressed the button.
     std::atomic<int64_t> m_live_media_ms{0};
+    // Bytes per second of programme, smoothed over recent segments. Written
+    // by the encode thread in publish_segment(), read by status().
+    std::atomic<double>  m_encode_bytes_per_s{0.0};
     // Written by publish_live() and read by on_confirmed() on the uploader's
     // thread, so atomic rather than guarded by m_mtx.
     std::atomic<int64_t> m_last_heartbeat_ms{0};

@@ -6,6 +6,7 @@
 #include <random>
 #include <cstdio>
 #include <algorithm>
+#include <filesystem>
 
 namespace multisite {
 
@@ -40,6 +41,28 @@ Session::Session(SessionConfig cfg, Transport& transport)
     : m_cfg(std::move(cfg)), m_tx(transport) {
     m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir, m_cfg.max_spool_bytes);
     m_spool->set_drop_callback([this](const SpoolDrop& d) { on_dropped(d); });
+    if (m_cfg.max_spool_bytes == 0) {
+        // Sized from the disk at every enqueue, so a disk that fills for other
+        // reasons (OBS recording to it) shrinks the cap as it goes.
+        auto measure = m_cfg.disk_space;
+        const std::string dir = m_cfg.spool_dir;
+        const SpoolBudget budget = m_cfg.spool_budget;
+        m_spool->set_cap_provider([measure, dir, budget](uint64_t pending) -> uint64_t {
+            uint64_t free_b = 0, cap_b = 0;
+            bool ok = false;
+            if (measure) {
+                ok = measure(free_b, cap_b);
+            } else {
+                std::error_code ec;
+                const auto sp = std::filesystem::space(dir, ec);
+                if (!ec) { free_b = sp.available; cap_b = sp.capacity; ok = true; }
+            }
+            // A disk that cannot be measured falls back to the old fixed cap
+            // rather than none: unbounded is the one answer that can fill it.
+            if (!ok) return 4ull * 1024 * 1024 * 1024;
+            return spool_cap_from_disk(pending, free_b, cap_b, budget);
+        });
+    }
 
     // How many targets must hold a segment comes from the CONFIGURATION IN
     // FORCE, not from what was persisted. A spool left at two targets after the
@@ -447,6 +470,13 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
     // formula for a quantity the encoder already has exactly, and the two drift
     // apart whenever a segment is not exactly the nominal length (BUGS #2b).
     m_live_media_ms = (int64_t)((pts_offset_s + duration_s) * 1000.0);
+    if (duration_s > 0.0) {
+        // Smoothed over about ten segments: one keyframe-heavy segment should
+        // not swing the "minutes left" figure an operator is reading.
+        const double rate = (double)s.data.size() / duration_s;
+        const double prev = m_encode_bytes_per_s.load();
+        m_encode_bytes_per_s = prev <= 0.0 ? rate : prev * 0.9 + rate * 0.1;
+    }
     s.key          = segment_key(seq);
     m_spool->enqueue(std::move(s));   // durable BEFORE any upload attempt
     return seq;
@@ -803,6 +833,11 @@ Session::Status Session::status() const {
     s.verify_note     = m_uploader->last_verify_note();
     s.health          = m_uploader->health();
     s.dropped_for_disk = m_dropped_total;
+    s.spool_cap_bytes     = m_spool->current_cap();
+    s.spool_pending_bytes = m_spool->bytes_pending();
+    if (s.spool_cap_bytes > 0)
+        s.spool_seconds_left = seconds_until_spool_drops(
+            s.spool_cap_bytes, s.spool_pending_bytes, m_encode_bytes_per_s.load());
     s.resumed_event_id           = m_resumed_event_id;
     s.resumed_event_started_ms   = m_resumed_event_started_ms;
     s.resumed_already_confirmed  = m_resumed_already_confirmed;
