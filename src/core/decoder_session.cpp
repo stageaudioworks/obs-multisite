@@ -163,6 +163,8 @@ RoomState DecoderSession::poll(int64_t now_override) {
             ++m_discontinuity;      // new event: new init segment and timeline
             m_unavailable.clear();
             m_groups.clear();
+            m_group_misses.clear();
+            m_timeline.clear();
         }
         event_id = m_event_id;
         if (now - m_markers_checked_ms > 5000) {
@@ -320,6 +322,18 @@ RoomState DecoderSession::poll(int64_t now_override) {
                 (last->at_ms - first->at_ms) / (int64_t)(last->seq - first->seq);
     }
 
+    // Each recorded start, for the timeline. at_ms is the encoder's
+    // `event start + pts offset` (session.cpp), so the offset comes back out
+    // exactly. Only for the event being followed: a switch cleared it above.
+    if (m_manifest.started_at_ms > 0) {
+        for (const auto& sg : m_manifest.segments) {
+            if (sg.at_ms <= 0 || sg.at_ms < m_manifest.started_at_ms) continue;
+            const int64_t dur = sg.duration_s > 0
+                ? (int64_t)(sg.duration_s * 1000.0 + 0.5) : -1;
+            m_timeline.note(sg.seq, sg.at_ms - m_manifest.started_at_ms, dur);
+        }
+    }
+
     // Stale detection: an encoder that died leaves live.json pointing at an
     // event whose manifest stops advancing. Stop treating it as live — but
     // it is still a recording of everything that happened up to the moment the
@@ -462,6 +476,10 @@ int DecoderSession::pump_downloads(int max) {
         if (!m_cache->store_init(r.body)) return 0;
     }
 
+    // Segment starts outside the manifest's window, from the group indexes —
+    // what places a seek and every position (segment_timeline.h).
+    if (group_k > 0) learn_group_starts(prefix, group_k, 4);
+
     int fetched = 0;
     uint64_t dl = 0, dlfail = 0, ckfail = 0, by_group = 0, rebuilt = 0;
     std::string err;
@@ -573,9 +591,39 @@ std::optional<GroupIndex> DecoderSession::group_index_for(const std::string& pre
         // flight cleared the map, and this index belongs to the old event.
         if (event_prefix_for(m_event_id) != prefix) return std::nullopt;
         m_groups[group] = gi;
+        m_group_misses.erase(group);
+        for (const auto& m : gi.members)
+            if (m.start_ms >= 0) m_timeline.note(m.seq, m.start_ms);
         return gi;
     } catch (...) {
         return std::nullopt;
+    }
+}
+
+void DecoderSession::learn_group_starts(const std::string& prefix, int group_k,
+                                        int max) {
+    // The groups to ask for, decided under the lock; fetched without it.
+    std::vector<uint64_t> ask;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (event_prefix_for(m_event_id) != prefix) return;
+        const uint64_t first = group_of(m_first_available_seq.load(), group_k);
+        const uint64_t last  = group_of(m_latest_seq.load(), group_k);
+        for (uint64_t g = first; g <= last && (int)ask.size() < max; ++g) {
+            if (m_groups.count(g)) continue;
+            auto miss = m_group_misses.find(g);
+            // The newest two may still be on their way; anything older that
+            // has missed three times has no index and never will.
+            if (miss != m_group_misses.end() && miss->second >= 3 && g + 1 < last)
+                continue;
+            ask.push_back(g);
+        }
+    }
+    for (uint64_t g : ask) {
+        if (group_index_for(prefix, g)) continue;
+        if (m_tx.last_request_cancelled()) return;
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (event_prefix_for(m_event_id) == prefix) ++m_group_misses[g];
     }
 }
 
@@ -831,13 +879,19 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
             if (sg.duration_s > 0.1) out.duration_s = sg.duration_s;
             if (sg.at_ms > 0) out.starts_at_ms = sg.at_ms;
         }
+        if (out.starts_at_ms == 0 && m_started_at_ms.load() > 0 &&
+            m_timeline.exact(want)) {
+            // Outside the manifest's window, but its start is recorded in its
+            // group's index: a measurement, not an estimate.
+            out.starts_at_ms = m_started_at_ms.load() + media_ms_for_seq(want);
+        }
         if (out.starts_at_ms == 0 && m_started_at_ms.load() > 0) {
             // No at_ms for this segment: it has aged out of the manifest's
             // rolling window. Estimate it, and SAY it is an estimate — this
             // number is what the media clock is pinned to, so an estimate that
             // cannot be distinguished from a measurement puts every displayed
             // time and every cue on arithmetic rather than on the event.
-            out.starts_at_ms = m_started_at_ms.load() + (int64_t)want * segment_ms();
+            out.starts_at_ms = m_started_at_ms.load() + media_ms_for_seq(want);
             out.starts_at_estimated = true;
         }
         need_init = !m_init_sent;
@@ -997,9 +1051,8 @@ bool DecoderSession::add_cue_impl(const std::string& label, std::string& error,
                 seq = best;
             } else {
                 const int64_t started = m_started_at_ms.load();
-                const int64_t dur_ms = segment_ms();   // measured, see BUGS #2b
-                if (started > 0 && dur_ms > 0 && operator_at_ms > started)
-                    seq = (uint64_t)((operator_at_ms - started) / dur_ms);
+                if (started > 0 && operator_at_ms > started)
+                    seq = seq_for_media_ms(operator_at_ms - started);
             }
         }
         have_hub = static_cast<bool>(m_cfg.cue_hub);
@@ -1149,9 +1202,8 @@ int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
             if (s.seq == seq && s.at_ms > 0) return s.at_ms;
     }
     if (started <= 0) return 0;
-    // Measured, not nominal: `seq * 6000` against a real 6067 is 1.11% and
-    // about forty seconds by the end of an hour (BUGS #2b).
-    return started + (int64_t)seq * segment_ms();
+    // The recorded start, not `seq * length` (BUGS #2b; segment_timeline.h).
+    return started + media_ms_for_seq(seq);
 }
 
 
@@ -1179,7 +1231,9 @@ int64_t DecoderSession::earliest_media_ms() const {
 }
 
 int64_t DecoderSession::end_media_ms() const {
-    return media_ms_for_seq(m_latest_seq.load()) + segment_ms();
+    // Where the segment after the last would start: the last one's recorded
+    // length when the manifest has it, the average otherwise.
+    return media_ms_for_seq(m_latest_seq.load() + 1);
 }
 
 
@@ -1194,7 +1248,7 @@ double DecoderSession::behind_live_s() const {
     if (!m_head_set.load()) return 0.0;
     const uint64_t head = m_head.load(), live = m_latest_seq.load();
     if (live < head) return 0.0;
-    return (double)(live - head) * (double)segment_ms() / 1000.0;
+    return (double)(media_ms_for_seq(live) - media_ms_for_seq(head)) / 1000.0;
 }
 
 std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const {
@@ -1227,11 +1281,20 @@ int64_t DecoderSession::seek_to_media_ms(int64_t media_ms) {
     //
     // segment_ms() takes the figure from the encoder's own recorded times. See
     // BUGS #2b — this is the fifth place the same derivation was written.
-    const int64_t seg_ms = segment_ms();
-    if (seg_ms <= 0) return 0;
+    //
+    // And not `media_ms / one length` at all, measured or not: segments are
+    // cut at the encoder's keyframes and are not one length. VideoToolbox
+    // made a mix of 6 s and 12 s segments, and the division landed a seek
+    // 6 s late for every 12 s segment before it (2026-11-23). The timeline
+    // holds each segment's recorded start (segment_timeline.h).
+    if (segment_ms() <= 0) return 0;
 
-    const uint64_t seq  = (uint64_t)(media_ms / seg_ms);
-    const int64_t  skip = media_ms - (int64_t)seq * seg_ms;
+    uint64_t seq = seq_for_media_ms(media_ms);
+    // Past the end of the last segment is past what exists, not in it: the
+    // search stops at the last segment, so say so here, as the division did.
+    const uint64_t latest = m_latest_seq.load();
+    if (media_ms >= media_ms_for_seq(latest + 1)) seq = latest + 1;
+    const int64_t  skip = std::max<int64_t>(0, media_ms - media_ms_for_seq(seq));
 
     // Seat the head and set the offset under ONE lock, the same way seek() sets
     // the head: the feed loop takes this lock to serve the next segment, so a
@@ -1293,8 +1356,15 @@ int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
             const int64_t offset = wall_ms - m_manifest.started_at_ms;
             if (offset < 0)
                 return fail("that is before this event started");
-            target = (uint64_t)(offset / seg_ms_v);
-            seg_start = m_manifest.started_at_ms + (int64_t)target * seg_ms_v;
+            if (seg_ms_v <= 0)
+                return fail("nothing is loaded yet, so there is no timeline to "
+                            "move within");
+            // The recorded starts, not `offset / length` (segment_timeline.h).
+            target = m_timeline.seq_at(offset, seg_ms_v, m_latest_seq.load());
+            if (offset >= m_timeline.start_of(m_latest_seq.load() + 1, seg_ms_v))
+                target = m_latest_seq.load() + 1;      // past the end, below
+            seg_start = m_manifest.started_at_ms +
+                        m_timeline.start_of(target, seg_ms_v);
         }
         // The two ends are different problems and must not read the same. The
         // floor has genuinely gone — retention removed it. The ceiling has
@@ -1324,11 +1394,12 @@ double DecoderSession::buffered_ahead_s() const {
     // the UI thread.
     if (!m_head_set.load()) return 0.0;
     const uint64_t head = m_head.load();
-    const double seg = segment_duration_s();
     const auto idx = m_cache->cached_seqs();
-    int n = 0;
-    for (uint64_t s = head; idx.count(s); ++s) ++n;
-    return (double)n * seg;
+    uint64_t s = head;
+    while (idx.count(s)) ++s;
+    // Programme from the head to the first segment not on disk, by recorded
+    // starts — not a count times one length (segment_timeline.h).
+    return (double)(media_ms_for_seq(s) - media_ms_for_seq(head)) / 1000.0;
 }
 
 } // namespace multisite

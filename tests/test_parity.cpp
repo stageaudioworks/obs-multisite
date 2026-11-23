@@ -247,6 +247,23 @@ int main() {
         CHECK(Manifest::from_json(R"({"event_id":"E","group_k":"ten"})").group_k == 0 &&
               Manifest::from_json(R"({"event_id":"E","group_k":-3})").group_k == 0,
               "a nonsense group_k is ignored rather than trusted");
+
+        // Each member's start in media time (segment_timeline.h).
+        GroupIndex s; s.k = 10; s.group = 0;
+        s.members = { {0, 10, "aa", 0}, {1, 10, "bb", 11867}, {2, 10, "cc"} };
+        GroupIndex sr = GroupIndex::from_json(s.to_json());
+        CHECK(sr.member(0)->start_ms == 0 && sr.member(1)->start_ms == 11867,
+              "member starts round-trip, segment 0's 0 ms included");
+        CHECK(sr.member(2)->start_ms == -1 &&
+              s.to_json().find("\"seq\":2,\"start_ms\"") == std::string::npos,
+              "an unrecorded start is left out, and reads back as -1");
+        GroupIndex o = GroupIndex::from_json(
+            R"({"k":10,"group":0,"members":[{"seq":0,"len":1,"checksum":"aa"},)"
+            R"({"seq":1,"len":1,"checksum":"bb","start_ms":-5},)"
+            R"({"seq":2,"len":1,"checksum":"cc","start_ms":"soon"}]})");
+        CHECK(o.member(0)->start_ms == -1 && o.member(1)->start_ms == -1 &&
+              o.member(2)->start_ms == -1,
+              "an index from before starts, or a nonsense start, reads as unrecorded");
     }
 
     std::printf("== 4. ObjectQueue ==\n");
@@ -313,6 +330,12 @@ int main() {
             store.objects[group_index_key(pfx, 2)].begin(), store.objects[group_index_key(pfx, 2)].end()));
         CHECK(gi.members.size() == 5 && gi.member(24) &&
               gi.member(24)->checksum == sha256_hex(sent[24]), "the partial group lists 20..24 with their checksums");
+        CHECK(gi.member(24)->start_ms == 144000 && gi.member(20)->start_ms == 120000,
+              "with each one's start in media time");
+        auto g0 = GroupIndex::from_json(std::string(
+            store.objects[group_index_key(pfx, 0)].begin(), store.objects[group_index_key(pfx, 0)].end()));
+        CHECK(g0.member(0) && g0.member(0)->start_ms == 0,
+              "segment 0's start is recorded as 0, not left out as missing");
         auto m = Manifest::from_json(std::string(store.objects[pfx + "manifest.json"].begin(),
                                                  store.objects[pfx + "manifest.json"].end()));
         CHECK(m.group_k == 10, "the manifest says groups of 10");
@@ -418,6 +441,11 @@ int main() {
         CHECK(g1_full, "group 1's index now lists all of 10..19: End's three and the finisher's seven");
         CHECK(g2 && g2->members.size() == 5 && g2->member(20) && g2->member(24),
               "the late group 2 has an index listing 20..24");
+        bool starts = g1 && g2;
+        if (g1) for (uint64_t s = 10; s < 20; ++s)
+            starts = starts && g1->member(s) && g1->member(s)->start_ms == (int64_t)s * 6000;
+        if (g2) starts = starts && g2->member(24) && g2->member(24)->start_ms == 144000;
+        CHECK(starts, "every member carries its start: End's, the finisher's and the late group's");
         CHECK(st.last_index_of(group_parity_key(pfx, 1)) < st.last_index_of(group_index_key(pfx, 1)) &&
               st.last_index_of(group_parity_key(pfx, 2)) < st.last_index_of(group_index_key(pfx, 2)),
               "each group's last parity was stored before its last index");

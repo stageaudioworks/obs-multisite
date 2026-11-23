@@ -129,7 +129,7 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
     segments/{seq:08d}.m4s        # ONE fragment per seq carrying video + all audio tracks
     manifest.json                 # rolling window of recent segments (live edge)
     markers.json                  # append-only cue/marker list
-    groups/{group:08d}.json       # every k segments: each member's length + checksum
+    groups/{group:08d}.json       # every k segments: each member's length, checksum + start
     parity/{group:08d}.bin        # XOR of the group's members (rebuilds one)
     receipt.json                  # what the event delivered (§5)
 ```
@@ -282,13 +282,16 @@ only more slowly.
 
 `group_k` (default 10, absent when off) says the encoder publishes **segment
 groups**: for every `k` consecutive sequence numbers, `groups/{g}.json` lists
-each member's length and checksum, and `parity/{g}.bin` is the XOR of the
+each member's length, checksum and media-time start (`start_ms`), and
+`parity/{g}.bin` is the XOR of the
 members padded to the longest (`parity.h`). The parity is stored before the
 index, and the index only after every member is confirmed, so an index a
 reader can see means the members and parity exist. A decoder uses the index
 for the checksum of any segment outside the manifest's window, and rebuilds
 one member per group that the store will not serve intact from the parity and
-the others. Additive; no protocol bump. Built within ADR-0004 (one bucket
+the others. It also uses the starts to place every position — the playhead,
+the live edge, a seek — because segments are cut at the encoder's keyframes
+and are not all one length (`segment_timeline.h`). Additive; no protocol bump. Built within ADR-0004 (one bucket
 gives the guarantee) and ADR-0003 §1 (nothing is re-sent).
 
 Groups are formed for every segment the event ever stores, not only the ones

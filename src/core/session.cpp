@@ -658,7 +658,8 @@ void Session::on_confirmed(const SpooledSegment& seg) {
   std::vector<ParityAccumulator::Finished> done;
   {
     std::lock_guard<std::mutex> pl(m_parity_mtx);
-    if (m_parity) done = m_parity->add(seg.seq, seg.data, seg.checksum);
+    if (m_parity) done = m_parity->add(seg.seq, seg.data, seg.checksum,
+                                         media_start_ms(seg.pts_offset_s));
   }
   publish_groups(std::move(done));
 }
