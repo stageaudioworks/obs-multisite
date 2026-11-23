@@ -23,8 +23,18 @@
 // programme going out now. It survives a restart for free — the folders are on
 // disk — so a backlog left when the application quits carries on next launch.
 //
+// Segment groups (parity.h). The backlog's segments join groups exactly as a
+// live event's do: each confirmed one goes into a ParityAccumulator, and each
+// finished group's parity and index go out through the event's ObjectQueue in
+// `<spool_root>.objects/<event_id>` — the folder the Session uses, so the
+// groups an End could not send are sent from here first. The group End left
+// half-done is carried on, not restarted (parity.h says why that is safe);
+// the last group is flushed once the backlog is done, before the final
+// manifest and the receipt. A pass that stops early (the application
+// quitting) flushes its open group too, so the next one carries it on.
+//
 // One target: the primary bucket. ponytail: a second bucket does not get the
-// backlog; add a second uploader here if that ever matters.
+// backlog, nor its groups; add a second uploader here if that ever matters.
 
 #include "spool_queue.h"
 #include "transport.h"
@@ -41,6 +51,9 @@ namespace multisite {
 struct FinisherConfig {
     std::string spool_root;
     size_t      manifest_window = 50;     // SessionConfig::manifest_window
+    // Group width for an event whose manifest never reached the bucket (it is
+    // rebuilt from event.json, which does not say). SessionConfig::parity_group.
+    int         parity_group = 10;
     // Built per event from the current settings, so a credential refresh or a
     // settings change is picked up. Null = nothing to upload through yet.
     std::function<std::shared_ptr<Transport>()> transport;

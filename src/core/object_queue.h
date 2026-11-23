@@ -18,6 +18,7 @@
 #include "transport.h"
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <cstdint>
 #include <mutex>
@@ -36,6 +37,12 @@ public:
     // Durably queue an object. Safe from any thread.
     void enqueue(const std::string& key, const std::vector<uint8_t>& body,
                  const std::string& content_type);
+
+    // Asked before every upload the queue's own thread makes; false waits.
+    // The second bucket's copy uses it for the mirror's yield rule (session.h).
+    // drain_blocking() does not ask: whoever calls it has decided to wait.
+    // Set before start().
+    void set_may_upload(std::function<bool()> f) { m_may_upload = std::move(f); }
 
     void start();
     void stop();
@@ -59,6 +66,7 @@ private:
     std::atomic<uint64_t> m_stored{0};
     std::map<std::string, uint64_t> m_stored_by_type;   // under m_mtx
     std::thread m_thread;
+    std::function<bool()> m_may_upload;
 
     std::vector<std::string> list_locked() const;   // sorted *.obj paths
     // One attempt at the oldest object. 1 stored, 0 nothing queued, -1 failed.

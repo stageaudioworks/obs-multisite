@@ -28,6 +28,37 @@
 //     checksum can be rebuilt from the other members. The checksum says which
 //     member is bad, so this is an erasure, and XOR suffices.
 //
+// Who forms groups. The live Session, for every segment it confirms; and the
+// EventFinisher, for the backlog an End left (event_finisher.h). Both publish
+// through an ObjectQueue in `<spool_root>.objects/<event_id>`, so groups an
+// End could not send are drained by the finisher too. With a second bucket
+// configured, the Session queues a copy for it in `<spool_root>.mirror-objects`
+// that waits on the mirror's yield rule (session.h).
+//
+// A group published in part, then carried on. End stopped mid-group publishes
+// that group's partial index (flush()), and the finisher later uploads the
+// rest of its members. The finisher CARRIES THE GROUP ON rather than starting
+// at the next boundary: it reads the stored index and parity back, resume()s
+// from them, and XORs its own members in — XOR is associative and the
+// padding is zeros, so the result is exactly the parity of the union. It then
+// overwrites both objects, parity first. That is safe only because the new
+// members set is a strict SUPERSET of the old: every member the old index
+// named is still named, with the same checksum and length, so whatever a
+// campus already verified against the old index stays true, and a campus
+// that reads the new parity with the old index (or the reverse) gets a
+// rebuild that fails its checksum and is refused, never wrong bytes.
+// resume() refuses anything that would not be a superset — a stored group
+// naming a segment still to come, parity of the wrong length, another group —
+// and the finisher then leaves that group as End published it and begins at
+// the next boundary: those members go unprotected, which is what they were
+// before groups existed. The cost of carrying on is one GET of the parity
+// (one segment's size) per event. Starting at the next boundary instead
+// would leave up to k-1 segments at the very end of every slow-uplink event
+// with no group at all — exactly the segments most likely to need one. A
+// campus that cached the old index keeps it (decoder_session.cpp caches
+// indexes per group); the new members are then unverified for that campus,
+// as they would have been without groups, and nothing it holds is wrong.
+//
 // Patent limits (docs/adr/0003): the uploader runs no test and nothing is
 // re-sent; k is fixed by configuration and never adapted to measured loss or
 // latency (§5). Members lost before upload (gaps) are simply not members.
@@ -85,6 +116,13 @@ public:
     std::vector<Finished> skip(uint64_t seq);
     // Close the open group with whatever it holds — at End.
     std::optional<Finished> flush();
+    // Carry on a group already published in part (see the header), from its
+    // stored index and parity, so that `next_seq` onwards join it. Refused —
+    // false, nothing changed — unless the result can only be a superset:
+    // nothing open yet, the same k, `next_seq` in that group, the parity as
+    // long as the index says, and every listed member before `next_seq`.
+    bool resume(const GroupIndex& index, const std::vector<uint8_t>& parity,
+                uint64_t next_seq);
 
 private:
     int                  m_k;

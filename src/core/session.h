@@ -351,8 +351,16 @@ private:
     std::unique_ptr<ParityAccumulator>  m_parity;
     std::unique_ptr<ObjectQueue>        m_group_q;
     std::vector<std::unique_ptr<ObjectQueue>> m_leftover_qs;
+    // The second bucket's copy of the same objects, in its own folder so the
+    // finisher (primary only) never sends them to the primary. Its thread asks
+    // mirror_may_go() before every upload, so the live feed never waits on it.
+    // Durable rather than latest-wins like m_obj_pending: a group is written
+    // once, and parity must still land before its index. What End leaves goes
+    // at the next Go Live, from the leftovers.
+    std::unique_ptr<ObjectQueue>        m_mirror_group_q;
     void publish_groups(std::vector<ParityAccumulator::Finished> done);
     std::string groups_root() const { return m_cfg.spool_dir + ".objects"; }
+    std::string mirror_groups_root() const { return m_cfg.spool_dir + ".mirror-objects"; }
     void stop_group_queues();
     DeliveryReceipt m_receipt;   // guarded by m_mtx; set by end()
 

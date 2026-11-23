@@ -117,6 +117,25 @@ std::optional<ParityAccumulator::Finished> ParityAccumulator::flush() {
     return close();
 }
 
+bool ParityAccumulator::resume(const GroupIndex& index,
+                               const std::vector<uint8_t>& parity, uint64_t next_seq) {
+    if (m_k <= 0 || m_open || index.k != m_k || index.members.empty()) return false;
+    if (group_of(next_seq, m_k) != index.group) return false;
+    if (index.parity_len == 0 || parity.size() != index.parity_len) return false;
+    uint64_t last = 0;
+    for (const auto& m : index.members) {
+        if (group_of(m.seq, m_k) != index.group || m.seq >= next_seq ||
+            m.len > parity.size())
+            return false;
+        last = std::max(last, m.seq);
+    }
+    open(index.group);
+    m_index = index;
+    m_acc   = parity;
+    m_next  = last + 1;
+    return true;
+}
+
 // ── Rebuild ──────────────────────────────────────────────────────────────────
 
 std::optional<std::vector<uint8_t>> rebuild_member(

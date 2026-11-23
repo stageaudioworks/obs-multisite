@@ -4,10 +4,14 @@
 
 #include "log.h"
 #include "model.h"
+#include "object_queue.h"
+#include "parity.h"
 #include "retry_uploader.h"
 #include "session.h"   // now_ms()
 
+#include <algorithm>
 #include <chrono>
+#include <optional>
 
 namespace multisite {
 
@@ -127,6 +131,7 @@ bool EventFinisher::finish(const std::string& event_id) {
                 m.first_available_seq = ev.first_seq;
                 m.video               = ev.video;
                 m.audio_tracks        = ev.audio_tracks;
+                m.group_k             = std::max(0, m_cfg.parity_group);
             } catch (...) { return false; }
         } else {
             return false;
@@ -163,6 +168,81 @@ bool EventFinisher::finish(const std::string& event_id) {
                      "could not", event_id.c_str());
     }
 
+    // ── Segment groups (parity.h) ──
+    // The event's group queue holds what End (or an earlier pass) could not
+    // send. It goes first: it protects segments already in the bucket, and
+    // the group End left half-done has to be read back from the bucket below.
+    const int k = m.group_k;
+    std::unique_ptr<ObjectQueue> gq;
+    std::optional<ParityAccumulator> acc;
+    uint64_t first_group = 0;   // groups below this are left as they are
+    auto yielding = [&] {
+        return !m_running.load() || m_abandon.load() ||
+               (m_cfg.may_upload && !m_cfg.may_upload());
+    };
+    if (k > 0) {
+        gq = std::make_unique<ObjectQueue>(
+            m_cfg.spool_root + ".objects/" + event_id, *tx,
+            m_cfg.base_backoff_ms, m_cfg.max_backoff_ms);
+        while (gq->pending() > 0) {
+            if (yielding()) return false;
+            gq->drain_blocking(1000);
+        }
+        acc.emplace(k);
+        if (auto next = q.peek_next(0)) {
+            // Carry on the group End published in part, if it did.
+            const uint64_t g = group_of(next->seq, k);
+            first_group = g;
+            auto ir = tx->get(group_index_key(prefix, g));
+            if (ir.success) {
+                std::optional<GroupIndex> gi;
+                try { gi = GroupIndex::from_json(std::string(ir.body.begin(), ir.body.end())); }
+                catch (...) {}
+                bool resumed = false;
+                if (gi && gi->parity_len > 0) {
+                    auto pr = tx->get(group_parity_key(prefix, g));
+                    if (!pr.success && pr.http_status != 404) return false;   // try later
+                    if (pr.success) resumed = acc->resume(*gi, pr.body, next->seq);
+                }
+                if (resumed) {
+                    log_info("upload: event %s — carrying on segment group %llu, "
+                             "which End published with %zu member(s)", event_id.c_str(),
+                             (unsigned long long)g, gi->members.size());
+                } else {
+                    // Not a superset: leave it as it is and begin at the next
+                    // boundary. Its remaining members go unprotected.
+                    first_group = g + 1;
+                    log_warn("upload: event %s — segment group %llu cannot be carried "
+                             "on; the backlog's groups begin at %llu", event_id.c_str(),
+                             (unsigned long long)g, (unsigned long long)first_group);
+                }
+            } else if (ir.http_status != 404) {
+                return false;   // cannot tell what is there: try again later
+            }
+        }
+    }
+    // Under mm, like the manifest: the uploader's thread calls these.
+    auto publish_groups = [&](std::vector<ParityAccumulator::Finished> done) {
+        for (auto& f : done) {
+            // Parity before the index that names it (Session::publish_groups).
+            if (f.index.parity_len > 0)
+                gq->enqueue(group_parity_key(prefix, f.index.group), f.parity,
+                            "application/octet-stream");
+            const std::string j = f.index.to_json();
+            gq->enqueue(group_index_key(prefix, f.index.group),
+                        std::vector<uint8_t>(j.begin(), j.end()), "application/json");
+        }
+    };
+    auto flush_group = [&] {
+        if (!acc) return;
+        std::vector<ParityAccumulator::Finished> done;
+        {
+            std::lock_guard<std::mutex> lk(mm);
+            if (auto f = acc->flush()) done.push_back(std::move(*f));
+        }
+        publish_groups(std::move(done));
+    };
+
     UploaderConfig ucfg;
     ucfg.base_backoff_ms = m_cfg.base_backoff_ms;
     ucfg.max_backoff_ms  = m_cfg.max_backoff_ms;
@@ -185,10 +265,27 @@ bool EventFinisher::finish(const std::string& event_id) {
             m.push(ms, m_cfg.manifest_window);
         }
         publish();
+        // Into the open group, now that it is in the store (§4.7).
+        if (acc && group_of(seg.seq, k) >= first_group) {
+            std::vector<ParityAccumulator::Finished> done;
+            {
+                std::lock_guard<std::mutex> lk(mm);
+                done = acc->add(seg.seq, seg.data, seg.checksum);
+            }
+            publish_groups(std::move(done));
+        }
     });
     up.set_skipped_callback([&](uint64_t seq) {
         { std::lock_guard<std::mutex> lk(mm); m.add_gap(seq); }
         publish();
+        if (acc && group_of(seq, k) >= first_group) {
+            std::vector<ParityAccumulator::Finished> done;
+            {
+                std::lock_guard<std::mutex> lk(mm);
+                done = acc->skip(seq);
+            }
+            publish_groups(std::move(done));
+        }
     });
 
     up.start();
@@ -202,7 +299,12 @@ bool EventFinisher::finish(const std::string& event_id) {
     // backlog uploaded, and the "ended" manifest and live.json never did
     // (seen live 2026-10-03, retried every few seconds for ever).
     tx->resume_pending();
+    // The open group closes with whatever it holds: at the end of the backlog
+    // it is the last group, and on a pass that stopped early the next one
+    // carries it on from the bucket. Queued durably either way.
+    flush_group();
     if (q.pending_count() > 0) return false;   // stopped, abandoned, or yielding
+
 
     // The last manifest is the one that says the event is complete; a failed
     // per-segment one is superseded by the next, but nothing follows this. And
@@ -235,6 +337,18 @@ bool EventFinisher::finish(const std::string& event_id) {
             log_info("receipt: event %s — %s", event_id.c_str(), rc.summary().c_str());
     }
     SpoolQueue::discard_event(m_cfg.spool_root, event_id);
+
+    // The groups go after the segments, as at End — and after the receipt:
+    // once the spool folder is empty this event is no longer the finisher's
+    // work, so anything that could stop this pass between the last segment
+    // and the receipt would leave the receipt saying "finishing" for good.
+    // The last group is already queued durably (flush_group above), so what
+    // this cannot send — the link going, or the application quitting — goes
+    // out at the next Go Live, from the Session's leftover queues.
+    if (gq) {
+        while (gq->pending() > 0 && !yielding()) gq->drain_blocking(1000);
+        gq->remove_dir_if_empty();
+    }
     if (total > 0)
         log_info("upload: event %s is complete in storage — the %zu segment(s) left "
                  "at its end are uploaded", event_id.c_str(), total);
