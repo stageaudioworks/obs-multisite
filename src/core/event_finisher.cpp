@@ -270,7 +270,8 @@ bool EventFinisher::finish(const std::string& event_id) {
             std::vector<ParityAccumulator::Finished> done;
             {
                 std::lock_guard<std::mutex> lk(mm);
-                done = acc->add(seg.seq, seg.data, seg.checksum);
+                done = acc->add(seg.seq, seg.data, seg.checksum,
+                                      media_start_ms(seg.pts_offset_s));
             }
             publish_groups(std::move(done));
         }
