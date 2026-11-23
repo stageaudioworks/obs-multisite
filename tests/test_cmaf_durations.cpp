@@ -70,7 +70,13 @@ static std::vector<double> durations(int frames) {
             p.data.assign(pkt->data, pkt->data + pkt->size);
             p.pts_ns = pkt->pts * kFrameNs;
             p.dts_ns = pkt->dts * kFrameNs;
-            p.keyframe = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
+            // One keyframe a second, as OBS's encoders deliver them. This
+            // encoder flags every frame of these flat pictures as a keyframe,
+            // and frame 29 then sits exactly one frame short of the 1 s
+            // target — which segment_cut.h now cuts at, as it must for
+            // VideoToolbox's 179-frame interval. The question here is the
+            // recorded duration, not where the cut falls.
+            p.keyframe = (pkt->flags & AV_PKT_FLAG_KEY) != 0 && pkt->pts % kFps == 0;
             mux.push(p);   // no packet duration, as OBS often sends: the frame rate is used
             av_packet_unref(pkt);
         }

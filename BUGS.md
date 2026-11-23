@@ -326,6 +326,14 @@ each, so the history is findable without being 1,100 lines in the way.
   The trap: a "repair" of a segment the store acknowledged must never be the
   uploader testing its own 2xx and re-sending (ADR-0003 §1). Parity rebuilds
   it at the campus instead.
+- **The first segment ran 12 s on VideoToolbox, so every seek landed 6 s late**
+  (2026-11-23, found in the delivery test broadcast). VideoToolbox's keyframe
+  interval is 179 frames, exactly one frame short of 6 s at 30 fps; the first
+  frame arrived at 0.067 s, and the muxer's elapsed time came out 7e-10 s under
+  the one-frame tolerance, so the cut was skipped. Positions map by segment
+  number, so one long segment shifts the rest. `segment_cut.h` now allows 1 ms
+  of slack (`test_segment_cut`). FIXED; events recorded before keep their long
+  first segment. The trap: "within one frame" must include exactly one frame.
 
 ---
 

@@ -19,10 +19,20 @@ namespace multisite {
 // target is the one the interval meant. At integer rates the keyframe lands
 // exactly on the target and nothing changes.
 //
+// "Within one frame" includes EXACTLY one frame, and that boundary needs a
+// little slack. The muxer measures `elapsed_s` as the difference of two
+// nanosecond timestamps converted to seconds, which can come out a hair under
+// target − frame: a first frame stamped 0.067 s and a keyframe 179 frames
+// later at 6.033 s measured 7e-10 s short, the cut was skipped, segment 0 ran
+// 11.9 s, and every seek in that event landed one segment late (2026-11-23,
+// VideoToolbox H.264 at 30 fps). One millisecond is far below a frame at any
+// rate the plugin allows, so it admits that keyframe and never a second one.
+//
 // `frame_s <= 0` (frame rate unknown) keeps the strict rule.
 inline bool keyframe_starts_segment(double elapsed_s, double target_s,
                                     double frame_s) {
-    double tolerance = frame_s > 0 ? frame_s : 0.0;
+    constexpr double kSlack_s = 0.001;
+    double tolerance = frame_s > 0 ? frame_s + kSlack_s : 0.0;
     return elapsed_s >= target_s - tolerance;
 }
 
