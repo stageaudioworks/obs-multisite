@@ -16,9 +16,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
-#include <memory>
 #include <string>
-#include <tuple>
 
 namespace fs = std::filesystem;
 using namespace multisite;
@@ -214,22 +212,6 @@ struct FakeEncoder {
             (real_seg_ms > 0 ? real_seg_ms : (int64_t)(seg_dur * 1000.0));
         manifest.push(ms, window);
         clock_ms += (int64_t)(seg_dur * 1000);
-        publish_manifest();
-    }
-    // A segment of a stated length at a stated media start — what a real
-    // encoder publishes when its keyframes are not evenly spaced.
-    void publish_segment_at(int64_t start_ms, int64_t dur_ms) {
-        uint64_t s = next_seq++;
-        auto body = body_for(s);
-        char name[16]; std::snprintf(name, sizeof(name), "%08llu",
-                                     (unsigned long long)s);
-        store.put("events/" + event + "/segments/" + name + ".m4s", body, "", {});
-        ManifestSegment ms;
-        ms.seq = s; ms.duration_s = (double)dur_ms / 1000.0;
-        ms.checksum = sha256_hex(body);
-        ms.at_ms = started_at_ms + start_ms;
-        manifest.push(ms, window);
-        clock_ms += dur_ms;
         publish_manifest();
     }
     void publish_manifest() {
@@ -1960,88 +1942,6 @@ int main() {
         CHECK(seg->seq == 1, "the segment the click fell in");
         CHECK(seg->skip_to_ms == 3000,
               "and it starts three seconds in, not at the segment's start");
-    }
-
-    std::printf("== 31. Segments of different lengths: a seek lands in the right one ==\n");
-    {
-        // The pattern measured 2026-11-23 from VideoToolbox with a 6 s target:
-        // keyframes 177-180 frames apart, so some segments ran to the second
-        // keyframe. `media_ms / one length` put a seek 6 s late for every
-        // 12 s segment before it — whatever length it divided by.
-        const int64_t pattern[] = { 11867, 11800, 5967, 6000, 5967, 11867, 11833, 5967 };
-        // The store outlives the decoder: the decoder holds it by reference.
-        auto run = [&](FakeStore& store, bool with_groups, const char* dir) {
-            FakeEncoder enc(store, "r", with_groups ? "01EVENTMIXEDGROUPS"
-                                                    : "01EVENTMIXEDNOGROUPS");
-            enc.window = 5;                      // most of the event outside it
-            if (with_groups) enc.manifest.group_k = 10;
-            enc.publish_start();
-            std::vector<int64_t> start;
-            int64_t at = 0;
-            GroupIndex gi;
-            for (int i = 0; i < 40; ++i) {
-                const int64_t d = pattern[i % 8];
-                start.push_back(at);
-                enc.publish_segment_at(at, d);
-                auto body = FakeEncoder::body_for((uint64_t)i);
-                gi.members.push_back({ (uint64_t)i, (uint64_t)body.size(),
-                                       sha256_hex(body), at });
-                at += d;
-                if (with_groups && i % 10 == 9) {
-                    gi.k = 10; gi.group = (uint64_t)(i / 10);
-                    auto j = gi.to_json();
-                    store.put(group_index_key("events/" + enc.event + "/", gi.group),
-                              std::vector<uint8_t>(j.begin(), j.end()), "", {});
-                    gi = GroupIndex{};
-                }
-            }
-            DecoderConfig cfg;
-            cfg.room_id = "r"; cfg.cache_dir = (base / dir).string();
-            cfg.prebuffer_segments = 1; cfg.start_buffer_seconds = 0;
-            auto dec = std::make_unique<DecoderSession>(cfg, store);
-            dec->poll(enc.clock_ms);
-            for (int i = 0; i < 4; ++i) dec->pump_downloads(40);
-            return std::make_tuple(std::move(dec), start, at);
-        };
-
-        {
-            FakeStore store;
-            auto [dec, start, end] = run(store, true, "d31a");
-            // Segment 13 is 23.7 s further on than 13 equal segments would be.
-            const int64_t want = start[13] + 2500;
-            CHECK(dec->media_ms_for_seq(13) == start[13],
-                  "a segment far outside the manifest's window is placed at its "
-                  "recorded start, from its group's index");
-            CHECK(dec->live_media_ms() == start[39] && dec->end_media_ms() == end,
-                  "the live edge and the end are the recorded ones");
-            CHECK(dec->seek_to_media_ms(want) == want, "the seek is accepted");
-            dec->pump_downloads(40);
-            CHECK(dec->start(), "playback starts");
-            auto seg = dec->next_segment();
-            CHECK(!!seg, "a segment is served");
-            if (seg) {
-                CHECK(seg->seq == 13, "the segment that holds the moment");
-                CHECK(seg->skip_to_ms == 2500, "and the offset into it reaches it");
-                CHECK(!seg->starts_at_estimated,
-                      "and its start is a measurement, not an estimate");
-            }
-            CHECK(dec->seek_to_media_ms(end + 1) == 0,
-                  "past the end of the last segment is refused, not clamped");
-        }
-        {
-            // An event recorded before start_ms: no groups. Inside the
-            // manifest's window the starts are still the recorded ones.
-            FakeStore store;
-            auto [dec, start, end] = run(store, false, "d31b");
-            const int64_t want = start[37] + 1000;
-            CHECK(dec->seek_to_media_ms(want) == want, "no groups: the seek is accepted");
-            dec->pump_downloads(40);
-            dec->start();
-            auto seg = dec->next_segment();
-            CHECK(seg && seg->seq == 37 && seg->skip_to_ms == 1000,
-                  "inside the window it lands exactly, from the manifest's starts");
-            (void)end;
-        }
     }
 
     fs::remove_all(base);

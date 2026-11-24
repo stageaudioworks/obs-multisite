@@ -12,8 +12,7 @@
 //   events/{id}/parity/{group:08d}.bin   XOR of the members, each zero-padded
 //                                        to the longest
 //   events/{id}/groups/{group:08d}.json  { k, group, parity_len,
-//                                          members: [{seq, len, checksum,
-//                                                     start_ms}] }
+//                                          members: [{seq, len, checksum}] }
 //
 // parity first, the index after it, so an index that names parity means the
 // parity exists (the same write-ordering rule as §4.7). The manifest's
@@ -76,18 +75,7 @@ struct GroupMember {
     uint64_t    seq = 0;
     uint64_t    len = 0;
     std::string checksum;   // sha256 hex
-    // Where the segment starts in media time, ms — the decoder's only record
-    // of a start outside the manifest's window (segment_timeline.h). -1: not
-    // recorded (an index written before it existed). 0 is segment 0's start,
-    // a real value.
-    int64_t     start_ms = -1;
 };
-
-// A segment's media start in ms, from the muxer's pts offset. The same
-// rounding the manifest's at_ms uses (session.cpp), so both records agree.
-inline int64_t media_start_ms(double pts_offset_s) {
-    return pts_offset_s >= 0 ? (int64_t)(pts_offset_s * 1000.0) : -1;
-}
 
 struct GroupIndex {
     int         k = 0;
@@ -122,7 +110,7 @@ public:
     // behind: a segment in a later group closes the open one, whatever it
     // holds (its other members were lost before upload).
     std::vector<Finished> add(uint64_t seq, const std::vector<uint8_t>& bytes,
-                              const std::string& checksum, int64_t start_ms = -1);
+                              const std::string& checksum);
     // A sequence number the encoder will never upload (a gap). Completes the
     // group when it was the last one outstanding.
     std::vector<Finished> skip(uint64_t seq);

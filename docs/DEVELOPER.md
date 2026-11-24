@@ -252,7 +252,6 @@ libcurl together, the three relay suites need `-DMULTISITE_BUILD_RELAY=ON`, and
 | `upload_integrity` | a failed PUT is classified by the store's error code (damage in transit retried, a 403 backed off rather than retried every 200 ms); Content-MD5's digest and encoding |
 | `s3_put_integrity` | the real `S3Transport` against a loopback server: Content-MD5 sent, signed and correct; a BadDigest answer retried |
 | `spool_budget` | the spool sized from the free disk, shrinking as the disk fills, and the "time left if the internet drops" figure |
-| `segment_timeline` | where each segment starts when segments are not one length: recorded starts, the gaps between them, and the old arithmetic when nothing is recorded |
 | `parity` | segment groups: the index and XOR parity, a campus checking segments outside the manifest's window and rebuilding one the store lost or damaged |
 | `receipt` | the delivery receipt written at End and settled by `EventFinisher` |
 | `soak` | 1,500 segments through 5/30/90-minute outages and a store that loses and damages objects: every segment at both campuses |
