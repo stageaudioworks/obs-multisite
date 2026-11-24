@@ -1,7 +1,8 @@
-// One call into each of the three libraries, so the link is real.
+// One call into each of the libraries, so the link is real.
 #include "cmaf_muxer.h"
 #include "collector_client.h"
 #include "heartbeat_reporter.h"
+#include "player.h"
 
 #include <cstdio>
 
@@ -13,5 +14,10 @@ int main() {
     multisite::CmafMuxer mux({t}, 6.0);
     std::printf("core: %s  s3: %s  cmaf: constructed (ok=%d)\n",
                 kind.c_str(), url.c_str(), (int)mux.ok());
+    multisite_player::Config cfg;
+    multisite_player::NullVideoOutput v;
+    multisite_player::NullAudioOutput a;
+    multisite_player::Player p(cfg, v, a);
+    std::printf("engine: constructed\n");
     return kind == "outpost-light" && !url.empty() ? 0 : 1;
 }
