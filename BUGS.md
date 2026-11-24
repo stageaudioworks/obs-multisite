@@ -11,7 +11,7 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-11-22.
+Last updated: 2026-11-24.
 
 ---
 
@@ -326,14 +326,28 @@ each, so the history is findable without being 1,100 lines in the way.
   The trap: a "repair" of a segment the store acknowledged must never be the
   uploader testing its own 2xx and re-sending (ADR-0003 §1). Parity rebuilds
   it at the campus instead.
-- **The first segment ran 12 s on VideoToolbox, so every seek landed 6 s late**
-  (2026-11-23, found in the delivery test broadcast). VideoToolbox's keyframe
-  interval is 179 frames, exactly one frame short of 6 s at 30 fps; the first
-  frame arrived at 0.067 s, and the muxer's elapsed time came out 7e-10 s under
-  the one-frame tolerance, so the cut was skipped. Positions map by segment
-  number, so one long segment shifts the rest. `segment_cut.h` now allows 1 ms
-  of slack (`test_segment_cut`). FIXED; events recorded before keep their long
-  first segment. The trap: "within one frame" must include exactly one frame.
+- **#12 — VideoToolbox segments ran to 12 s, and seeks after them landed 6 s
+  late** (2026-11-23). VideoToolbox treats the 6 s keyframe interval as a
+  maximum and spaces keyframes 177-180 frames apart at 30 fps (5.90-6.00 s).
+  The muxer cut only within one frame of the target, so it passed over the
+  early ones: on two test broadcasts, 4 of the first 8 segments and then all 16
+  ran 11.8 s. Positions are `seq × measured average` (#2b), so a mix of
+  lengths put every later seek out, and campuses waited twice as long for each
+  segment. `segment_cut.h` now cuts at the keyframe NEAREST the target: once
+  `target − elapsed ≤ gap / 2`, the gap being the time since the previous
+  keyframe, capped at half the target (`test_segment_cut` §2-§6, replaying the
+  measured keyframes; it fails 6 checks against the one-frame rule). FIXED;
+  events recorded before keep their long segments.
+  Two attempts came first. PR #56 gave the one-frame rule 1 ms of slack:
+  harmless, but it did not help. PR #57 made the decoder place positions from
+  each segment's recorded start, carried in the group indexes. It was
+  reverted: it left the 12 s segments in place, and it asked for the newest
+  group index, which does not exist while an event is live, on every
+  download pump (every 100 ms on the OBS source). Not explained, and now moot:
+  why segment 0's keyframe, exactly one frame short, did not cut under #56.
+  The trap: do not fix a segment-length fault in the decoder. The length is a
+  promise the whole pipeline leans on (latency, buffers, positions); keep it
+  at the muxer.
 
 ---
 
