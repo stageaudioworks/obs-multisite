@@ -18,11 +18,8 @@ const GroupMember* GroupIndex::member(uint64_t seq) const {
 
 std::string GroupIndex::to_json() const {
     json ms = json::array();
-    for (const auto& m : members) {
-        json e = { {"seq", m.seq}, {"len", m.len}, {"checksum", m.checksum} };
-        if (m.start_ms >= 0) e["start_ms"] = m.start_ms;
-        ms.push_back(std::move(e));
-    }
+    for (const auto& m : members)
+        ms.push_back({ {"seq", m.seq}, {"len", m.len}, {"checksum", m.checksum} });
     return json({ {"k", k}, {"group", group}, {"parity_len", parity_len},
                   {"members", ms} }).dump();
 }
@@ -39,10 +36,6 @@ GroupIndex GroupIndex::from_json(const std::string& s) {
             gm.seq      = m.value("seq", (uint64_t)0);
             gm.len      = m.value("len", (uint64_t)0);
             gm.checksum = m.value("checksum", "");
-            // Absent, or not a number a start could be: unrecorded, never 0.
-            if (m.contains("start_ms") && m["start_ms"].is_number_integer() &&
-                m["start_ms"].get<int64_t>() >= 0)
-                gm.start_ms = m["start_ms"].get<int64_t>();
             g.members.push_back(gm);
         }
     return g;
@@ -101,13 +94,12 @@ std::vector<ParityAccumulator::Finished> ParityAccumulator::pass(uint64_t seq) {
 }
 
 std::vector<ParityAccumulator::Finished> ParityAccumulator::add(
-        uint64_t seq, const std::vector<uint8_t>& bytes, const std::string& checksum,
-        int64_t start_ms) {
+        uint64_t seq, const std::vector<uint8_t>& bytes, const std::string& checksum) {
     std::vector<Finished> out = pass(seq);
     if (m_k <= 0) return out;
     if (m_acc.size() < bytes.size()) m_acc.resize(bytes.size(), 0);
     for (size_t i = 0; i < bytes.size(); ++i) m_acc[i] ^= bytes[i];
-    m_index.members.push_back({ seq, (uint64_t)bytes.size(), checksum, start_ms });
+    m_index.members.push_back({ seq, (uint64_t)bytes.size(), checksum });
     if (m_next == (m_group + 1) * (uint64_t)m_k)
         if (auto f = close()) out.push_back(std::move(*f));
     return out;

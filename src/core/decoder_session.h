@@ -15,7 +15,6 @@
 #include "model.h"
 #include "parity.h"
 #include "segment_cache.h"
-#include "segment_timeline.h"
 #include "transport.h"
 #include "cue_credentials.h"
 #include "link_health.h"
@@ -335,20 +334,8 @@ public:
     // These are the primaries. The wall-clock forms below are event start plus
     // one of these, kept only until their callers are moved across — see
     // BUGS #2b for why a time of day has no business in the playback path.
-    //
-    // Where a segment starts. From the encoder's record of each start (the
-    // manifest's window, and the group indexes for the rest of the event),
-    // NOT `seq * segment length`: segments are cut at the encoder's
-    // keyframes, so they are not all one length, and one 12 s segment put
-    // every later position 6 s out (segment_timeline.h). Placed from the
-    // average only where nothing is recorded — an event older than the
-    // record, or a group index not fetched yet.
     int64_t media_ms_for_seq(uint64_t seq) const {
-        return m_timeline.start_of(seq, segment_ms());
-    }
-    // The segment holding a media time — the inverse of media_ms_for_seq.
-    uint64_t seq_for_media_ms(int64_t media_ms) const {
-        return m_timeline.seq_at(media_ms, segment_ms(), m_latest_seq.load());
+        return (int64_t)seq * segment_ms();
     }
     int64_t playhead_media_ms() const;    // clamped to the end of the recording
     int64_t live_media_ms() const;        // the live edge
@@ -415,8 +402,8 @@ public:
     // into that segment to begin.
     int64_t seek_to_wall_ms(int64_t wall_ms);
 
-    // Seek by MEDIA time — the axis the decoder dock draws and the axis a click
-    // on it is in. Returns the
+    // Seek by MEDIA time — segment number times one segment, which is the axis
+    // the decoder dock draws and the axis a click on it is in. Returns the
     // media time reached, or 0 if it is outside what storage still holds.
     //
     // The dock used to convert a click to a segment number itself and throw the
@@ -530,18 +517,6 @@ private:
     // Group indexes fetched for this event (parity.h), by group number.
     // Guarded by m_mtx; cleared with the event.
     std::map<uint64_t, GroupIndex> m_groups;
-    // Groups asked for and not (yet) there, and how many times: the open
-    // group at the live edge is simply unpublished, so it is asked again; an
-    // older one that keeps missing has no index (no parity configured, or
-    // only lost members) and is given up on. Guarded by m_mtx; cleared with
-    // the event.
-    std::map<uint64_t, int> m_group_misses;
-    // Fetch group indexes this event has published and not been read yet,
-    // for the segment starts they carry. A few per call. Unlocked.
-    void learn_group_starts(const std::string& prefix, int group_k, int max);
-    // Every segment start this event has recorded (segment_timeline.h). Its
-    // own lock; cleared with the event.
-    SegmentTimeline m_timeline;
     // The group's index: from m_groups, or fetched (no lock held across the
     // request). nullopt when there is none — yet, or ever.
     std::optional<GroupIndex> group_index_for(const std::string& prefix, uint64_t group);

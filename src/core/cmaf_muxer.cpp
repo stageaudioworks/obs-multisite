@@ -70,6 +70,9 @@ struct CmafMuxer::Impl {
     double   seg_start_pts_s = 0.0;
     double   seg_end_video_pts_s = 0.0; // the latest video frame's end, this segment
     bool     seg_has_video = false;
+    // The previous video keyframe's pts, for the gap the cut rule needs
+    // (segment_cut.h). -1: none yet — a pts of 0 is a real keyframe time.
+    double   last_keyframe_pts_s = -1.0;
     int      video_track = -1;
     bool     keep_input_timestamps = false;
     // resume_from_s (see the header): first packet's time becomes rebase_to_ns.
@@ -201,13 +204,17 @@ struct CmafMuxer::Impl {
         }
         double pts_s = (double)pts_ns / 1e9;
 
-        // Cut a segment at a video keyframe once we've reached the target —
-        // within a frame of it, because OBS truncates the keyframe interval
+        // Cut a segment at the video keyframe nearest the target — not the
+        // first at or past it, because encoders put keyframes early
         // (segment_cut.h).
-        if (is_video && in.keyframe && seg_open &&
-            keyframe_starts_segment(pts_s - seg_start_pts_s, target_s,
-                                    video_frame_s())) {
-            flush_fragment(pts_s);
+        if (is_video && in.keyframe) {
+            const double gap = last_keyframe_pts_s >= 0.0
+                ? pts_s - last_keyframe_pts_s : 0.0;
+            if (seg_open &&
+                keyframe_starts_segment(pts_s - seg_start_pts_s, target_s,
+                                        video_frame_s(), gap))
+                flush_fragment(pts_s);
+            last_keyframe_pts_s = pts_s;
         }
         if (!seg_open) {
             seg_open = true;

@@ -262,8 +262,6 @@ add_test(NAME seek_skip COMMAND test_seek_skip)
 
 add_executable(test_segment_cut tests/test_segment_cut.cpp)
 add_test(NAME segment_cut COMMAND test_segment_cut)
-add_executable(test_segment_timeline tests/test_segment_timeline.cpp)
-add_test(NAME segment_timeline COMMAND test_segment_timeline)
 add_executable(test_hold_budget tests/test_hold_budget.cpp)
 add_test(NAME hold_budget COMMAND test_hold_budget)
 

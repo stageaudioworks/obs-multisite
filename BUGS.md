@@ -11,7 +11,7 @@ This file is not a changelog. Delete an entry once it's fixed and released. The
 full record of a fixed entry is kept in `docs/bugs/`, not here — nothing is
 thrown away, it is moved out of the reader's way.
 
-Last updated: 2026-11-23.
+Last updated: 2026-11-24.
 
 ---
 
@@ -215,39 +215,6 @@ only test pinning #8.
 
 **Files:** `tests/test_session.cpp` (cases 21–23), `src/core/spool_queue.cpp`.
 
-### 12. VideoToolbox segments run to 12 s — about half of them
-
-**Status: OPEN, measured 2026-11-23; no longer moves a seek.** Seen on a test
-broadcast (VideoToolbox H.264, 30 fps, 6 s target, event
-`01M84BQWVNGXAQ1MNGWGP6RNVQ`). Of the first eight segments, 0, 1, 5 and 6 ran
-11.8–11.9 s. The rest were 5.97–6.00 s.
-
-**Cause, in part.** VideoToolbox spaces its keyframes 177 to 180 frames apart
-(5.90–6.00 s), not a fixed 179. `segment_cut.h` cuts only within one frame of
-the target, so a keyframe two or three frames short is passed over and the
-segment runs to the next one. **Not explained:** segment 0's keyframe was at
-6.033 s and its first frame at 0.067 s, exactly one frame short, which the
-1 ms slack added for it should cut, and did not. The installed binary
-contained that change (a fresh build was byte-identical). The muxer's
-`seg_start_pts_s` comes from the first packet of any track, so measure what it
-actually was before reasoning further.
-
-**What is no longer affected.** Positions and seeks use each segment's
-recorded start, not `seq * length` (#13 under "Recently landed"). Long
-segments now cost download granularity and latency at the live edge, not
-accuracy.
-
-**Next step.** Log `elapsed` and `seg_start_pts_s` at each keyframe the
-muxer declines, on a VideoToolbox broadcast. Then decide whether the cut
-tolerance should be a few frames or a fraction of the target. Either must stay
-below the keyframe interval, or one segment could cut twice.
-
-**The trap.** Do not widen the tolerance blind. The one-frame rule was itself
-the fix for 12 s segments at 29.97 fps (`segment_cut.h` says why). Change it from
-measurements of what the encoders emit.
-
-**Files:** `src/core/segment_cut.h`, `src/core/cmaf_muxer.cpp:205`.
-
 ---
 
 ## Recently landed (context, not action items)
@@ -359,18 +326,28 @@ each, so the history is findable without being 1,100 lines in the way.
   The trap: a "repair" of a segment the store acknowledged must never be the
   uploader testing its own 2xx and re-sending (ADR-0003 §1). Parity rebuilds
   it at the campus instead.
-- **#13 — a 12 s segment put every seek after it 6 s late** (2026-11-23).
-  Every position was `seq * segment length`. Segments are cut at the encoder's
-  keyframes, and VideoToolbox made a mix of 6 s and 12 s ones (#12). Group
-  indexes now carry each member's media start (`start_ms`), and the decoder's
-  `SegmentTimeline` places the playhead, live edge, end and seeks from the
-  recorded starts. It falls back to the old arithmetic only where nothing is
-  recorded (`test_segment_timeline`, `test_decoder` §31,
-  `test_parity` §3/§5/§7). FIXED for events recorded from now on. Older events
-  have no `start_ms` and keep the old arithmetic outside the manifest's
-  window. An earlier attempt (PR #56) gave the cut rule 1 ms of slack; it is
-  harmless but did not fix this. The trap: a position is never a segment
-  number times a length.
+- **#12 — VideoToolbox segments ran to 12 s, and seeks after them landed 6 s
+  late** (2026-11-23). VideoToolbox treats the 6 s keyframe interval as a
+  maximum and spaces keyframes 177-180 frames apart at 30 fps (5.90-6.00 s).
+  The muxer cut only within one frame of the target, so it passed over the
+  early ones: on two test broadcasts, 4 of the first 8 segments and then all 16
+  ran 11.8 s. Positions are `seq × measured average` (#2b), so a mix of
+  lengths put every later seek out, and campuses waited twice as long for each
+  segment. `segment_cut.h` now cuts at the keyframe NEAREST the target: once
+  `target − elapsed ≤ gap / 2`, the gap being the time since the previous
+  keyframe, capped at half the target (`test_segment_cut` §2-§6, replaying the
+  measured keyframes; it fails 6 checks against the one-frame rule). FIXED;
+  events recorded before keep their long segments.
+  Two attempts came first. PR #56 gave the one-frame rule 1 ms of slack:
+  harmless, but it did not help. PR #57 made the decoder place positions from
+  each segment's recorded start, carried in the group indexes. It was
+  reverted: it left the 12 s segments in place, and it asked for the newest
+  group index, which does not exist while an event is live, on every
+  download pump (every 100 ms on the OBS source). Not explained, and now moot:
+  why segment 0's keyframe, exactly one frame short, did not cut under #56.
+  The trap: do not fix a segment-length fault in the decoder. The length is a
+  promise the whole pipeline leans on (latency, buffers, positions); keep it
+  at the muxer.
 
 ---
 
